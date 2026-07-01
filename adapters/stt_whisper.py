@@ -40,7 +40,7 @@ class WhisperCppAdapter:
             )
 
         print("  Lade Whisper-Modell (einmalig)...")
-        self._model = WhisperModel(model_path, device="cpu", compute_type=compute_type)
+        self._model = WhisperModel(model_path, device="cpu", compute_type=compute_type, cpu_threads=4, num_workers=1)
         print("  Whisper bereit.")
 
     def transcribe(self, audio_file: str) -> str:
