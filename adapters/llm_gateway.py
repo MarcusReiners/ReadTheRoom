@@ -23,7 +23,6 @@ class LLMGatewayAdapter:
             res = requests.post(self.url, json={
                 "model": self.model,
                 "think": False,
-                "keep_alive": "-1",
                 "stream": False,
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
