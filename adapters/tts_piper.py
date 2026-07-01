@@ -1,107 +1,111 @@
 """
-Piper TTS Adapter.
+Piper TTS Adapter (ersetzt Wyoming-Piper Docker).
 
-Erweitert die urspruengliche Piper-Logik um:
-- SpeechPlaybackStarted / SpeechPlaybackEnded Events (ADR-002, 9.2),
-  damit der Face-Display-Adapter die Mundanimation steuern kann.
-- pause()/resume() via SIGSTOP/SIGCONT statt SIGKILL (ADR-002, 11),
-  damit eine durch den Not-Stopp-Taster unterbrochene Wiedergabe
-  spaeter fortgesetzt werden kann.
+Nutzt das piper-tts Python-Package direkt statt ueber Wyoming-Protokoll.
+Vorteile: kein Docker, kein TCP-Overhead, direktes Streaming moeglich.
+
+VORAUSSETZUNGEN (einmalig):
+    pip install piper-tts
+    mkdir -p ~/piper-voices
+    wget .../de_DE-thorsten-low.onnx -P ~/piper-voices/
+    wget .../de_DE-thorsten-low.onnx.json -P ~/piper-voices/
 """
 
 import os
 import signal
-import socket
 import subprocess
+import threading
 
-from wyoming.event import Event as WyomingEvent, write_event, read_event
-from wyoming.audio import AudioChunk, AudioStart, AudioStop
+from piper.voice import PiperVoice
 
 from domain.events import SpeechPlaybackStarted, SpeechPlaybackEnded
 from service_layer.bus import EventBus
 
 
 class PiperTTSAdapter:
-    def __init__(self, bus: EventBus, host: str = "127.0.0.1", port: int = 10200,
-                 speaker_device: str = "hw:0,0") -> None:
+    def __init__(
+        self,
+        bus: EventBus,
+        model_path: str = "/home/marcus/piper-voices/de_DE-thorsten-low.onnx",
+        speaker_device: str = "hw:3,0",
+    ) -> None:
         self.bus = bus
-        self.host = host
-        self.port = port
         self.speaker_device = speaker_device
         self._aplay_process: subprocess.Popen | None = None
+        self._lock = threading.Lock()
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"Piper-Modell nicht gefunden: {model_path}\n"
+                "Bitte laden: wget .../de_DE-thorsten-low.onnx -P ~/piper-voices/"
+            )
+        print("  Lade Piper-Stimme...")
+        self._voice = PiperVoice.load(model_path)
+        print("  Piper bereit.")
 
     def speak(self, text: str) -> None:
         print(f"🤖 Antworte: {text}")
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.connect((self.host, self.port))
-                sock.settimeout(30)
-                fp_write = sock.makefile("wb")
-                fp_read = sock.makefile("rb")
+            # aplay als Subprocess starten – Piper streamt Raw-PCM direkt rein
+            sample_rate = self._voice.config.sample_rate
+            aplay_proc = subprocess.Popen(
+                [
+                    "aplay",
+                    "-D", self.speaker_device,
+                    "-r", str(sample_rate),
+                    "-f", "S16_LE",
+                    "-c", "1",
+                    "-t", "raw",
+                    "-",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
-                text_event = WyomingEvent(type="synthesize", data={"text": text})
-                write_event(text_event, fp_write)
-                fp_write.flush()
+            with self._lock:
+                self._aplay_process = aplay_proc
 
-                all_audio = bytearray()
-                audio_rate, audio_width, audio_channels = 22050, 2, 1
+            self.bus.publish(SpeechPlaybackStarted(text=text))
 
-                while True:
-                    event = read_event(fp_read)
-                    if event is None:
-                        break
-                    if AudioStart.is_type(event.type):
-                        start = AudioStart.from_event(event)
-                        audio_rate, audio_width, audio_channels = start.rate, start.width, start.channels
-                    elif AudioChunk.is_type(event.type):
-                        chunk = AudioChunk.from_event(event)
-                        all_audio.extend(chunk.audio)
-                    elif AudioStop.is_type(event.type):
-                        break
+            # Piper synthetisiert und schreibt direkt in aplay stdin
+            with aplay_proc.stdin as pipe:
+                for chunk in self._voice.synthesize(text):
+                    audio_bytes = chunk.audio_int16_bytes
+                    pipe.write(audio_bytes)
 
-                if not all_audio:
-                    print("  Warnung: Piper hat keine Audiodaten zurueckgegeben.")
-                    return
+            aplay_proc.wait()
+            completed = aplay_proc.returncode == 0
 
-                temp_raw = "temp_out.raw"
-                with open(temp_raw, "wb") as f:
-                    f.write(bytes(all_audio))
-
-                self.bus.publish(SpeechPlaybackStarted(text=text))
-                self._aplay_process = subprocess.Popen(
-                    ["aplay", "-D", self.speaker_device,
-                     "-r", str(audio_rate), "-f", f"S{audio_width * 8}_LE",
-                     "-c", str(audio_channels), temp_raw],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                self._aplay_process.wait()
-                completed = self._aplay_process.returncode == 0
+            with self._lock:
                 self._aplay_process = None
-                self.bus.publish(SpeechPlaybackEnded(completed=completed))
 
-                if os.path.exists(temp_raw):
-                    os.remove(temp_raw)
+            self.bus.publish(SpeechPlaybackEnded(completed=completed))
 
-        except ConnectionRefusedError:
-            print(f"  Fehler: Verbindung zu Piper ({self.host}:{self.port}) verweigert.")
+        except BrokenPipeError:
+            # Passiert wenn pause()/discard() aufgerufen wurde – kein Fehler
+            self.bus.publish(SpeechPlaybackEnded(completed=False))
         except Exception as e:
             print(f"  TTS Fehler: {type(e).__name__}: {e}")
 
     def pause(self) -> None:
-        """SIGSTOP statt SIGKILL - Wiedergabe friert ein, Prozess bleibt erhalten (ADR-002, 11)."""
-        if self._aplay_process is not None:
-            self._aplay_process.send_signal(signal.SIGSTOP)
-            print("  ⏸  Wiedergabe pausiert (SIGSTOP).")
+        """SIGSTOP – Wiedergabe friert ein, Prozess bleibt erhalten (ADR-002, 11)."""
+        with self._lock:
+            if self._aplay_process is not None:
+                self._aplay_process.send_signal(signal.SIGSTOP)
+                print("  ⏸  Wiedergabe pausiert (SIGSTOP).")
 
     def resume(self) -> None:
-        if self._aplay_process is not None:
-            self._aplay_process.send_signal(signal.SIGCONT)
-            print("  ▶  Wiedergabe fortgesetzt (SIGCONT).")
+        with self._lock:
+            if self._aplay_process is not None:
+                self._aplay_process.send_signal(signal.SIGCONT)
+                print("  ▶  Wiedergabe fortgesetzt (SIGCONT).")
 
     def discard(self) -> None:
         """Beendet die pausierte Wiedergabe endgueltig (Nutzerentscheidung: verwerfen)."""
-        if self._aplay_process is not None:
-            self._aplay_process.send_signal(signal.SIGCONT)
-            self._aplay_process.terminate()
-            self._aplay_process = None
-            print("  🗑  Antwort verworfen.")
+        with self._lock:
+            if self._aplay_process is not None:
+                self._aplay_process.send_signal(signal.SIGCONT)
+                self._aplay_process.terminate()
+                self._aplay_process = None
+                print("  🗑  Antwort verworfen.")

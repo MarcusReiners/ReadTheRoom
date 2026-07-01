@@ -1,75 +1,77 @@
 """
-Whisper STT Adapter (Wyoming-Protokoll).
+Whisper.cpp STT Adapter (ersetzt Wyoming-Whisper Docker).
 
-Uebernimmt die bereits funktionierende, getestete Logik aus dem
-urspruenglichen assistant.py 1:1 - nur als Adapter-Klasse gekapselt,
-damit sie ueber den Event-Bus angesprochen werden kann.
+Ruft whisper-cli direkt als Subprocess auf statt ueber das Wyoming-Protokoll.
+Vorteile: kein Docker, native ARM-NEON, keine haengenden TCP-Verbindungen.
+
+VORAUSSETZUNGEN (einmalig):
+    cd ~/whisper.cpp
+    cmake -B build && cmake --build build -j4
+    ./models/download-ggml-model.sh base
 """
 
-import socket
-import wave
 import os
-
-from wyoming.event import Event as WyomingEvent, write_event, read_event
-from wyoming.audio import AudioChunk, AudioStart, AudioStop
+import subprocess
 
 
-class WhisperSTTAdapter:
-    def __init__(self, host: str = "127.0.0.1", port: int = 10300,
-                 samples_per_chunk: int = 1024) -> None:
-        self.host = host
-        self.port = port
-        self.samples_per_chunk = samples_per_chunk
+class WhisperCppAdapter:
+    def __init__(
+        self,
+        whisper_cli: str = "/home/marcus/whisper.cpp/build/bin/whisper-cli",
+        model: str = "/home/marcus/whisper.cpp/models/ggml-tiny-q5_1.bin",
+        language: str = "de",
+        threads: int = 4,
+    ) -> None:
+        self.whisper_cli = whisper_cli
+        self.model = model
+        self.language = language
+        self.threads = threads
+
+        if not os.path.exists(self.whisper_cli):
+            raise FileNotFoundError(
+                f"whisper-cli nicht gefunden: {self.whisper_cli}\n"
+                "Bitte erst bauen: cd ~/whisper.cpp && cmake -B build && cmake --build build -j4"
+            )
+        if not os.path.exists(self.model):
+            raise FileNotFoundError(
+                f"Whisper-Modell nicht gefunden: {self.model}\n"
+                "Bitte laden: cd ~/whisper.cpp && ./models/download-ggml-model.sh base"
+            )
 
     def transcribe(self, audio_file: str) -> str:
-        print("✨ Verarbeite Sprache mit Whisper...")
+        print("✨ Verarbeite Sprache mit whisper.cpp...")
+        if not os.path.exists(audio_file):
+            print(f"  Fehler: Audiodatei '{audio_file}' nicht gefunden.")
+            return ""
         try:
-            if not os.path.exists(audio_file):
-                print(f"  Fehler: Audiodatei '{audio_file}' nicht gefunden.")
+            result = subprocess.run(
+                [
+                    self.whisper_cli,
+                    "-m", self.model,
+                    "-f", audio_file,
+                    "-l", self.language,
+                    "-t", str(self.threads),
+                    "--no-timestamps",
+                    "--no-prints",
+                    "--suppress-nst",
+                    "--beam-size", "1",
+                    "--best-of", "1",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            text = result.stdout.strip()
+            for noise in ["[BLANK_AUDIO]", "(Stille)", "(Musik)", "(music)", "(silence)"]:
+                text = text.replace(noise, "")
+            text = text.strip()
+            if result.returncode != 0 and not text:
+                print(f"  whisper-cli Fehler: {result.stderr[:200]}")
                 return ""
-
-            with wave.open(audio_file, "rb") as wav_file:
-                rate = wav_file.getframerate()
-                width = wav_file.getsampwidth()
-                channels = wav_file.getnchannels()
-                pcm_data = wav_file.readframes(wav_file.getnframes())
-
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                sock.connect((self.host, self.port))
-                sock.settimeout(30)
-                fp_write = sock.makefile("wb")
-                fp_read = sock.makefile("rb")
-
-                start = AudioStart(rate=rate, width=width, channels=channels)
-                write_event(start.event(), fp_write)
-
-                chunk_size_bytes = self.samples_per_chunk * width * channels
-                offset = 0
-                while offset < len(pcm_data):
-                    chunk_bytes = pcm_data[offset: offset + chunk_size_bytes]
-                    chunk = AudioChunk(rate=rate, width=width, channels=channels, audio=chunk_bytes)
-                    write_event(chunk.event(), fp_write)
-                    offset += chunk_size_bytes
-
-                stop = AudioStop()
-                write_event(stop.event(), fp_write)
-                fp_write.flush()
-                # Kein sock.shutdown() - Whisper braucht die Verbindung
-                # noch fuer die Antwort (siehe urspruengliches Debugging).
-
-                while True:
-                    event = read_event(fp_read)
-                    if event is None:
-                        break
-                    if event.type == "transcript":
-                        return event.data.get("text", "")
-                    if event.type == "error":
-                        print(f"  Whisper-Fehler: {event.data}")
-                        return ""
-
-        except ConnectionRefusedError:
-            print(f"  Fehler: Verbindung zu Whisper ({self.host}:{self.port}) "
-                  f"verweigert. Laeuft der Docker-Container?")
+            return text
+        except subprocess.TimeoutExpired:
+            print("  Fehler: whisper-cli Timeout nach 60s.")
+            return ""
         except Exception as e:
             print(f"  STT Fehler: {type(e).__name__}: {e}")
-        return ""
+            return ""

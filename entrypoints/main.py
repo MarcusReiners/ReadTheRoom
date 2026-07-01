@@ -20,7 +20,7 @@ from domain.pause_resume import PauseResumeController
 from service_layer.bus import EventBus
 from service_layer.handlers import register_handlers
 
-from adapters.stt_whisper import WhisperSTTAdapter
+from adapters.stt_whisper import WhisperCppAdapter as WhisperSTTAdapter
 from adapters.tts_piper import PiperTTSAdapter
 from adapters.llm_gateway import LLMGatewayAdapter
 from adapters.radar_ld2450 import DummyRadarAdapter
@@ -32,10 +32,10 @@ from adapters.emergency_stop import DummyEmergencyStopAdapter
 # KONFIGURATION
 # ============================================================
 LLM_URL = "http://192.168.178.37:11434/api/generate"  # ggf. anpassen
-LLM_MODEL = "gemma4:12b"
+LLM_MODEL = "qwen3.5:9b"
 WHISPER_HOST, WHISPER_PORT = "127.0.0.1", 10300
-PIPER_HOST, PIPER_PORT = "127.0.0.1", 10200
-MIC_DEVICE = "hw:1,0"
+PIPER_MODEL = "/home/marcus/piper-voices/de_DE-thorsten-low.onnx"
+MIC_DEVICE = "hw:3,0"
 MIC_CHANNELS = 6
 MIC_RATE = 16000
 SPEAKER_DEVICE = "hw:0,0"
@@ -79,8 +79,8 @@ def main() -> None:
     pause_controller = PauseResumeController()
 
     # --- Adapter ---
-    stt = WhisperSTTAdapter(host=WHISPER_HOST, port=WHISPER_PORT)
-    tts = PiperTTSAdapter(bus=bus, host=PIPER_HOST, port=PIPER_PORT, speaker_device=SPEAKER_DEVICE)
+    stt = WhisperSTTAdapter()
+    tts = PiperTTSAdapter(bus=bus, model_path=PIPER_MODEL, speaker_device=SPEAKER_DEVICE)
     llm = LLMGatewayAdapter(url=LLM_URL, model=LLM_MODEL)
 
     radar = DummyRadarAdapter(bus=bus)
