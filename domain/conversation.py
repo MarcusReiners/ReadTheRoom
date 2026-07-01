@@ -6,15 +6,7 @@ und bei jeder LLM-Anfrage mitgesendet - kein Training, kein RAG noetig
 fuer reine Persona-/Verhaltensregeln (siehe ADR-003).
 """
 
-SYSTEM_PROMPT = """Du bist ein Office-Assistent, der im Buero auf einem \
-Schreibtisch steht. Du hilfst bei Terminen, Notizen, kurzen Recherchen \
-und allgemeinen Fragen. Antworte kurz und praegnant in maximal zwei \
-Saetzen auf Deutsch. Du achtest auf Vertraulichkeit: Wenn waehrend des \
-Gespraechs eine weitere Person den Raum betritt, kann das Gespraech \
-automatisch unterbrochen und auf eine textbasierte Anzeige umgeschaltet \
-werden."""
-
-
+SYSTEM_PROMPT = """Du bist ein Office-Assistent am Schreibtisch. Antworte immer in maximal einem kurzen Satz auf Deutsch"""
 class ConversationState:
     """
     Haelt den aktuellen Modus (voice/web) und ob das laufende Gespraech
