@@ -2,10 +2,10 @@
 LLM-Gateway-Adapter (ADR-003 Abschnitt 14).
 
 Spricht das Ollama-API-Format (POST /api/generate). Funktioniert sowohl
-gegen einen direkten Ollama-Server als auch gegen einen LiteLLM-Proxy,
-der dasselbe Format nach aussen anbietet (siehe ADR-003, 14.1) - der
-Adapter-Code aendert sich beim Wechsel NICHT, nur die URL/Modellname in
-der Konfiguration.
+gegen einen direkten Ollama-Server als auch gegen einen LiteLLM-Proxy.
+
+think=False deaktiviert den Thinking-Mode bei Qwen3.5, was die
+Antwortzeit von ~86s auf ~2s reduziert.
 """
 
 import requests
@@ -25,6 +25,7 @@ class LLMGatewayAdapter:
             res = requests.post(self.url, json={
                 "model": self.model,
                 "prompt": prompt,
+                "think": False,
                 "stream": False,
             }, timeout=60)
             res.raise_for_status()
