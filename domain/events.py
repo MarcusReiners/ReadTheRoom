@@ -77,6 +77,11 @@ class EmergencyStopPressed(Event):
 
 
 @dataclass(frozen=True)
+class DisplayTakeoverRequested(Event):
+    pass
+
+
+@dataclass(frozen=True)
 class ResumeDecisionRequested(Event):
     pass
 

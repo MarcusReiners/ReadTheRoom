@@ -16,9 +16,12 @@ from adapters.tts_piper import PiperTTSAdapter
 from adapters.llm_gateway import LLMGatewayAdapter
 from adapters.radar_ld2450 import DummyRadarAdapter
 from adapters.face_display import DummyFaceDisplayAdapter
+from adapters.status_display import DummyStatusDisplayAdapter
 from adapters.turntable import DummyTurntableAdapter
-from adapters.emergency_stop import DummyEmergencyStopAdapter
+from adapters.buttons import DummyButtonsAdapter
 
+USE_LED_MATRIX = True
+USE_HDMI_EYES = False
 LLM_URL = "http://192.168.178.37:11434/api/generate"
 LLM_MODEL = "qwen3.5:9b"
 WHISPER_HOST, WHISPER_PORT = "127.0.0.1", 10300
@@ -26,7 +29,7 @@ PIPER_MODEL = "/home/marcus/piper-voices/de_DE-thorsten-low.onnx"
 MIC_DEVICE = "hw:ArrayUAC10,0"
 MIC_CHANNELS = 6
 MIC_RATE = 16000
-SPEAKER_DEVICE = "hw:0,0"
+SPEAKER_DEVICE = "plughw:CARD=ArrayUAC10,DEV=0"
 MAX_RECORD_SECONDS = 30
 
 
@@ -83,16 +86,35 @@ def main() -> None:
     llm = LLMGatewayAdapter(url=LLM_URL, model=LLM_MODEL)
 
     radar = DummyRadarAdapter(bus=bus)
-    face = DummyFaceDisplayAdapter(bus=bus)
     turntable = DummyTurntableAdapter()
-    estop = DummyEmergencyStopAdapter(bus=bus)
+    buttons = DummyButtonsAdapter(bus=bus)
 
-    register_handlers(bus, conversation, pause_controller, tts)
+    if USE_LED_MATRIX:
+        from adapters.led_matrix import LedMatrix
+        from adapters.status_display import StatusDisplayAdapter
+
+        matrix = LedMatrix(rows=48, cols=96, chain=1)
+        status = StatusDisplayAdapter(bus=bus)
+        matrix.add_renderer(status)
+        matrix.start()
+    else:
+        status = DummyStatusDisplayAdapter(bus=bus)
+
+    if USE_HDMI_EYES:
+        from adapters.face_display import HDMIFaceDisplayAdapter
+
+        face = HDMIFaceDisplayAdapter(bus=bus)
+        face.start()
+    else:
+        face = DummyFaceDisplayAdapter(bus=bus)
+
+    register_handlers(bus, conversation, pause_controller, tts, status)
 
     radar.start()
-    estop.start()
+    buttons.start()
 
-    print("\nENTER startet die Aufnahme, ENTER stoppt sie. Tippe 's' + Enter für Not-Stopp-Test.\n")
+    print("\nENTER startet die Aufnahme, ENTER stoppt sie. "
+          "'s' + Enter = Not-Stopp, 't' + Enter = Antwort auf Display umleiten.\n")
 
     while True:
         try:
