@@ -25,7 +25,9 @@ class StatusDisplayAdapter:
         x_offset: int = 0,
         width: int = 96,
         height: int = 48,
-        font_path: str = "/home/marcus/rpi-rgb-led-matrix/fonts/5x7.bdf",
+        font_path: str = "/home/marcus/rpi-rgb-led-matrix/fonts/6x10.bdf",
+        scroll_px_per_s: float = 4.0,
+        scroll_hold_s: float = 2.5,
     ) -> None:
         from rgbmatrix import graphics
 
@@ -41,6 +43,9 @@ class StatusDisplayAdapter:
         self.state = "idle"
         self.text_active = False
         self._text = ""
+        self._scroll_px_per_s = scroll_px_per_s
+        self._scroll_hold_s = scroll_hold_s
+        self._text_started_at: float | None = None
         self._lock = threading.Lock()
 
         bus.subscribe(ListeningStateChanged, self._on_listening)
@@ -58,6 +63,9 @@ class StatusDisplayAdapter:
 
     def append_text(self, text: str) -> None:
         with self._lock:
+            if not self.text_active:
+                self._text = ""
+                self._text_started_at = None
             self._text += (" " if self._text else "") + text
             self.text_active = True
 
@@ -79,16 +87,23 @@ class StatusDisplayAdapter:
     def _render_text(self, canvas, t: float) -> None:
         with self._lock:
             text = self._text
+            if self._text_started_at is None:
+                self._text_started_at = t
+            elapsed = t - self._text_started_at
+
         lines = self._wrap(text)
-        line_height = self._font.height
-        max_lines = max(1, self.height // line_height)
-        if len(lines) > max_lines:
-            lines = lines[-max_lines:]
-        y = self._font.baseline
-        for line in lines:
+        line_height = self._font.height + 1
+        total_height = len(lines) * line_height
+        max_scroll = max(0, total_height - self.height)
+        offset = min(max_scroll,
+                     max(0.0, (elapsed - self._scroll_hold_s) * self._scroll_px_per_s))
+
+        for i, line in enumerate(lines):
+            y = self._font.baseline + i * line_height - int(offset)
+            if y < 0 or y - self._font.baseline > self.height:
+                continue
             self._graphics.DrawText(canvas, self._font, self.x_offset + 1, y,
                                     self._text_color, line)
-            y += line_height
 
     def _wrap(self, text: str) -> list[str]:
         lines: list[str] = []
@@ -127,8 +142,10 @@ class StatusDisplayAdapter:
     def _render_idle(self, canvas, t: float) -> None:
         cx = self.x_offset + self.width // 2
         cy = self.height // 2
-        brightness = int(40 + 30 * (1 + math.sin(t * 1.5)) / 2)
-        _fill_circle(canvas, cx, cy, 2, (brightness, brightness, brightness))
+        pulse = (1 + math.sin(t * 2.0)) / 2
+        radius = 3 + int(4 * pulse)
+        brightness = int(50 + 90 * pulse)
+        _fill_circle(canvas, cx, cy, radius, (brightness, brightness, brightness))
 
 
 def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
