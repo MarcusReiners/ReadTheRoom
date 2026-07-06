@@ -11,6 +11,7 @@ class LedMatrix:
         brightness: int = 60,
         gpio_slowdown: int = 4,
         fps: int = 20,
+        limit_refresh_rate_hz: int = 120,
     ) -> None:
         from rgbmatrix import RGBMatrix, RGBMatrixOptions
 
@@ -22,6 +23,7 @@ class LedMatrix:
         options.gpio_slowdown = gpio_slowdown
         options.hardware_mapping = "regular"
         options.drop_privileges = False
+        options.limit_refresh_rate_hz = limit_refresh_rate_hz
 
         self.matrix = RGBMatrix(options=options)
         self.width = cols * chain
