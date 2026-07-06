@@ -1,12 +1,3 @@
-"""
-Domain Events fuer den Office Assistant.
-
-Jedes Event ist ein einfaches, unveraenderliches Datenobjekt. Adapter
-erzeugen Events, der Event-Bus verteilt sie an registrierte Handler.
-Adapter wissen NICHTS voneinander - sie kommunizieren ausschliesslich
-ueber Events (siehe ADR-001 Abschnitt 2).
-"""
-
 from dataclasses import dataclass, field
 from datetime import datetime
 

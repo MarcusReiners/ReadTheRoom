@@ -1,13 +1,3 @@
-"""
-Pause/Resume-Zustandsautomat (ADR-002 Abschnitt 11).
-
-NORMAL -> PAUSED -> AWAITING_RESUME_DECISION -> NORMAL
-
-Der Not-Stopp-Taster pausiert (SIGSTOP-Aequivalent), beendet nicht.
-Erst nach explizitem zweitem Tastendruck UND einer Nutzerentscheidung
-(fortsetzen/verwerfen) kehrt das System in den Normalzustand zurueck.
-"""
-
 from enum import Enum, auto
 
 

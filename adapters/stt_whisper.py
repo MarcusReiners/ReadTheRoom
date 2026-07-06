@@ -1,17 +1,3 @@
-"""
-Faster-Whisper STT Adapter.
-
-Nutzt faster-whisper (CTranslate2) direkt als Python-Library statt
-whisper.cpp als Subprocess. Vorteile:
-- Modell wird einmal geladen und bleibt im Speicher (~2.6s statt 4.1s)
-- Kompatibel mit deutschem Finetuned-Modell (whisper-tiny-german-1224-ct2)
-- Kein Subprocess-Overhead
-
-VORAUSSETZUNGEN:
-    pip install faster-whisper
-    Modell liegt unter ~/voice-pipeline/whisper-data/whisper-tiny-german-1224-ct2/
-"""
-
 import os
 
 from faster_whisper import WhisperModel

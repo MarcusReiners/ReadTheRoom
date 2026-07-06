@@ -1,11 +1,3 @@
-"""
-Konversationszustand und System-Prompt (ADR-003 Abschnitt 13).
-
-Die Office-Assistent-Identitaet wird hier als System-Prompt definiert
-und bei jeder LLM-Anfrage mitgesendet - kein Training, kein RAG noetig
-fuer reine Persona-/Verhaltensregeln (siehe ADR-003).
-"""
-
 SYSTEM_PROMPT = """Du bist ein Office-Assistent am Schreibtisch. Antworte immer in maximal einem kurzen Satz auf Deutsch"""
 class ConversationState:
     """

@@ -1,10 +1,3 @@
-"""
-Handler: verbinden Events mit Domain-Logik (ADR-001 Abschnitt 5).
-
-Diese Funktionen werden beim Bus registriert und reagieren auf Events,
-ohne dass die Adapter, die diese Events ausloesen, voneinander wissen.
-"""
-
 from domain.conversation import ConversationState
 from domain.events import (
     PersonCountChanged, EmergencyStopPressed, SpeechPlaybackEnded,

@@ -1,15 +1,3 @@
-"""
-Einfacher, synchroner Event-Bus.
-
-Bewusst simpel gehalten (kein asyncio, kein Threading) fuer Phase 1.
-Handler werden synchron in Registrierungsreihenfolge aufgerufen. Das
-reicht fuer den aktuellen Funktionsumfang aus; sollte spaeter echte
-Parallelitaet noetig werden (z.B. Radar-Polling parallel zu TTS-
-Wiedergabe), wird dieser Bus durch eine Queue-basierte Variante ersetzt
-- der Rest der Architektur aendert sich dadurch nicht, weil Handler nur
-ueber den Bus kommunizieren.
-"""
-
 from collections import defaultdict
 from typing import Callable, Type, TypeVar
 

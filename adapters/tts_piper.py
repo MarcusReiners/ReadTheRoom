@@ -1,25 +1,24 @@
-"""
-Piper TTS Adapter (ersetzt Wyoming-Piper Docker).
-
-Nutzt das piper-tts Python-Package direkt statt ueber Wyoming-Protokoll.
-Vorteile: kein Docker, kein TCP-Overhead, direktes Streaming moeglich.
-
-VORAUSSETZUNGEN (einmalig):
-    pip install piper-tts
-    mkdir -p ~/piper-voices
-    wget .../de_DE-thorsten-low.onnx -P ~/piper-voices/
-    wget .../de_DE-thorsten-low.onnx.json -P ~/piper-voices/
-"""
-
 import os
+import re
 import signal
 import subprocess
 import threading
+from typing import Iterable
 
 from piper.voice import PiperVoice
 
 from domain.events import SpeechPlaybackStarted, SpeechPlaybackEnded
 from service_layer.bus import EventBus
+
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def _split_sentences(buffer: str) -> tuple[list[str], str]:
+    """Trennt vollstaendige Saetze vom Puffer ab; der Rest (moeglicherweise
+    unvollstaendiger letzter Satz) wird als neuer Puffer zurueckgegeben."""
+    parts = _SENTENCE_END.split(buffer)
+    complete, rest = parts[:-1], parts[-1]
+    return [p for p in complete if p.strip()], rest
 
 
 class PiperTTSAdapter:
@@ -43,35 +42,58 @@ class PiperTTSAdapter:
         self._voice = PiperVoice.load(model_path)
         print("  Piper bereit.")
 
-    def speak(self, text: str) -> None:
-        print(f"Antworte: {text}")
+    def _spawn_aplay(self) -> subprocess.Popen:
+        sample_rate = self._voice.config.sample_rate
+        return subprocess.Popen(
+            [
+                "aplay",
+                "-D", self.speaker_device,
+                "-r", str(sample_rate),
+                "-f", "S16_LE",
+                "-c", "1",
+                "-t", "raw",
+                "-",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def speak_stream(self, text_chunks: Iterable[str]) -> str:
+        """Verarbeitet Text-Deltas (z.B. von LLMGatewayAdapter.ask_stream):
+        sobald ein Satz im Puffer vollstaendig ist, wird er synthetisiert und
+        in die noch laufende aplay-Pipe geschrieben, waehrend das LLM den
+        naechsten Satz generiert. Gibt die vollstaendig zusammengesetzte
+        Antwort zurueck (fuer die Conversation History)."""
+        full_text = ""
+        buffer = ""
+        started = False
+        aplay_proc = self._spawn_aplay()
+
+        with self._lock:
+            self._aplay_process = aplay_proc
+
         try:
-            sample_rate = self._voice.config.sample_rate
-            aplay_proc = subprocess.Popen(
-                [
-                    "aplay",
-                    "-D", self.speaker_device,
-                    "-r", str(sample_rate),
-                    "-f", "S16_LE",
-                    "-c", "1",
-                    "-t", "raw",
-                    "-",
-                ],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            for delta in text_chunks:
+                full_text += delta
+                buffer += delta
+                sentences, buffer = _split_sentences(buffer)
+                for sentence in sentences:
+                    if not started:
+                        self.bus.publish(SpeechPlaybackStarted(text=full_text))
+                        started = True
+                    for chunk in self._voice.synthesize(sentence):
+                        aplay_proc.stdin.write(chunk.audio_int16_bytes)
 
-            with self._lock:
-                self._aplay_process = aplay_proc
+            tail = buffer.strip()
+            if tail:
+                if not started:
+                    self.bus.publish(SpeechPlaybackStarted(text=full_text))
+                    started = True
+                for chunk in self._voice.synthesize(tail):
+                    aplay_proc.stdin.write(chunk.audio_int16_bytes)
 
-            self.bus.publish(SpeechPlaybackStarted(text=text))
-
-            with aplay_proc.stdin as pipe:
-                for chunk in self._voice.synthesize(text):
-                    audio_bytes = chunk.audio_int16_bytes
-                    pipe.write(audio_bytes)
-
+            aplay_proc.stdin.close()
             aplay_proc.wait()
             completed = aplay_proc.returncode == 0
 
@@ -79,11 +101,19 @@ class PiperTTSAdapter:
                 self._aplay_process = None
 
             self.bus.publish(SpeechPlaybackEnded(completed=completed))
+            print(f"Antworte: {full_text}")
+            return full_text
 
         except BrokenPipeError:
+            with self._lock:
+                self._aplay_process = None
             self.bus.publish(SpeechPlaybackEnded(completed=False))
+            return full_text
         except Exception as e:
             print(f"  TTS Fehler: {type(e).__name__}: {e}")
+            with self._lock:
+                self._aplay_process = None
+            return full_text
 
     def pause(self) -> None:
         """SIGSTOP – Wiedergabe friert ein, Prozess bleibt erhalten (ADR-002, 11)."""

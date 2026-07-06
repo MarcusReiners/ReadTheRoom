@@ -1,13 +1,3 @@
-"""
-Entrypoint: verdrahtet alle Adapter, den Event-Bus und die Domain-Logik.
-
-Phase 1 (siehe Architektur-Dokument): Whisper/Piper/Ollama-Pipeline
-laeuft wie zuvor, aber durch die neue Struktur. LED-Matrix, Turntable,
-Radar und Not-Stopp-Taster sind durch Dummy-Adapter ersetzt, die ihr
-Verhalten auf der Konsole simulieren, bis die echte Hardware
-angeschlossen ist.
-"""
-
 import os
 import subprocess
 import sys
@@ -137,9 +127,8 @@ def main() -> None:
             face.set_eye_direction(angle_degrees=180.0)
             turntable.rotate_towards(target_angle_degrees=180.0)
 
-            ki_antwort = llm.ask(user_text)
+            ki_antwort = tts.speak_stream(llm.ask_stream(user_text))
             conversation.add_assistant_message(ki_antwort)
-            tts.speak(ki_antwort)
 
         except KeyboardInterrupt:
             print("\nCiao!")
