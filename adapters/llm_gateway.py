@@ -13,12 +13,11 @@ from domain.conversation import SYSTEM_PROMPT
 
 class LLMGatewayAdapter:
     def __init__(self, url: str, model: str) -> None:
-        # /api/chat statt /api/generate
         self.url = url.replace("/api/generate", "/api/chat")
         self.model = model
 
     def ask(self, user_text: str) -> str:
-        print(f"🧠 LLM denkt nach über: '{user_text}'")
+        print(f"LLM denkt nach über: '{user_text}'")
         try:
             res = requests.post(self.url, json={
                 "model": self.model,

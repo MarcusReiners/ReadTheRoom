@@ -16,7 +16,7 @@ class ConversationState:
     def __init__(self) -> None:
         self.modality: str = "voice"
         self.confidential: bool = False
-        self.history: list[dict] = []  # [{"role": "user"/"assistant", "content": str}]
+        self.history: list[dict] = []
 
     def add_user_message(self, text: str) -> None:
         self.history.append({"role": "user", "content": text})

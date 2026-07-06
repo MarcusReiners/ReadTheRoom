@@ -5,12 +5,10 @@ Heuristische Gewichte - siehe ADR-001 Abschnitt 6 (Limitationen):
 sollten spaeter empirisch kalibriert werden.
 """
 
-# Gewichte des Fusionsmodells (ADR-001, Abschnitt 3.4)
 WEIGHT_APPROACH = 0.5
 WEIGHT_DIALOG_PATTERN = 0.5
 FOCUS_SHIFT_THRESHOLD = 0.6
 
-# Trägheitsschwelle für Turntable-Nachführung (ADR-002, Abschnitt 10.1)
 ROTATION_THRESHOLD_DEGREES = 8.0
 
 

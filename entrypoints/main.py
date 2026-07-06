@@ -11,6 +11,7 @@ angeschlossen ist.
 import os
 import subprocess
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -28,10 +29,7 @@ from adapters.face_display import DummyFaceDisplayAdapter
 from adapters.turntable import DummyTurntableAdapter
 from adapters.emergency_stop import DummyEmergencyStopAdapter
 
-# ============================================================
-# KONFIGURATION
-# ============================================================
-LLM_URL = "http://192.168.178.37:11434/api/generate"  # ggf. anpassen
+LLM_URL = "http://192.168.178.37:11434/api/generate"
 LLM_MODEL = "qwen3.5:9b"
 WHISPER_HOST, WHISPER_PORT = "127.0.0.1", 10300
 PIPER_MODEL = "/home/marcus/piper-voices/de_DE-thorsten-low.onnx"
@@ -39,25 +37,38 @@ MIC_DEVICE = "hw:ArrayUAC10,0"
 MIC_CHANNELS = 6
 MIC_RATE = 16000
 SPEAKER_DEVICE = "hw:0,0"
-RECORD_SECONDS = 3
+MAX_RECORD_SECONDS = 30
 
 
 def record_audio(output_file: str) -> bool:
-    """Unveraendert aus der bisherigen Pipeline: 6-Kanal-Aufnahme,
-    Kanal 0 (beamformt) per sox extrahieren (siehe vorheriges Debugging)."""
-    raw_file = "temp_in_raw.wav"
+    """Push-to-talk: Aufnahme laeuft, bis Enter gedrueckt wird (max.
+    MAX_RECORD_SECONDS). 6-Kanal-Aufnahme als Raw-PCM, Kanal 0
+    (beamformt) per sox extrahieren."""
+    raw_file = "temp_in_raw.pcm"
     try:
-        result = subprocess.run(
-            ["arecord", "-D", MIC_DEVICE, "-d", str(RECORD_SECONDS),
+        proc = subprocess.Popen(
+            ["arecord", "-D", MIC_DEVICE, "-t", "raw",
              "-r", str(MIC_RATE), "-f", "S16_LE", "-c", str(MIC_CHANNELS), raw_file],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
-        if result.returncode != 0:
-            print(f"  arecord Fehler: {result.stderr.decode().strip()}")
+
+        watchdog = threading.Timer(MAX_RECORD_SECONDS, proc.terminate)
+        watchdog.start()
+        try:
+            input()
+        finally:
+            watchdog.cancel()
+            proc.terminate()
+            proc.wait()
+
+        if not os.path.exists(raw_file) or os.path.getsize(raw_file) == 0:
+            stderr = proc.stderr.read().decode().strip() if proc.stderr else ""
+            print(f"  arecord Fehler: {stderr or 'keine Audiodaten aufgenommen'}")
             return False
 
         result = subprocess.run(
-            ["sox", raw_file, "-c", "1", output_file, "remix", "1"],
+            ["sox", "-t", "raw", "-r", str(MIC_RATE), "-e", "signed", "-b", "16",
+             "-c", str(MIC_CHANNELS), raw_file, "-c", "1", output_file, "remix", "1"],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
         if result.returncode != 0:
@@ -71,14 +82,12 @@ def record_audio(output_file: str) -> bool:
 
 
 def main() -> None:
-    print("\n🎤 Office Assistant — Phase 1 (Code-Skelett, Dummy-Hardware)\n")
+    print("\nOffice Assistant — Phase 1 (Code-Skelett, Dummy-Hardware)\n")
 
-    # --- Bus und Domain ---
     bus = EventBus()
     conversation = ConversationState()
     pause_controller = PauseResumeController()
 
-    # --- Adapter ---
     stt = WhisperSTTAdapter()
     tts = PiperTTSAdapter(bus=bus, model_path=PIPER_MODEL, speaker_device=SPEAKER_DEVICE)
     llm = LLMGatewayAdapter(url=LLM_URL, model=LLM_MODEL)
@@ -88,31 +97,29 @@ def main() -> None:
     turntable = DummyTurntableAdapter()
     estop = DummyEmergencyStopAdapter(bus=bus)
 
-    # --- Handler-Verdrahtung ---
     register_handlers(bus, conversation, pause_controller, tts)
 
-    # --- Start ---
     radar.start()
     estop.start()
 
-    print("\n👉 Drücke ENTER, um zu sprechen. Tippe 's' + Enter für Not-Stopp-Test.\n")
+    print("\nENTER startet die Aufnahme, ENTER stoppt sie. Tippe 's' + Enter für Not-Stopp-Test.\n")
 
     while True:
         try:
             if pause_controller.is_paused:
-                print("⏸  System pausiert. Drücke 's' erneut für Fortsetzen/Verwerfen-Abfrage.")
+                print("System pausiert. Drücke 's' erneut für Fortsetzen/Verwerfen-Abfrage.")
                 input()
                 continue
 
             input()
 
             temp_in = "temp_in.wav"
-            print("🔴 Aufnahme läuft... JETZT SPRECHEN!")
+            print("Aufnahme läuft... sprechen und mit ENTER beenden.")
             bus.publish(ListeningStateChanged(listening=True))
 
             success = record_audio(temp_in)
             bus.publish(ListeningStateChanged(listening=False))
-            print("🟢 Aufnahme beendet." if success else "🔴 Aufnahme fehlgeschlagen.")
+            print("Aufnahme beendet." if success else "Aufnahme fehlgeschlagen.")
             if not success:
                 continue
 
@@ -121,14 +128,12 @@ def main() -> None:
                 os.remove(temp_in)
 
             if not user_text or len(user_text.strip()) < 2:
-                print("❌ Whisper hat im Audio nichts erkannt.")
+                print("Whisper hat im Audio nichts erkannt.")
                 continue
 
-            print(f"✅ Du hast gesagt: '{user_text}'")
+            print(f"Du hast gesagt: '{user_text}'")
             conversation.add_user_message(user_text)
 
-            # Augen/Turntable folgen der Sprachrichtung (Dummy: fester Wert,
-            # echte DOA-Anbindung folgt in Phase 2)
             face.set_eye_direction(angle_degrees=180.0)
             turntable.rotate_towards(target_angle_degrees=180.0)
 
