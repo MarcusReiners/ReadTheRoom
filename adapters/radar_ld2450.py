@@ -1,18 +1,3 @@
-"""
-Dummy-Adapter fuer den LD2450-Radar (ADR-001).
-
-Solange die echte Hardware nicht angeschlossen ist, simuliert dieser
-Adapter eine einzelne, ruhig stehende Person im Raum und veraendert
-nichts von selbst. Er implementiert dieselbe Schnittstelle, die der
-echte radar_ld2450.py spaeter haben wird, damit der Rest des Systems
-(Fusionslogik, Event-Handler) unveraendert bleibt, wenn die Hardware
-angeschlossen wird (Phase 2, siehe ADR-Dokument).
-
-ECHTE IMPLEMENTIERUNG (spaeter): liest UART-Frames vom LD2450,
-parst Multi-Target X/Y-Koordinaten, publiziert PersonEnteredRoom /
-PersonLeftRoom / PersonPositionUpdated ueber den Bus.
-"""
-
 from domain.events import PersonCountChanged
 from service_layer.bus import EventBus
 

@@ -1,10 +1,5 @@
-"""
-LLM-Gateway-Adapter (ADR-003 Abschnitt 14).
-
-Nutzt /api/chat statt /api/generate, da nur dieser Endpoint
-"think": false korrekt unterstuetzt (Qwen3.5 Thinking-Mode deaktivieren).
-Dadurch sinkt die Antwortzeit von ~86s auf ~2.4s.
-"""
+import json
+from typing import Iterator
 
 import requests
 
@@ -16,23 +11,33 @@ class LLMGatewayAdapter:
         self.url = url.replace("/api/generate", "/api/chat")
         self.model = model
 
-    def ask(self, user_text: str) -> str:
+    def ask_stream(self, user_text: str) -> Iterator[str]:
+        """Streamt die Antwort satzweise-vorbereitet als Text-Deltas, damit die
+        TTS-Ausgabe schon starten kann, waehrend das LLM noch generiert."""
         print(f"LLM denkt nach über: '{user_text}'")
         try:
             res = requests.post(self.url, json={
                 "model": self.model,
                 "think": False,
-                "stream": False,
+                "stream": True,
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user",   "content": user_text},
                 ],
                 "options": {"num_predict": 50},
-            }, timeout=60)
+            }, timeout=60, stream=True)
             res.raise_for_status()
-            return res.json()["message"]["content"]
+            for line in res.iter_lines():
+                if not line:
+                    continue
+                data = json.loads(line)
+                delta = data.get("message", {}).get("content", "")
+                if delta:
+                    yield delta
+                if data.get("done"):
+                    break
         except requests.exceptions.ConnectionError:
-            return ("Fehler: Kann das LLM-Backend nicht erreichen. "
-                    "Läuft Ollama/LiteLLM und ist die URL korrekt?")
+            yield ("Fehler: Kann das LLM-Backend nicht erreichen. "
+                   "Läuft Ollama/LiteLLM und ist die URL korrekt?")
         except Exception as e:
-            return f"Fehler bei LLM: {e}"
+            yield f"Fehler bei LLM: {e}"

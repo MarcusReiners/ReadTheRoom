@@ -1,10 +1,3 @@
-"""
-Fusionsregeln und Schwellenwerte (ADR-001 Abschnitt 3).
-
-Heuristische Gewichte - siehe ADR-001 Abschnitt 6 (Limitationen):
-sollten spaeter empirisch kalibriert werden.
-"""
-
 WEIGHT_APPROACH = 0.5
 WEIGHT_DIALOG_PATTERN = 0.5
 FOCUS_SHIFT_THRESHOLD = 0.6

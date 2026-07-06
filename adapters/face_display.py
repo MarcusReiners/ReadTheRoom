@@ -1,15 +1,3 @@
-"""
-Dummy-Adapter fuer das Gesichtsdisplay (LED-Matrix, ADR-002 Abschnitt 9).
-
-Gibt auf der Konsole aus, was die echte LED-Matrix anzeigen wuerde -
-Blickrichtung der Augen und Mundanimation. Abonniert dieselben Events
-(SpeechPlaybackStarted/-Ended, ListeningStateChanged), die der echte
-face_display.py spaeter ebenfalls nutzen wird.
-
-ECHTE IMPLEMENTIERUNG (spaeter): rpi-rgb-led-matrix Python-Bindings,
-HUB75-PWM-Ansteuerung, siehe ADR-002 Abschnitt 9.
-"""
-
 from domain.events import SpeechPlaybackStarted, SpeechPlaybackEnded, ListeningStateChanged
 from service_layer.bus import EventBus
 
