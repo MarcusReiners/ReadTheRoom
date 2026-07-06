@@ -21,10 +21,6 @@ class Event:
     timestamp: datetime = field(default_factory=_now, init=False)
 
 
-# ---------------------------------------------------------------------
-# Sensor-Events (ADR-001): LD2450 Radar
-# ---------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class PersonEnteredRoom(Event):
     person_id: int
@@ -51,10 +47,6 @@ class PersonPositionUpdated(Event):
     speed_mm_s: float
 
 
-# ---------------------------------------------------------------------
-# Sprach-Events (ADR-001): Whisper STT
-# ---------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class SpeechTranscribed(Event):
     text: str
@@ -67,19 +59,11 @@ class ConfidentialIntentDetected(Event):
     confidence: float
 
 
-# ---------------------------------------------------------------------
-# Fusions-Events (ADR-001 Abschnitt 3)
-# ---------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class FocusShiftRequested(Event):
     person_id: int
     score: float
 
-
-# ---------------------------------------------------------------------
-# TTS-Wiedergabe-Events (ADR-002 Abschnitt 9.2) - steuern Mundanimation
-# ---------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class SpeechPlaybackStarted(Event):
@@ -88,17 +72,13 @@ class SpeechPlaybackStarted(Event):
 
 @dataclass(frozen=True)
 class SpeechPlaybackEnded(Event):
-    completed: bool  # False, wenn durch EmergencyStop unterbrochen
+    completed: bool
 
 
 @dataclass(frozen=True)
 class ListeningStateChanged(Event):
     listening: bool
 
-
-# ---------------------------------------------------------------------
-# Not-Stopp / Pause-Resume (ADR-002 Abschnitt 11)
-# ---------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class EmergencyStopPressed(Event):
@@ -120,11 +100,7 @@ class ResponseDiscarded(Event):
     pass
 
 
-# ---------------------------------------------------------------------
-# Modalitaet (ADR-001 Abschnitt 4)
-# ---------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class ModalitySwitched(Event):
-    to_modality: str  # "voice" | "web"
+    to_modality: str
     reason: str

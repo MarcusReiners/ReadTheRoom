@@ -44,9 +44,8 @@ class PiperTTSAdapter:
         print("  Piper bereit.")
 
     def speak(self, text: str) -> None:
-        print(f"🤖 Antworte: {text}")
+        print(f"Antworte: {text}")
         try:
-            # aplay als Subprocess starten – Piper streamt Raw-PCM direkt rein
             sample_rate = self._voice.config.sample_rate
             aplay_proc = subprocess.Popen(
                 [
@@ -68,7 +67,6 @@ class PiperTTSAdapter:
 
             self.bus.publish(SpeechPlaybackStarted(text=text))
 
-            # Piper synthetisiert und schreibt direkt in aplay stdin
             with aplay_proc.stdin as pipe:
                 for chunk in self._voice.synthesize(text):
                     audio_bytes = chunk.audio_int16_bytes
@@ -83,7 +81,6 @@ class PiperTTSAdapter:
             self.bus.publish(SpeechPlaybackEnded(completed=completed))
 
         except BrokenPipeError:
-            # Passiert wenn pause()/discard() aufgerufen wurde – kein Fehler
             self.bus.publish(SpeechPlaybackEnded(completed=False))
         except Exception as e:
             print(f"  TTS Fehler: {type(e).__name__}: {e}")
@@ -93,13 +90,13 @@ class PiperTTSAdapter:
         with self._lock:
             if self._aplay_process is not None:
                 self._aplay_process.send_signal(signal.SIGSTOP)
-                print("  ⏸  Wiedergabe pausiert (SIGSTOP).")
+                print("  Wiedergabe pausiert (SIGSTOP).")
 
     def resume(self) -> None:
         with self._lock:
             if self._aplay_process is not None:
                 self._aplay_process.send_signal(signal.SIGCONT)
-                print("  ▶  Wiedergabe fortgesetzt (SIGCONT).")
+                print("  Wiedergabe fortgesetzt (SIGCONT).")
 
     def discard(self) -> None:
         """Beendet die pausierte Wiedergabe endgueltig (Nutzerentscheidung: verwerfen)."""
@@ -108,4 +105,4 @@ class PiperTTSAdapter:
                 self._aplay_process.send_signal(signal.SIGCONT)
                 self._aplay_process.terminate()
                 self._aplay_process = None
-                print("  🗑  Antwort verworfen.")
+                print("  Antwort verworfen.")

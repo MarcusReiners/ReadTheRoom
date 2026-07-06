@@ -44,7 +44,7 @@ class WhisperCppAdapter:
         print("  Whisper bereit.")
 
     def transcribe(self, audio_file: str) -> str:
-        print("✨ Verarbeite Sprache mit faster-whisper...")
+        print("Verarbeite Sprache mit faster-whisper...")
         if not os.path.exists(audio_file):
             print(f"  Fehler: Audiodatei '{audio_file}' nicht gefunden.")
             return ""

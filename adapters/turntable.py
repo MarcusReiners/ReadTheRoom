@@ -21,7 +21,7 @@ class DummyTurntableAdapter:
         delta = target_angle_degrees - self.current_heading_degrees
         if abs(delta) > ROTATION_THRESHOLD_DEGREES:
             direction = "rechts" if delta > 0 else "links"
-            print(f"  [DummyTurntable] 🔄 Drehe {direction} um {abs(delta):.0f}° "
+            print(f"  [DummyTurntable] Drehe {direction} um {abs(delta):.0f}° "
                   f"(Ziel: {target_angle_degrees:.0f}°)")
             self.current_heading_degrees = target_angle_degrees
         else:

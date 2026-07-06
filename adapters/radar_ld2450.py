@@ -20,7 +20,7 @@ from service_layer.bus import EventBus
 class DummyRadarAdapter:
     def __init__(self, bus: EventBus) -> None:
         self.bus = bus
-        self._person_count = 1  # Simuliert: Hauptnutzer ist immer da
+        self._person_count = 1
 
     def start(self) -> None:
         print("  [DummyRadar] Simuliert: 1 Person im Raum (Hauptnutzer).")

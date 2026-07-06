@@ -35,5 +35,5 @@ class DummyEmergencyStopAdapter:
             except EOFError:
                 break
             if line.strip().lower() == "s":
-                print("  [DummyEmergencyStop] 🛑 Taster ausgelöst!")
+                print("  [DummyEmergencyStop] Taster ausgelöst!")
                 self.bus.publish(EmergencyStopPressed())
