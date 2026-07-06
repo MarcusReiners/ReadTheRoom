@@ -1,6 +1,6 @@
 from domain.conversation import ConversationState
 from domain.events import (
-    PersonCountChanged, EmergencyStopPressed, SpeechPlaybackEnded,
+    PersonCountChanged, EmergencyStopPressed, DisplayTakeoverRequested,
 )
 from domain.pause_resume import PauseResumeController
 from service_layer.bus import EventBus
@@ -12,8 +12,9 @@ def register_handlers(
     conversation: ConversationState,
     pause_controller: PauseResumeController,
     tts: PiperTTSAdapter,
+    status_display,
 ) -> None:
-    """Zentrale Registrierung aller Event-Handler (Wiring)."""
+    tts.takeover_sink = status_display.append_text
 
     def on_person_count_changed(event: PersonCountChanged) -> None:
         if event.count > 1 and conversation.confidential:
@@ -30,5 +31,15 @@ def register_handlers(
             print("  [Handler] Rückfrage: fortsetzen oder verwerfen? "
                   "(Phase 1: noch nicht an Whisper/Web-UI angebunden)")
 
+    def on_display_takeover(event: DisplayTakeoverRequested) -> None:
+        if status_display.text_active:
+            status_display.stop_text()
+            print("  [Handler] Display-Textmodus beendet.")
+        elif tts.request_takeover():
+            print("  [Handler] Sprachausgabe unterbrochen, Antwort läuft auf dem Display weiter.")
+        else:
+            print("  [Handler] Keine laufende Antwort zum Umleiten.")
+
     bus.subscribe(PersonCountChanged, on_person_count_changed)
     bus.subscribe(EmergencyStopPressed, on_emergency_stop)
+    bus.subscribe(DisplayTakeoverRequested, on_display_takeover)

@@ -30,8 +30,11 @@ class PiperTTSAdapter:
     ) -> None:
         self.bus = bus
         self.speaker_device = speaker_device
+        self.takeover_sink = None
         self._aplay_process: subprocess.Popen | None = None
         self._lock = threading.Lock()
+        self._takeover = threading.Event()
+        self._streaming = False
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -59,15 +62,43 @@ class PiperTTSAdapter:
             stderr=subprocess.DEVNULL,
         )
 
+    def request_takeover(self) -> bool:
+        if not self._streaming:
+            return False
+        self._takeover.set()
+        with self._lock:
+            if self._aplay_process is not None:
+                self._aplay_process.send_signal(signal.SIGCONT)
+                self._aplay_process.terminate()
+                self._aplay_process = None
+        return True
+
+    def _emit(self, aplay_proc: subprocess.Popen, sentence: str) -> None:
+        if self._takeover.is_set():
+            if self.takeover_sink is not None:
+                self.takeover_sink(sentence)
+            return
+        try:
+            for chunk in self._voice.synthesize(sentence):
+                aplay_proc.stdin.write(chunk.audio_int16_bytes)
+        except (BrokenPipeError, ValueError, OSError):
+            if self._takeover.is_set():
+                if self.takeover_sink is not None:
+                    self.takeover_sink(sentence)
+            else:
+                raise
+
     def speak_stream(self, text_chunks: Iterable[str]) -> str:
         """Verarbeitet Text-Deltas (z.B. von LLMGatewayAdapter.ask_stream):
         sobald ein Satz im Puffer vollstaendig ist, wird er synthetisiert und
         in die noch laufende aplay-Pipe geschrieben, waehrend das LLM den
-        naechsten Satz generiert. Gibt die vollstaendig zusammengesetzte
-        Antwort zurueck (fuer die Conversation History)."""
+        naechsten Satz generiert. Bei Takeover ('t') gehen weitere Saetze an
+        takeover_sink statt an aplay. Gibt die vollstaendige Antwort zurueck."""
         full_text = ""
         buffer = ""
         started = False
+        self._takeover.clear()
+        self._streaming = True
         aplay_proc = self._spawn_aplay()
 
         with self._lock:
@@ -82,20 +113,21 @@ class PiperTTSAdapter:
                     if not started:
                         self.bus.publish(SpeechPlaybackStarted(text=full_text))
                         started = True
-                    for chunk in self._voice.synthesize(sentence):
-                        aplay_proc.stdin.write(chunk.audio_int16_bytes)
+                    self._emit(aplay_proc, sentence)
 
             tail = buffer.strip()
             if tail:
                 if not started:
                     self.bus.publish(SpeechPlaybackStarted(text=full_text))
                     started = True
-                for chunk in self._voice.synthesize(tail):
-                    aplay_proc.stdin.write(chunk.audio_int16_bytes)
+                self._emit(aplay_proc, tail)
 
-            aplay_proc.stdin.close()
-            aplay_proc.wait()
-            completed = aplay_proc.returncode == 0
+            if self._takeover.is_set():
+                completed = False
+            else:
+                aplay_proc.stdin.close()
+                aplay_proc.wait()
+                completed = aplay_proc.returncode == 0
 
             with self._lock:
                 self._aplay_process = None
@@ -114,6 +146,8 @@ class PiperTTSAdapter:
             with self._lock:
                 self._aplay_process = None
             return full_text
+        finally:
+            self._streaming = False
 
     def pause(self) -> None:
         """SIGSTOP – Wiedergabe friert ein, Prozess bleibt erhalten (ADR-002, 11)."""

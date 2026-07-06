@@ -1,17 +1,17 @@
 import threading
 
-from domain.events import EmergencyStopPressed
+from domain.events import EmergencyStopPressed, DisplayTakeoverRequested
 from service_layer.bus import EventBus
 
 
-class DummyEmergencyStopAdapter:
+class DummyButtonsAdapter:
     def __init__(self, bus: EventBus) -> None:
         self.bus = bus
         self._thread = threading.Thread(target=self._listen, daemon=True)
 
     def start(self) -> None:
-        print("  [DummyEmergencyStop] Simuliert per Tastatur: 's' + Enter "
-              "zum Ausloesen (in separatem Thread, blockiert die Pipeline nicht).")
+        print("  [DummyButtons] Simuliert per Tastatur: 's' + Enter = Not-Stopp, "
+              "'t' + Enter = Antwort auf Display umleiten.")
         self._thread.start()
 
     def _listen(self) -> None:
@@ -20,6 +20,9 @@ class DummyEmergencyStopAdapter:
                 line = input()
             except EOFError:
                 break
-            if line.strip().lower() == "s":
-                print("  [DummyEmergencyStop] Taster ausgelöst!")
+            key = line.strip().lower()
+            if key == "s":
+                print("  [DummyButtons] Not-Stopp ausgelöst!")
                 self.bus.publish(EmergencyStopPressed())
+            elif key == "t":
+                self.bus.publish(DisplayTakeoverRequested())
