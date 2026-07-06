@@ -25,14 +25,14 @@ class StatusDisplayAdapter:
         x_offset: int = 0,
         width: int = 96,
         height: int = 48,
-        font_path: str = "/home/marcus/rpi-rgb-led-matrix/fonts/8x13.bdf",
+        font_path: str = "/home/marcus/rpi-rgb-led-matrix/fonts/5x7.bdf",
     ) -> None:
         from rgbmatrix import graphics
 
         self._graphics = graphics
         self._font = graphics.Font()
         self._font.LoadFont(font_path)
-        self._text_color = graphics.Color(255, 180, 0)
+        self._text_color = graphics.Color(255, 255, 255)
 
         self.x_offset = x_offset
         self.width = width
@@ -41,7 +41,6 @@ class StatusDisplayAdapter:
         self.state = "idle"
         self.text_active = False
         self._text = ""
-        self._text_started_at: float | None = None
         self._lock = threading.Lock()
 
         bus.subscribe(ListeningStateChanged, self._on_listening)
@@ -60,9 +59,7 @@ class StatusDisplayAdapter:
     def append_text(self, text: str) -> None:
         with self._lock:
             self._text += (" " if self._text else "") + text
-            if not self.text_active:
-                self.text_active = True
-                self._text_started_at = None
+            self.text_active = True
 
     def stop_text(self) -> None:
         with self._lock:
@@ -82,15 +79,34 @@ class StatusDisplayAdapter:
     def _render_text(self, canvas, t: float) -> None:
         with self._lock:
             text = self._text
-            if self._text_started_at is None:
-                self._text_started_at = t
-            elapsed = t - self._text_started_at
-        x = canvas.width - int(elapsed * 30)
-        y = self.height // 2 + 4
-        width = self._graphics.DrawText(canvas, self._font, x, y, self._text_color, text)
-        if x + width < 0:
-            with self._lock:
-                self._text_started_at = t
+        lines = self._wrap(text)
+        line_height = self._font.height
+        max_lines = max(1, self.height // line_height)
+        if len(lines) > max_lines:
+            lines = lines[-max_lines:]
+        y = self._font.baseline
+        for line in lines:
+            self._graphics.DrawText(canvas, self._font, self.x_offset + 1, y,
+                                    self._text_color, line)
+            y += line_height
+
+    def _wrap(self, text: str) -> list[str]:
+        lines: list[str] = []
+        current = ""
+        for word in text.split():
+            candidate = word if not current else current + " " + word
+            if self._text_width(candidate) <= self.width - 2:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
+
+    def _text_width(self, text: str) -> int:
+        return sum(self._font.CharacterWidth(ord(c)) for c in text)
 
     def _render_listening(self, canvas, t: float) -> None:
         cx = self.x_offset + self.width // 2
