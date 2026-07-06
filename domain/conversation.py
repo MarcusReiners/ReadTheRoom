@@ -1,4 +1,4 @@
-SYSTEM_PROMPT = """Du bist ein Office-Assistent am Schreibtisch. Antworte immer in maximal einem kurzen Satz auf Deutsch"""
+SYSTEM_PROMPT = """Du bist ein Office-Assistent am Schreibtisch. Antworte kurz und praegnant auf Deutsch."""
 class ConversationState:
     """
     Haelt den aktuellen Modus (voice/web) und ob das laufende Gespraech
