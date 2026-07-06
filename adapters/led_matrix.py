@@ -21,6 +21,7 @@ class LedMatrix:
         options.brightness = brightness
         options.gpio_slowdown = gpio_slowdown
         options.hardware_mapping = "regular"
+        options.drop_privileges = False
 
         self.matrix = RGBMatrix(options=options)
         self.width = cols * chain
