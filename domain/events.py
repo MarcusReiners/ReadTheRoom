@@ -72,27 +72,7 @@ class ListeningStateChanged(Event):
 
 
 @dataclass(frozen=True)
-class EmergencyStopPressed(Event):
-    pass
-
-
-@dataclass(frozen=True)
 class DisplayTakeoverRequested(Event):
-    pass
-
-
-@dataclass(frozen=True)
-class ResumeDecisionRequested(Event):
-    pass
-
-
-@dataclass(frozen=True)
-class ResponseResumed(Event):
-    pass
-
-
-@dataclass(frozen=True)
-class ResponseDiscarded(Event):
     pass
 
 

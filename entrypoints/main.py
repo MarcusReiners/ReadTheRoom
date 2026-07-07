@@ -7,7 +7,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from domain.conversation import ConversationState
 from domain.events import ListeningStateChanged
-from domain.pause_resume import PauseResumeController
 from service_layer.bus import EventBus
 from service_layer.handlers import register_handlers
 
@@ -77,11 +76,8 @@ def record_audio(output_file: str) -> bool:
 
 
 def main() -> None:
-    print("\nOffice Assistant — Phase 1 (Code-Skelett, Dummy-Hardware)\n")
-
     bus = EventBus()
     conversation = ConversationState()
-    pause_controller = PauseResumeController()
 
     stt = WhisperSTTAdapter(
         server_binary=WHISPER_BINARY, model_path=WHISPER_MODEL,
@@ -113,21 +109,16 @@ def main() -> None:
     else:
         face = DummyFaceDisplayAdapter(bus=bus)
 
-    register_handlers(bus, conversation, pause_controller, tts, status)
+    register_handlers(bus, conversation, tts, status)
 
     radar.start()
     buttons.start()
 
     print("\nENTER startet die Aufnahme, ENTER stoppt sie. "
-          "'s' + Enter = Not-Stopp, 't' + Enter = Antwort auf Display umleiten.\n")
+          "'t' + Enter = Antwort auf Display umleiten.\n")
 
     while True:
         try:
-            if pause_controller.is_paused:
-                print("System pausiert. Drücke 's' erneut für Fortsetzen/Verwerfen-Abfrage.")
-                input()
-                continue
-
             input()
 
             temp_in = "temp_in.wav"
@@ -136,8 +127,8 @@ def main() -> None:
 
             success = record_audio(temp_in)
             bus.publish(ListeningStateChanged(listening=False))
-            print("Aufnahme beendet." if success else "Aufnahme fehlgeschlagen.")
             if not success:
+                print("Aufnahme fehlgeschlagen.")
                 continue
 
             user_text = stt.transcribe(temp_in)

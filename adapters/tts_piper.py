@@ -1,6 +1,5 @@
 import os
 import re
-import signal
 import subprocess
 import threading
 from typing import Iterable
@@ -70,7 +69,6 @@ class PiperTTSAdapter:
         self._takeover.set()
         with self._lock:
             if self._aplay_process is not None:
-                self._aplay_process.send_signal(signal.SIGCONT)
                 self._aplay_process.terminate()
                 self._aplay_process = None
         if self.takeover_sink is not None:
@@ -155,25 +153,3 @@ class PiperTTSAdapter:
             return full_text
         finally:
             self._streaming = False
-
-    def pause(self) -> None:
-        """SIGSTOP – Wiedergabe friert ein, Prozess bleibt erhalten (ADR-002, 11)."""
-        with self._lock:
-            if self._aplay_process is not None:
-                self._aplay_process.send_signal(signal.SIGSTOP)
-                print("  Wiedergabe pausiert (SIGSTOP).")
-
-    def resume(self) -> None:
-        with self._lock:
-            if self._aplay_process is not None:
-                self._aplay_process.send_signal(signal.SIGCONT)
-                print("  Wiedergabe fortgesetzt (SIGCONT).")
-
-    def discard(self) -> None:
-        """Beendet die pausierte Wiedergabe endgueltig (Nutzerentscheidung: verwerfen)."""
-        with self._lock:
-            if self._aplay_process is not None:
-                self._aplay_process.send_signal(signal.SIGCONT)
-                self._aplay_process.terminate()
-                self._aplay_process = None
-                print("  Antwort verworfen.")
