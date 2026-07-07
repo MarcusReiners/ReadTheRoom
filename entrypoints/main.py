@@ -21,8 +21,8 @@ from adapters.buttons import DummyButtonsAdapter
 
 USE_LED_MATRIX = True
 USE_HDMI_EYES = False
-LLM_URL = "http://192.168.178.37:11434/api/generate"
-LLM_MODEL = "qwen3.5:9b"
+LLM_MODEL = "ollama_chat/qwen3.5:9b"
+LLM_API_BASE = "http://192.168.178.37:11434"
 WHISPER_HOST, WHISPER_PORT = "127.0.0.1", 8081
 WHISPER_BINARY = "/home/marcus/whisper.cpp/build/bin/whisper-server"
 WHISPER_MODEL = "/home/marcus/whisper.cpp/models/ggml-tiny-german-q5_0.bin"
@@ -84,7 +84,7 @@ def main() -> None:
         host=WHISPER_HOST, port=WHISPER_PORT,
     )
     tts = PiperTTSAdapter(bus=bus, model_path=PIPER_MODEL, speaker_device=SPEAKER_DEVICE)
-    llm = LLMGatewayAdapter(url=LLM_URL, model=LLM_MODEL)
+    llm = LLMGatewayAdapter(model=LLM_MODEL, api_base=LLM_API_BASE)
 
     radar = DummyRadarAdapter(bus=bus)
     turntable = DummyTurntableAdapter()
