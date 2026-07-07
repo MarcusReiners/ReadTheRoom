@@ -1,46 +1,57 @@
-import os
+import subprocess
+import time
 
-from faster_whisper import WhisperModel
+import requests
 
 
 class WhisperCppAdapter:
-    """
-    Name beibehalten fuer Kompatibilitaet mit main.py (kein Import noetig).
-    Intern wird faster-whisper genutzt.
-    """
-
     def __init__(
         self,
-        model_path: str = "/home/marcus/voice-pipeline/whisper-data/whisper-tiny-german-1224-ct2",
+        server_binary: str = "/home/marcus/whisper.cpp/build/bin/whisper-server",
+        model_path: str = "/home/marcus/whisper.cpp/models/ggml-base.bin",
+        host: str = "127.0.0.1",
+        port: int = 8081,
         language: str = "de",
-        beam_size: int = 1,
-        compute_type: str = "int8",
+        threads: int = 3,
+        startup_timeout_s: float = 30.0,
     ) -> None:
         self.language = language
-        self.beam_size = beam_size
+        self.url = f"http://{host}:{port}/inference"
 
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(
-                f"Whisper-Modell nicht gefunden: {model_path}\n"
-                "Bitte sicherstellen dass das CT2-Modell vorhanden ist."
-            )
-
-        print("  Lade Whisper-Modell (einmalig)...")
-        self._model = WhisperModel(model_path, device="cpu", compute_type=compute_type, cpu_threads=3, num_workers=1)
+        print("  Starte whisper-server...")
+        self._proc = subprocess.Popen(
+            [server_binary, "--model", model_path, "--host", host, "--port", str(port),
+             "--language", language, "--threads", str(threads)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self._wait_until_ready(host, port, startup_timeout_s)
         print("  Whisper bereit.")
 
+    def _wait_until_ready(self, host: str, port: int, timeout_s: float) -> None:
+        deadline = time.monotonic() + timeout_s
+        base_url = f"http://{host}:{port}/"
+        while time.monotonic() < deadline:
+            if self._proc.poll() is not None:
+                raise RuntimeError("whisper-server ist beim Start abgestürzt.")
+            try:
+                requests.get(base_url, timeout=1)
+                return
+            except requests.exceptions.ConnectionError:
+                time.sleep(0.5)
+        raise RuntimeError("whisper-server ist nicht rechtzeitig gestartet.")
+
     def transcribe(self, audio_file: str) -> str:
-        print("Verarbeite Sprache mit faster-whisper...")
-        if not os.path.exists(audio_file):
-            print(f"  Fehler: Audiodatei '{audio_file}' nicht gefunden.")
-            return ""
+        print("Verarbeite Sprache mit whisper.cpp...")
         try:
-            segments, info = self._model.transcribe(
-                audio_file,
-                language=self.language,
-                beam_size=self.beam_size,
-            )
-            text = " ".join(s.text.strip() for s in segments).strip()
+            with open(audio_file, "rb") as f:
+                res = requests.post(
+                    self.url,
+                    files={"file": (audio_file, f, "audio/wav")},
+                    data={"language": self.language, "response_format": "json"},
+                    timeout=30,
+                )
+            res.raise_for_status()
+            text = res.json().get("text", "").strip()
 
             for noise in ["[BLANK_AUDIO]", "(Stille)", "(Musik)", "(music)", "(silence)"]:
                 text = text.replace(noise, "")
@@ -50,3 +61,7 @@ class WhisperCppAdapter:
         except Exception as e:
             print(f"  STT Fehler: {type(e).__name__}: {e}")
             return ""
+
+    def stop(self) -> None:
+        self._proc.terminate()
+        self._proc.wait(timeout=5)
