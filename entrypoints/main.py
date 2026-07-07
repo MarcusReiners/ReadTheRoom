@@ -27,6 +27,7 @@ LLM_API_BASE = "http://192.168.178.37:11434"
 WHISPER_HOST, WHISPER_PORT = "127.0.0.1", 8081
 WHISPER_BINARY = "/home/marcus/whisper.cpp/build/bin/whisper-server"
 WHISPER_MODEL = "/home/marcus/whisper.cpp/models/ggml-tiny-german-q5_0.bin"
+WHISPER_THREADS = 3
 PIPER_MODEL = "/home/marcus/piper-voices/de_DE-thorsten-low.onnx"
 MIC_DEVICE = "hw:ArrayUAC10,0"
 MIC_CHANNELS = 6
@@ -82,7 +83,7 @@ def main() -> None:
 
     stt = WhisperSTTAdapter(
         server_binary=WHISPER_BINARY, model_path=WHISPER_MODEL,
-        host=WHISPER_HOST, port=WHISPER_PORT,
+        host=WHISPER_HOST, port=WHISPER_PORT, threads=WHISPER_THREADS,
     )
     tts = PiperTTSAdapter(bus=bus, model_path=PIPER_MODEL, speaker_device=SPEAKER_DEVICE)
     llm = LLMGatewayAdapter(model=LLM_MODEL, api_base=LLM_API_BASE)
