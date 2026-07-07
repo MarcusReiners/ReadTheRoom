@@ -128,9 +128,10 @@ def main() -> None:
                 print("Aufnahme fehlgeschlagen.")
                 continue
 
+            audio_s = max(0, os.path.getsize(temp_in) - 44) / (MIC_RATE * 2)
             t_stt = time.monotonic()
             user_text = stt.transcribe(temp_in)
-            print(f"  [timing] STT: {time.monotonic() - t_stt:.2f}s")
+            print(f"  [timing] STT: {time.monotonic() - t_stt:.2f}s fuer {audio_s:.1f}s Audio")
             if os.path.exists(temp_in):
                 os.remove(temp_in)
 
