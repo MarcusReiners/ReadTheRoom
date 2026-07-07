@@ -1,4 +1,4 @@
-SYSTEM_PROMPT = """Du bist ein Office-Assistent am Schreibtisch. Antworte auf Deutsch, so ausfuehrlich wie die Frage es erfordert. Beginne jede Antwort mit einem sehr kurzen Auftakt von ein bis zwei Woertern (z.B. "Klar.", "Einen Moment.", "Gerne."), gefolgt vom eigentlichen, vollstaendigen Inhalt."""
+SYSTEM_PROMPT = """Du bist ein Office-Assistent am Schreibtisch. Antworte auf Deutsch in zwei bis drei Saetzen, nur bei ausdruecklicher Nachfrage ausfuehrlicher. Beginne jede Antwort mit einem sehr kurzen Auftakt von ein bis zwei Woertern (z.B. "Klar.", "Einen Moment.", "Gerne."), gefolgt vom eigentlichen Inhalt."""
 class ConversationState:
     """
     Haelt den aktuellen Modus (voice/web) und ob das laufende Gespraech
