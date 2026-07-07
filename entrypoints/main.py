@@ -24,7 +24,9 @@ USE_LED_MATRIX = True
 USE_HDMI_EYES = False
 LLM_URL = "http://192.168.178.37:11434/api/generate"
 LLM_MODEL = "qwen3.5:9b"
-WHISPER_HOST, WHISPER_PORT = "127.0.0.1", 10300
+WHISPER_HOST, WHISPER_PORT = "127.0.0.1", 8081
+WHISPER_BINARY = "/home/marcus/whisper.cpp/build/bin/whisper-server"
+WHISPER_MODEL = "/home/marcus/whisper.cpp/models/ggml-base.bin"
 PIPER_MODEL = "/home/marcus/piper-voices/de_DE-thorsten-low.onnx"
 MIC_DEVICE = "hw:ArrayUAC10,0"
 MIC_CHANNELS = 6
@@ -81,7 +83,10 @@ def main() -> None:
     conversation = ConversationState()
     pause_controller = PauseResumeController()
 
-    stt = WhisperSTTAdapter()
+    stt = WhisperSTTAdapter(
+        server_binary=WHISPER_BINARY, model_path=WHISPER_MODEL,
+        host=WHISPER_HOST, port=WHISPER_PORT,
+    )
     tts = PiperTTSAdapter(bus=bus, model_path=PIPER_MODEL, speaker_device=SPEAKER_DEVICE)
     llm = LLMGatewayAdapter(url=LLM_URL, model=LLM_MODEL)
 
@@ -154,6 +159,7 @@ def main() -> None:
 
         except KeyboardInterrupt:
             print("\nCiao!")
+            stt.stop()
             break
 
 

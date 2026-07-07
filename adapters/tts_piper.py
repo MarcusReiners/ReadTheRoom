@@ -36,6 +36,7 @@ class PiperTTSAdapter:
         self._takeover = threading.Event()
         self._streaming = False
         self._full_text = ""
+        self._started_published = False
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -76,11 +77,18 @@ class PiperTTSAdapter:
             self.takeover_sink(self._full_text)
         return True
 
-    def _emit(self, aplay_proc: subprocess.Popen, sentence: str) -> None:
+    def _notify_started(self) -> None:
+        if not self._started_published:
+            self._started_published = True
+            self.bus.publish(SpeechPlaybackStarted(text=self._full_text))
+
+    def _emit(self, aplay_proc: subprocess.Popen, sentence: str, on_first_chunk=None) -> None:
         if self._takeover.is_set():
             return
         try:
-            for chunk in self._voice.synthesize(sentence):
+            for i, chunk in enumerate(self._voice.synthesize(sentence)):
+                if i == 0 and on_first_chunk is not None:
+                    on_first_chunk()
                 aplay_proc.stdin.write(chunk.audio_int16_bytes)
         except (BrokenPipeError, ValueError, OSError):
             if not self._takeover.is_set():
@@ -95,8 +103,8 @@ class PiperTTSAdapter:
         Gibt die vollstaendige Antwort zurueck."""
         full_text = ""
         buffer = ""
-        started = False
         self._full_text = ""
+        self._started_published = False
         self._takeover.clear()
         self._streaming = True
         aplay_proc = self._spawn_aplay()
@@ -115,17 +123,11 @@ class PiperTTSAdapter:
                 buffer += delta
                 sentences, buffer = _split_sentences(buffer)
                 for sentence in sentences:
-                    if not started:
-                        self.bus.publish(SpeechPlaybackStarted(text=full_text))
-                        started = True
-                    self._emit(aplay_proc, sentence)
+                    self._emit(aplay_proc, sentence, on_first_chunk=self._notify_started)
 
             tail = buffer.strip()
             if tail and not self._takeover.is_set():
-                if not started:
-                    self.bus.publish(SpeechPlaybackStarted(text=full_text))
-                    started = True
-                self._emit(aplay_proc, tail)
+                self._emit(aplay_proc, tail, on_first_chunk=self._notify_started)
 
             if self._takeover.is_set():
                 completed = False
