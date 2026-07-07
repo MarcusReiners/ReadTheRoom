@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from typing import Iterable
 
 from piper.voice import PiperVoice
@@ -78,6 +79,7 @@ class PiperTTSAdapter:
     def _notify_started(self) -> None:
         if not self._started_published:
             self._started_published = True
+            print(f"  [timing] erster Ton: {time.monotonic() - self._t_stream_start:.2f}s nach LLM-Start")
             self.bus.publish(SpeechPlaybackStarted(text=self._full_text))
 
     def _emit(self, aplay_proc: subprocess.Popen, sentence: str, on_first_chunk=None) -> None:
@@ -103,6 +105,7 @@ class PiperTTSAdapter:
         buffer = ""
         self._full_text = ""
         self._started_published = False
+        self._t_stream_start = time.monotonic()
         self._takeover.clear()
         self._streaming = True
         aplay_proc = self._spawn_aplay()

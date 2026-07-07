@@ -1,3 +1,4 @@
+import time
 from typing import Iterator, Optional
 
 import litellm
@@ -30,10 +31,17 @@ class LLMGatewayAdapter:
                 keep_alive="24h",
                 extra_body={"think": False},
             )
+            t_start = time.monotonic()
+            t_first = None
             for chunk in response:
                 delta = chunk.choices[0].delta.content
                 if delta:
+                    if t_first is None:
+                        t_first = time.monotonic()
+                        print(f"  [timing] LLM erstes Token: {t_first - t_start:.2f}s")
                     yield delta
+            if t_first is not None:
+                print(f"  [timing] LLM gesamt: {time.monotonic() - t_start:.2f}s")
         except litellm.exceptions.APIConnectionError:
             yield ("Fehler: Kann das LLM-Backend nicht erreichen. "
                    "Läuft der Server und ist die URL korrekt?")
