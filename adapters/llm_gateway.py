@@ -14,10 +14,6 @@ class LLMGatewayAdapter:
         self.api_base = api_base
 
     def ask_stream(self, user_text: str) -> Iterator[str]:
-        """Streamt die Antwort satzweise-vorbereitet als Text-Deltas, damit die
-        TTS-Ausgabe schon starten kann, waehrend das LLM noch generiert.
-        Ueber LiteLLM austauschbar zwischen Ollama und Cloud-Providern
-        (z.B. model="gpt-4o-mini" statt "ollama_chat/qwen3.5:9b")."""
         try:
             response = litellm.completion(
                 model=self.model,

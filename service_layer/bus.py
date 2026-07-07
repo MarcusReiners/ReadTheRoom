@@ -23,5 +23,4 @@ class EventBus:
 
     @property
     def history(self) -> list[Event]:
-        """Fuer Debugging/Tests: alle bisher publizierten Events."""
         return list(self._log)

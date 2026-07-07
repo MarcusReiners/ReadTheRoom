@@ -36,9 +36,6 @@ MAX_RECORD_SECONDS = 30
 
 
 def record_audio(output_file: str) -> bool:
-    """Push-to-talk: Aufnahme laeuft, bis Enter gedrueckt wird (max.
-    MAX_RECORD_SECONDS). 6-Kanal-Aufnahme als Raw-PCM, Kanal 0
-    (beamformt) per sox extrahieren."""
     raw_file = "temp_in_raw.pcm"
     try:
         proc = subprocess.Popen(
