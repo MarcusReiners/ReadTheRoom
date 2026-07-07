@@ -28,6 +28,7 @@ class LLMGatewayAdapter:
                 stream=True,
                 max_tokens=200,
                 think=False,
+                keep_alive="24h",
             )
             for chunk in response:
                 delta = chunk.choices[0].delta.content
