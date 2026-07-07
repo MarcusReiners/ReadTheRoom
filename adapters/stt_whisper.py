@@ -11,9 +11,11 @@ class WhisperSTTAdapter:
         beam_size: int = 1,
         compute_type: str = "int8",
         cpu_threads: int = 3,
+        vad: bool = True,
     ) -> None:
         self.language = language
         self.beam_size = beam_size
+        self.vad = vad
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -35,7 +37,7 @@ class WhisperSTTAdapter:
                 audio_file,
                 language=self.language,
                 beam_size=self.beam_size,
-                vad_filter=True,
+                vad_filter=self.vad,
                 vad_parameters={"speech_pad_ms": 800, "min_silence_duration_ms": 1000},
             )
             text = " ".join(s.text.strip() for s in segments).strip()
