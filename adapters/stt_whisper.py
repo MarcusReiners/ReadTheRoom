@@ -35,6 +35,7 @@ class WhisperSTTAdapter:
                 audio_file,
                 language=self.language,
                 beam_size=self.beam_size,
+                vad_filter=True,
             )
             text = " ".join(s.text.strip() for s in segments).strip()
 
