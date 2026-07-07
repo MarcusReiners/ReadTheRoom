@@ -14,17 +14,16 @@ class DummyFaceDisplayAdapter:
         bus.subscribe(ListeningStateChanged, self._on_listening_changed)
 
     def set_eye_direction(self, angle_degrees: float) -> None:
-        print(f"  [DummyFace] Augen schauen Richtung {angle_degrees:.0f}°")
+        pass
 
     def _on_speech_started(self, event: SpeechPlaybackStarted) -> None:
-        print("  [DummyFace] Mundanimation: START (spricht)")
+        pass
 
     def _on_speech_ended(self, event: SpeechPlaybackEnded) -> None:
-        print("  [DummyFace] Mundanimation: ENDE (Ruhezustand)")
+        pass
 
     def _on_listening_changed(self, event: ListeningStateChanged) -> None:
-        status = "höre zu" if event.listening else "Ruhezustand"
-        print(f"  [DummyFace] Status: {status}")
+        pass
 
 
 class HDMIFaceDisplayAdapter:

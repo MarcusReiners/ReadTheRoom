@@ -8,7 +8,6 @@ class DummyRadarAdapter:
         self._person_count = 1
 
     def start(self) -> None:
-        print("  [DummyRadar] Simuliert: 1 Person im Raum (Hauptnutzer).")
         self.bus.publish(PersonCountChanged(count=self._person_count))
 
     @property

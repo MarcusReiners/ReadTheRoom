@@ -18,7 +18,6 @@ class WhisperCppAdapter:
         self.language = language
         self.url = f"http://{host}:{port}/inference"
 
-        print("  Starte whisper-server...")
         self._proc = subprocess.Popen(
             [server_binary, "--model", model_path, "--host", host, "--port", str(port),
              "--language", language, "--threads", str(threads)],
@@ -41,7 +40,6 @@ class WhisperCppAdapter:
         raise RuntimeError("whisper-server ist nicht rechtzeitig gestartet.")
 
     def transcribe(self, audio_file: str) -> str:
-        print("Verarbeite Sprache mit whisper.cpp...")
         try:
             with open(audio_file, "rb") as f:
                 res = requests.post(

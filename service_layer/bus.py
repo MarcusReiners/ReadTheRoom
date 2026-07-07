@@ -18,7 +18,6 @@ class EventBus:
     def publish(self, event: Event) -> None:
         self._log.append(event)
         event_type = type(event)
-        print(f"[BUS] {event_type.__name__}: {event}")
         for handler in self._handlers.get(event_type, []):
             handler(event)
 
