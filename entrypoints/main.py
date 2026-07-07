@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -131,7 +132,9 @@ def main() -> None:
                 print("Aufnahme fehlgeschlagen.")
                 continue
 
+            t_stt = time.monotonic()
             user_text = stt.transcribe(temp_in)
+            print(f"  [timing] STT: {time.monotonic() - t_stt:.2f}s")
             if os.path.exists(temp_in):
                 os.remove(temp_in)
 
