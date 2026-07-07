@@ -11,7 +11,7 @@ from domain.events import ListeningStateChanged
 from service_layer.bus import EventBus
 from service_layer.handlers import register_handlers
 
-from adapters.stt_whisper import WhisperCppAdapter as WhisperSTTAdapter
+from adapters.stt_whisper import WhisperSTTAdapter
 from adapters.tts_piper import PiperTTSAdapter
 from adapters.llm_gateway import LLMGatewayAdapter
 from adapters.radar_ld2450 import DummyRadarAdapter
@@ -24,9 +24,7 @@ USE_LED_MATRIX = True
 USE_HDMI_EYES = False
 LLM_MODEL = "ollama_chat/qwen3.5:9b"
 LLM_API_BASE = "http://192.168.178.37:11434"
-WHISPER_HOST, WHISPER_PORT = "127.0.0.1", 8081
-WHISPER_BINARY = "/home/marcus/whisper.cpp/build/bin/whisper-server"
-WHISPER_MODEL = "/home/marcus/whisper.cpp/models/ggml-tiny-german-q5_0.bin"
+WHISPER_MODEL = "/home/marcus/voice-pipeline/whisper-data/whisper-tiny-german-1224-ct2"
 WHISPER_THREADS = 3
 PIPER_MODEL = "/home/marcus/piper-voices/de_DE-thorsten-low.onnx"
 MIC_DEVICE = "hw:ArrayUAC10,0"
@@ -81,10 +79,7 @@ def main() -> None:
     bus = EventBus()
     conversation = ConversationState()
 
-    stt = WhisperSTTAdapter(
-        server_binary=WHISPER_BINARY, model_path=WHISPER_MODEL,
-        host=WHISPER_HOST, port=WHISPER_PORT, threads=WHISPER_THREADS,
-    )
+    stt = WhisperSTTAdapter(model_path=WHISPER_MODEL, cpu_threads=WHISPER_THREADS)
     tts = PiperTTSAdapter(bus=bus, model_path=PIPER_MODEL, speaker_device=SPEAKER_DEVICE)
     llm = LLMGatewayAdapter(model=LLM_MODEL, api_base=LLM_API_BASE)
 

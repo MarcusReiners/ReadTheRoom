@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import subprocess
@@ -10,13 +11,21 @@ from piper.voice import PiperVoice
 from domain.events import SpeechPlaybackStarted, SpeechPlaybackEnded
 from service_layer.bus import EventBus
 
+logging.getLogger("piper").setLevel(logging.ERROR)
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+_CLAUSE_END = re.compile(r"(?<=[,;:])\s+")
 
 
-def _split_sentences(buffer: str) -> tuple[list[str], str]:
+def _split_sentences(buffer: str, first: bool = False) -> tuple[list[str], str]:
     """Trennt vollstaendige Saetze vom Puffer ab; der Rest (moeglicherweise
-    unvollstaendiger letzter Satz) wird als neuer Puffer zurueckgegeben."""
+    unvollstaendiger letzter Satz) wird als neuer Puffer zurueckgegeben.
+    Beim ersten Fragment wird auch an Kommas getrennt, damit die
+    Sprachausgabe frueh starten kann, selbst wenn das LLM keinen kurzen
+    ersten Satz liefert."""
     parts = _SENTENCE_END.split(buffer)
+    if first and len(parts) == 1:
+        parts = _CLAUSE_END.split(buffer, maxsplit=1)
     complete, rest = parts[:-1], parts[-1]
     return [p for p in complete if p.strip()], rest
 
@@ -122,7 +131,7 @@ class PiperTTSAdapter:
                         self.takeover_sink(full_text)
                     continue
                 buffer += delta
-                sentences, buffer = _split_sentences(buffer)
+                sentences, buffer = _split_sentences(buffer, first=not self._started_published)
                 for sentence in sentences:
                     self._emit(aplay_proc, sentence, on_first_chunk=self._notify_started)
 
