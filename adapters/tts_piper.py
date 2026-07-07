@@ -18,11 +18,6 @@ _CLAUSE_END = re.compile(r"(?<=[,;:])\s+")
 
 
 def _split_sentences(buffer: str, first: bool = False) -> tuple[list[str], str]:
-    """Trennt vollstaendige Saetze vom Puffer ab; der Rest (moeglicherweise
-    unvollstaendiger letzter Satz) wird als neuer Puffer zurueckgegeben.
-    Beim ersten Fragment wird auch an Kommas getrennt, damit die
-    Sprachausgabe frueh starten kann, selbst wenn das LLM keinen kurzen
-    ersten Satz liefert."""
     parts = _SENTENCE_END.split(buffer)
     if first and len(parts) == 1:
         parts = _CLAUSE_END.split(buffer, maxsplit=1)
@@ -104,12 +99,6 @@ class PiperTTSAdapter:
                 raise
 
     def speak_stream(self, text_chunks: Iterable[str]) -> str:
-        """Verarbeitet Text-Deltas (z.B. von LLMGatewayAdapter.ask_stream):
-        sobald ein Satz im Puffer vollstaendig ist, wird er synthetisiert und
-        in die noch laufende aplay-Pipe geschrieben, waehrend das LLM den
-        naechsten Satz generiert. Bei Takeover ('t') wird die komplette
-        bisherige Antwort an takeover_sink uebergeben und dort fortgesetzt.
-        Gibt die vollstaendige Antwort zurueck."""
         full_text = ""
         buffer = ""
         self._full_text = ""

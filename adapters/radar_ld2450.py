@@ -12,11 +12,9 @@ class DummyRadarAdapter:
 
     @property
     def person_count(self) -> int:
-        """Wird von der Pause/Resume-Logik abgefragt (ADR-002, 11.2)."""
         return self._person_count
 
     def simulate_second_person_enters(self) -> None:
-        """Hilfsfunktion fuer manuelle Tests ohne echte Hardware."""
         self._person_count = 2
         self.bus.publish(PersonCountChanged(count=self._person_count))
 
