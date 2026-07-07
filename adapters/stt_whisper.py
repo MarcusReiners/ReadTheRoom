@@ -36,6 +36,7 @@ class WhisperSTTAdapter:
                 language=self.language,
                 beam_size=self.beam_size,
                 vad_filter=True,
+                vad_parameters={"speech_pad_ms": 800, "min_silence_duration_ms": 1000},
             )
             text = " ".join(s.text.strip() for s in segments).strip()
 
