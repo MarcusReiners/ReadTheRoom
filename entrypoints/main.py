@@ -25,7 +25,8 @@ USE_HDMI_EYES = False
 LLM_MODEL = "ollama_chat/qwen3.5:9b"
 LLM_API_BASE = "http://192.168.178.37:11434"
 WHISPER_MODEL = "/home/marcus/voice-pipeline/whisper-data/whisper-tiny-german-1224-ct2"
-WHISPER_THREADS = 3
+WHISPER_THREADS = 4
+WHISPER_VAD = False
 PIPER_MODEL = "/home/marcus/piper-voices/de_DE-thorsten-low.onnx"
 MIC_DEVICE = "hw:ArrayUAC10,0"
 MIC_CHANNELS = 6
@@ -79,7 +80,7 @@ def main() -> None:
     bus = EventBus()
     conversation = ConversationState()
 
-    stt = WhisperSTTAdapter(model_path=WHISPER_MODEL, cpu_threads=WHISPER_THREADS)
+    stt = WhisperSTTAdapter(model_path=WHISPER_MODEL, cpu_threads=WHISPER_THREADS, vad=WHISPER_VAD)
     tts = PiperTTSAdapter(bus=bus, model_path=PIPER_MODEL, speaker_device=SPEAKER_DEVICE)
     llm = LLMGatewayAdapter(model=LLM_MODEL, api_base=LLM_API_BASE)
 
