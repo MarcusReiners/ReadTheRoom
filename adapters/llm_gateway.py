@@ -1,42 +1,40 @@
-import json
-from typing import Iterator
+from typing import Iterator, Optional
 
-import requests
+import litellm
 
 from domain.conversation import SYSTEM_PROMPT
 
+litellm.drop_params = True
+
 
 class LLMGatewayAdapter:
-    def __init__(self, url: str, model: str) -> None:
-        self.url = url.replace("/api/generate", "/api/chat")
+    def __init__(self, model: str, api_base: Optional[str] = None) -> None:
         self.model = model
+        self.api_base = api_base
 
     def ask_stream(self, user_text: str) -> Iterator[str]:
         """Streamt die Antwort satzweise-vorbereitet als Text-Deltas, damit die
-        TTS-Ausgabe schon starten kann, waehrend das LLM noch generiert."""
+        TTS-Ausgabe schon starten kann, waehrend das LLM noch generiert.
+        Ueber LiteLLM austauschbar zwischen Ollama und Cloud-Providern
+        (z.B. model="gpt-4o-mini" statt "ollama_chat/qwen3.5:9b")."""
         try:
-            res = requests.post(self.url, json={
-                "model": self.model,
-                "think": False,
-                "stream": True,
-                "messages": [
+            response = litellm.completion(
+                model=self.model,
+                api_base=self.api_base,
+                messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user",   "content": user_text},
                 ],
-                "options": {"num_predict": 200},
-            }, timeout=60, stream=True)
-            res.raise_for_status()
-            for line in res.iter_lines():
-                if not line:
-                    continue
-                data = json.loads(line)
-                delta = data.get("message", {}).get("content", "")
+                stream=True,
+                max_tokens=200,
+                think=False,
+            )
+            for chunk in response:
+                delta = chunk.choices[0].delta.content
                 if delta:
                     yield delta
-                if data.get("done"):
-                    break
-        except requests.exceptions.ConnectionError:
+        except litellm.exceptions.APIConnectionError:
             yield ("Fehler: Kann das LLM-Backend nicht erreichen. "
-                   "Läuft Ollama/LiteLLM und ist die URL korrekt?")
+                   "Läuft der Server und ist die URL korrekt?")
         except Exception as e:
             yield f"Fehler bei LLM: {e}"
