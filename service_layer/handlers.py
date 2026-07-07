@@ -14,7 +14,7 @@ def register_handlers(
     tts: PiperTTSAdapter,
     status_display,
 ) -> None:
-    tts.takeover_sink = status_display.append_text
+    tts.takeover_sink = status_display.set_text
 
     def on_person_count_changed(event: PersonCountChanged) -> None:
         if event.count > 1 and conversation.confidential:

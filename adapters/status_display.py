@@ -9,9 +9,9 @@ class DummyStatusDisplayAdapter:
     def __init__(self, bus: EventBus) -> None:
         self.text_active = False
 
-    def append_text(self, text: str) -> None:
+    def set_text(self, text: str) -> None:
         self.text_active = True
-        print(f"  [DummyStatusDisplay] Laufschrift: {text}")
+        print(f"  [DummyStatusDisplay] Text: {text}")
 
     def stop_text(self) -> None:
         self.text_active = False
@@ -61,12 +61,11 @@ class StatusDisplayAdapter:
     def _on_speech_ended(self, event: SpeechPlaybackEnded) -> None:
         self.state = "idle"
 
-    def append_text(self, text: str) -> None:
+    def set_text(self, text: str) -> None:
         with self._lock:
             if not self.text_active:
-                self._text = ""
                 self._text_started_at = None
-            self._text += (" " if self._text else "") + text
+            self._text = text
             self.text_active = True
 
     def stop_text(self) -> None:

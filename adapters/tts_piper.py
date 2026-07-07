@@ -35,6 +35,7 @@ class PiperTTSAdapter:
         self._lock = threading.Lock()
         self._takeover = threading.Event()
         self._streaming = False
+        self._full_text = ""
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -71,32 +72,31 @@ class PiperTTSAdapter:
                 self._aplay_process.send_signal(signal.SIGCONT)
                 self._aplay_process.terminate()
                 self._aplay_process = None
+        if self.takeover_sink is not None:
+            self.takeover_sink(self._full_text)
         return True
 
     def _emit(self, aplay_proc: subprocess.Popen, sentence: str) -> None:
         if self._takeover.is_set():
-            if self.takeover_sink is not None:
-                self.takeover_sink(sentence)
             return
         try:
             for chunk in self._voice.synthesize(sentence):
                 aplay_proc.stdin.write(chunk.audio_int16_bytes)
         except (BrokenPipeError, ValueError, OSError):
-            if self._takeover.is_set():
-                if self.takeover_sink is not None:
-                    self.takeover_sink(sentence)
-            else:
+            if not self._takeover.is_set():
                 raise
 
     def speak_stream(self, text_chunks: Iterable[str]) -> str:
         """Verarbeitet Text-Deltas (z.B. von LLMGatewayAdapter.ask_stream):
         sobald ein Satz im Puffer vollstaendig ist, wird er synthetisiert und
         in die noch laufende aplay-Pipe geschrieben, waehrend das LLM den
-        naechsten Satz generiert. Bei Takeover ('t') gehen weitere Saetze an
-        takeover_sink statt an aplay. Gibt die vollstaendige Antwort zurueck."""
+        naechsten Satz generiert. Bei Takeover ('t') wird die komplette
+        bisherige Antwort an takeover_sink uebergeben und dort fortgesetzt.
+        Gibt die vollstaendige Antwort zurueck."""
         full_text = ""
         buffer = ""
         started = False
+        self._full_text = ""
         self._takeover.clear()
         self._streaming = True
         aplay_proc = self._spawn_aplay()
@@ -107,6 +107,11 @@ class PiperTTSAdapter:
         try:
             for delta in text_chunks:
                 full_text += delta
+                self._full_text = full_text
+                if self._takeover.is_set():
+                    if self.takeover_sink is not None:
+                        self.takeover_sink(full_text)
+                    continue
                 buffer += delta
                 sentences, buffer = _split_sentences(buffer)
                 for sentence in sentences:
@@ -116,7 +121,7 @@ class PiperTTSAdapter:
                     self._emit(aplay_proc, sentence)
 
             tail = buffer.strip()
-            if tail:
+            if tail and not self._takeover.is_set():
                 if not started:
                     self.bus.publish(SpeechPlaybackStarted(text=full_text))
                     started = True
