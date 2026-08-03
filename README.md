@@ -154,4 +154,8 @@ echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="2886", ATTRS{idProduct}=="0018", MODE=
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
-Note the ReSpeaker reports a full 0–359° angle, but the servo is physically clamped to `SERVO_MIN_ANGLE`–`SERVO_MAX_ANGLE` — directions behind/beside the assistant just pin it at its nearest limit, which is expected.
+Note the ReSpeaker reports a full 0–359° angle, but the servo is physically clamped to `SERVO_MIN_ANGLE`–`SERVO_MAX_ANGLE` — directions behind/beside the assistant just pin it at its nearest limit, which is expected. 90° is "straight ahead" for both the servo and the eyes.
+
+Servo motion is deliberately not 1:1 with raw DOA readings — `--doa` only reacts while the mic's onboard VAD (`RespeakerDOAAdapter.get_voice_active()`) says something voice-like is happening, and `ServoTurntableAdapter.rotate_towards()` low-pass-filters the target (`domain/policies.py::DOA_SMOOTHING_ALPHA`) before the existing `ROTATION_THRESHOLD_DEGREES` deadband decides whether to actually move — so it settles and rests quietly between utterances instead of chasing every noisy sample. Tune those two constants if it feels too sluggish or still too twitchy.
+
+If the LED matrix flickers, `LedMatrix`'s `pwm_bits` (default 7, down from the library's default 11) trades unneeded color depth for a higher refresh rate — lower it further if it still flickers, or raise it if you want smoother color gradients and can spare the refresh rate. The library's own startup hint about adding `isolcpus=3` to `/boot/cmdline.txt` (dedicating a CPU core to the matrix refresh thread, reboot required) is a further, bigger lever if `pwm_bits` alone isn't enough — worth it now that STT/LLM/TTS run in the cloud rather than competing for CPU on the Pi.

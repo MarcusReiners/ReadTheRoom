@@ -1,6 +1,6 @@
 import logging
 
-from domain.policies import ROTATION_THRESHOLD_DEGREES
+from domain.policies import DOA_SMOOTHING_ALPHA, ROTATION_THRESHOLD_DEGREES
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ class ServoTurntableAdapter:
         self._min_angle = min_angle
         self._max_angle = max_angle
         self.current_heading_degrees = (min_angle + max_angle) / 2
+        self._smoothed_target = self.current_heading_degrees
         self._servo = AngularServo(
             pin,
             initial_angle=self.current_heading_degrees,
@@ -40,10 +41,21 @@ class ServoTurntableAdapter:
         logger.info("[Servo] GPIO%s bereit, Bereich %.0f-%.0f Grad.", pin, min_angle, max_angle)
 
     def rotate_towards(self, target_angle_degrees: float) -> None:
-        target = max(self._min_angle, min(self._max_angle, target_angle_degrees))
-        if abs(target - self.current_heading_degrees) > ROTATION_THRESHOLD_DEGREES:
-            self.current_heading_degrees = target
-            self._servo.angle = target
+        # target_angle_degrees is DOA-style (90 degrees = straight ahead), independent
+        # of how min/max_angle happen to be configured; re-center onto the servo's own range.
+        center = (self._min_angle + self._max_angle) / 2
+        raw_target = center + (target_angle_degrees - 90.0)
+        raw_target = max(self._min_angle, min(self._max_angle, raw_target))
+
+        # Low-pass filter so a single noisy reading can't jerk the servo - it only
+        # ever chases a smoothed estimate. Physical movement additionally only
+        # happens once that estimate has drifted past the deadband threshold, so
+        # small/noisy fluctuations leave the servo resting quietly.
+        self._smoothed_target += DOA_SMOOTHING_ALPHA * (raw_target - self._smoothed_target)
+
+        if abs(self._smoothed_target - self.current_heading_degrees) > ROTATION_THRESHOLD_DEGREES:
+            self.current_heading_degrees = self._smoothed_target
+            self._servo.angle = self.current_heading_degrees
 
     def stop(self) -> None:
         self._servo.detach()
