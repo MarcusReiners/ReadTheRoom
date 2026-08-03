@@ -1,8 +1,11 @@
+import logging
 import math
 import threading
 
 from domain.events import SpeechPlaybackStarted, SpeechPlaybackEnded, ListeningStateChanged
 from service_layer.bus import EventBus
+
+logger = logging.getLogger(__name__)
 
 
 class DummyStatusDisplayAdapter:
@@ -11,11 +14,11 @@ class DummyStatusDisplayAdapter:
 
     def set_text(self, text: str) -> None:
         self.text_active = True
-        print(f"  [DummyStatusDisplay] Text: {text}")
+        logger.info("[DummyStatusDisplay] Text: %s", text)
 
     def stop_text(self) -> None:
         self.text_active = False
-        print("  [DummyStatusDisplay] Textmodus beendet.")
+        logger.info("[DummyStatusDisplay] Textmodus beendet.")
 
 
 class StatusDisplayAdapter:

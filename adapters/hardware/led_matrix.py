@@ -1,5 +1,8 @@
+import logging
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 
 class LedMatrix:
@@ -37,7 +40,7 @@ class LedMatrix:
 
     def start(self) -> None:
         self._thread.start()
-        print(f"  [LedMatrix] {self.width}x{self.height} gestartet.")
+        logger.info("[LedMatrix] %sx%s gestartet.", self.width, self.height)
 
     def _loop(self) -> None:
         canvas = self.matrix.CreateFrameCanvas()

@@ -4,3 +4,5 @@ __pycache__/
 *.wav
 *.raw
 .env
+logs/
+.DS_Store

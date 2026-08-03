@@ -1,0 +1,50 @@
+from service_layer.bus import EventBus
+
+
+def build_stt(cfg):
+    if cfg.STT_PROVIDER == "elevenlabs":
+        from adapters.stt.elevenlabs import ElevenLabsSTTAdapter
+        return ElevenLabsSTTAdapter(
+            api_key=cfg.ELEVENLABS_API_KEY,
+            model_id=cfg.ELEVENLABS_STT_MODEL,
+            language_code=cfg.ELEVENLABS_LANGUAGE_CODE,
+        )
+    if cfg.STT_PROVIDER == "remote":
+        from adapters.stt.remote import RemoteSTTAdapter
+        return RemoteSTTAdapter(server_url=cfg.MAC_SERVER_URL)
+    if cfg.STT_PROVIDER == "local":
+        from adapters.stt.local import LocalSTTAdapter
+        return LocalSTTAdapter(
+            model_path=cfg.WHISPER_MODEL,
+            cpu_threads=cfg.WHISPER_THREADS,
+            vad=cfg.WHISPER_VAD,
+        )
+    raise ValueError(f"Unbekannter STT_PROVIDER: {cfg.STT_PROVIDER!r}")
+
+
+def build_tts(cfg, bus: EventBus):
+    if cfg.TTS_PROVIDER == "elevenlabs":
+        from adapters.tts.elevenlabs import ElevenLabsTTSAdapter
+        return ElevenLabsTTSAdapter(
+            bus=bus,
+            api_key=cfg.ELEVENLABS_API_KEY,
+            voice_id=cfg.ELEVENLABS_VOICE_ID,
+            model_id=cfg.ELEVENLABS_TTS_MODEL,
+            speaker_device=cfg.SPEAKER_DEVICE,
+        )
+    if cfg.TTS_PROVIDER == "remote":
+        from adapters.tts.remote import RemoteTTSAdapter
+        return RemoteTTSAdapter(
+            bus=bus,
+            server_url=cfg.MAC_SERVER_URL,
+            sample_rate=cfg.MAC_SERVER_TTS_SAMPLE_RATE,
+            speaker_device=cfg.SPEAKER_DEVICE,
+        )
+    if cfg.TTS_PROVIDER == "local":
+        from adapters.tts.local import LocalTTSAdapter
+        return LocalTTSAdapter(
+            bus=bus,
+            model_path=cfg.PIPER_MODEL,
+            speaker_device=cfg.SPEAKER_DEVICE,
+        )
+    raise ValueError(f"Unbekannter TTS_PROVIDER: {cfg.TTS_PROVIDER!r}")

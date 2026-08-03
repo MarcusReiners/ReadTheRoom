@@ -1,17 +1,15 @@
 import logging
-import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from typing import Iterable
 
-from piper.voice import PiperVoice
-
 from domain.events import SpeechPlaybackStarted, SpeechPlaybackEnded
 from service_layer.bus import EventBus
 
-logging.getLogger("piper").setLevel(logging.ERROR)
+logger = logging.getLogger(__name__)
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 _CLAUSE_END = re.compile(r"(?<=[,;:])\s+")
@@ -25,13 +23,15 @@ def _split_sentences(buffer: str, first: bool = False) -> tuple[list[str], str]:
     return [p for p in complete if p.strip()], rest
 
 
-class PiperTTSAdapter:
-    def __init__(
-        self,
-        bus: EventBus,
-        model_path: str = "/home/marcus/piper-voices/de_DE-thorsten-low.onnx",
-        speaker_device: str = "hw:3,0",
-    ) -> None:
+class StreamingTTSAdapter:
+    """Base class for sentence-by-sentence streaming TTS adapters.
+
+    Subclasses implement `sample_rate` and `_synthesize_chunks(sentence)`
+    (raw PCM16 mono bytes); everything else (sentence buffering, aplay
+    piping, takeover handling, playback events) is shared.
+    """
+
+    def __init__(self, bus: EventBus, speaker_device: str = "default") -> None:
         self.bus = bus
         self.speaker_device = speaker_device
         self.takeover_sink = None
@@ -42,27 +42,22 @@ class PiperTTSAdapter:
         self._full_text = ""
         self._started_published = False
 
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(
-                f"Piper-Modell nicht gefunden: {model_path}\n"
-                "Bitte laden: wget .../de_DE-thorsten-low.onnx -P ~/piper-voices/"
-            )
-        print("  Lade Piper-Stimme...")
-        self._voice = PiperVoice.load(model_path)
-        print("  Piper bereit.")
+    @property
+    def sample_rate(self) -> int:
+        raise NotImplementedError
+
+    def _synthesize_chunks(self, sentence: str) -> Iterable[bytes]:
+        raise NotImplementedError
 
     def _spawn_aplay(self) -> subprocess.Popen:
-        sample_rate = self._voice.config.sample_rate
+        if sys.platform == "darwin":
+            cmd = ["play", "-q", "-t", "raw", "-r", str(self.sample_rate),
+                   "-e", "signed", "-b", "16", "-c", "1", "-"]
+        else:
+            cmd = ["aplay", "-D", self.speaker_device, "-r", str(self.sample_rate),
+                   "-f", "S16_LE", "-c", "1", "-t", "raw", "-"]
         return subprocess.Popen(
-            [
-                "aplay",
-                "-D", self.speaker_device,
-                "-r", str(sample_rate),
-                "-f", "S16_LE",
-                "-c", "1",
-                "-t", "raw",
-                "-",
-            ],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -83,17 +78,17 @@ class PiperTTSAdapter:
     def _notify_started(self) -> None:
         if not self._started_published:
             self._started_published = True
-            print(f"  [timing] erster Ton: {time.monotonic() - self._t_stream_start:.2f}s nach LLM-Start")
+            logger.info("[timing] erster Ton: %.2fs nach LLM-Start", time.monotonic() - self._t_stream_start)
             self.bus.publish(SpeechPlaybackStarted(text=self._full_text))
 
     def _emit(self, aplay_proc: subprocess.Popen, sentence: str, on_first_chunk=None) -> None:
         if self._takeover.is_set():
             return
         try:
-            for i, chunk in enumerate(self._voice.synthesize(sentence)):
+            for i, chunk in enumerate(self._synthesize_chunks(sentence)):
                 if i == 0 and on_first_chunk is not None:
                     on_first_chunk()
-                aplay_proc.stdin.write(chunk.audio_int16_bytes)
+                aplay_proc.stdin.write(chunk)
         except (BrokenPipeError, ValueError, OSError):
             if not self._takeover.is_set():
                 raise
@@ -139,7 +134,7 @@ class PiperTTSAdapter:
                 self._aplay_process = None
 
             self.bus.publish(SpeechPlaybackEnded(completed=completed))
-            print(f"Antworte: {full_text}")
+            logger.info("Antworte: %s", full_text)
             return full_text
 
         except BrokenPipeError:
@@ -148,7 +143,7 @@ class PiperTTSAdapter:
             self.bus.publish(SpeechPlaybackEnded(completed=False))
             return full_text
         except Exception as e:
-            print(f"  TTS Fehler: {type(e).__name__}: {e}")
+            logger.exception("TTS Fehler: %s: %s", type(e).__name__, e)
             with self._lock:
                 self._aplay_process = None
             return full_text
