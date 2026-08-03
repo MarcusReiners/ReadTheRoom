@@ -1,8 +1,10 @@
 import logging
+import time
 
 from domain.policies import (
     DOA_SMOOTHING_ALPHA,
     MIN_CONSECUTIVE_LARGE_CHANGES,
+    MOVE_COOLDOWN_SECONDS,
     ROTATION_THRESHOLD_DEGREES,
 )
 
@@ -35,6 +37,7 @@ class ServoTurntableAdapter:
         self.current_heading_degrees = (min_angle + max_angle) / 2
         self._smoothed_target = self.current_heading_degrees
         self._large_change_streak = 0
+        self._last_move_time = time.monotonic()
         self._servo = AngularServo(
             pin,
             initial_angle=self.current_heading_degrees,
@@ -64,10 +67,12 @@ class ServoTurntableAdapter:
         else:
             self._large_change_streak = 0
 
-        if self._large_change_streak >= MIN_CONSECUTIVE_LARGE_CHANGES:
+        cooled_down = (time.monotonic() - self._last_move_time) >= MOVE_COOLDOWN_SECONDS
+        if self._large_change_streak >= MIN_CONSECUTIVE_LARGE_CHANGES and cooled_down:
             self.current_heading_degrees = self._smoothed_target
             self._servo.angle = self.current_heading_degrees
             self._large_change_streak = 0
+            self._last_move_time = time.monotonic()
 
     def stop(self) -> None:
         self._servo.detach()

@@ -20,7 +20,7 @@ def build_display(bus: EventBus):
     from adapters.hardware.status_display import StatusDisplayAdapter
     from adapters.hardware.led_eyes import LedEyesAdapter
 
-    matrix = LedMatrix(rows=48, cols=96, chain=2)
+    matrix = LedMatrix(rows=48, cols=96, chain=2, gpio_slowdown=config.GPIO_SLOWDOWN)
     status_offset, eyes_offset = (96, 0) if config.SWAP_LED_PANELS else (0, 96)
     status = StatusDisplayAdapter(bus=bus, x_offset=status_offset, width=96)
     face = LedEyesAdapter(bus=bus, x_offset=eyes_offset, width=96, height=48)
