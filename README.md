@@ -55,7 +55,7 @@ The LLM stays on [LiteLLM](https://github.com/BerriAI/litellm): change `LLM_MODE
 | `adapters/hardware/led_matrix.py` / `status_display.py` | Daisy-chained RGB LED matrix, panel 1: status animations and scrolling text | active (switchable) |
 | `adapters/hardware/led_eyes.py` | Panel 2 of the same matrix: blinking eyes that track the last known direction | active (switchable) |
 | `adapters/hardware/face_display.py` | No-hardware fallback for the eyes (`DummyFaceDisplayAdapter`) | dummy |
-| `adapters/hardware/turntable.py` | MG996R servo (GPIO18, hardware PWM) panning the head towards the person/audio | active (switchable) |
+| `adapters/hardware/turntable.py` | MG996R servo (GPIO19, hardware PWM) panning the head towards the person/audio | active (switchable) |
 | `adapters/hardware/radar_ld2450.py` | Person detection (LD2450 radar) | dummy |
 | `adapters/hardware/buttons.py` | Button input (currently: `t` for display takeover) | dummy |
 
@@ -88,16 +88,16 @@ You can also run the whole pipeline directly on the Mac (e.g. for development wi
 ## Target hardware
 
 - Raspberry Pi (Linux, ALSA) or macOS (for local/dev runs)
-- ReSpeaker mic array (`ArrayUAC10`, 6 channels) as microphone and speaker (Pi)
+- ReSpeaker USB Mic Array v2.0 (`ArrayUAC10`, 6 channels) as microphone and speaker (Pi) — also provides onboard direction-of-arrival (DOA) over USB HID, independent of the audio stream
 - 2x Waveshare RGB LED matrix 96x48, daisy-chained (rpi-rgb-led-matrix / `rgbmatrix`) — panel 1 status, panel 2 eyes
-- MG996R servo on GPIO18 (hardware PWM) for head panning
+- MG996R servo on GPIO19 (hardware PWM) for head panning — GPIO18 is taken by the LED matrix's OE- signal
 - HLK-LD2450 radar sensor (planned)
 
 ## Requirements
 
 - Python 3.10+
 - System tools: `arecord`, `aplay` (ALSA, Pi) or `sox` (macOS)
-- Python packages: `litellm`, `requests`, `elevenlabs` (for the default cloud providers); optionally `faster-whisper`, `piper-tts` (for local fallback), `fastapi`, `uvicorn`, `python-multipart` (for the Mac server), `python-dotenv`, `rgbmatrix`, `gpiozero` (servo; `pigpio` is an optional smoother PWM backend for it)
+- Python packages: `litellm`, `requests`, `elevenlabs` (for the default cloud providers); optionally `faster-whisper`, `piper-tts` (for local fallback), `fastapi`, `uvicorn`, `python-multipart` (for the Mac server), `python-dotenv`, `rgbmatrix`, `gpiozero` (servo; `pigpio` is an optional smoother PWM backend for it), `pyusb` (ReSpeaker DOA)
 - A reachable LLM API (OpenAI/Anthropic/etc., or a local/LAN Ollama server)
 
 ## Configuration
@@ -136,3 +136,22 @@ Controls:
 - **ENTER** — start recording, **ENTER** again — stop recording
 - **t + ENTER** — redirect the current answer from the speaker to the display (or end display text mode)
 - **Ctrl+C** — quit
+
+## Testing hardware
+
+[scripts/test_hardware.py](scripts/test_hardware.py) exercises the LED matrix and servo without needing any STT/LLM/TTS API keys configured:
+
+```bash
+python scripts/test_hardware.py         # canned demo: display states, scrolling text, servo sweep
+python scripts/test_hardware.py --doa   # live: servo + eyes follow the ReSpeaker's direction-of-arrival
+```
+
+The `--doa` mode needs `pyusb` and, once per Pi, a udev rule so the ReSpeaker's USB HID interface is readable without root:
+
+```bash
+echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="2886", ATTRS{idProduct}=="0018", MODE="0666"' \
+  | sudo tee /etc/udev/rules.d/99-respeaker.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Note the ReSpeaker reports a full 0–359° angle, but the servo is physically clamped to `SERVO_MIN_ANGLE`–`SERVO_MAX_ANGLE` — directions behind/beside the assistant just pin it at its nearest limit, which is expected.
