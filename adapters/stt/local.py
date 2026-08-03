@@ -1,9 +1,12 @@
+import logging
 import os
 
 from faster_whisper import WhisperModel
 
+logger = logging.getLogger(__name__)
 
-class WhisperSTTAdapter:
+
+class LocalSTTAdapter:
     def __init__(
         self,
         model_path: str = "/home/marcus/voice-pipeline/whisper-data/whisper-tiny-german-1224-ct2",
@@ -23,14 +26,14 @@ class WhisperSTTAdapter:
                 "Bitte sicherstellen dass das CT2-Modell vorhanden ist."
             )
 
-        print("  Lade Whisper-Modell...")
+        logger.info("Lade Whisper-Modell...")
         self._model = WhisperModel(model_path, device="cpu", compute_type=compute_type,
                                    cpu_threads=cpu_threads, num_workers=1)
-        print("  Whisper bereit.")
+        logger.info("Whisper bereit.")
 
     def transcribe(self, audio_file: str) -> str:
         if not os.path.exists(audio_file):
-            print(f"  Fehler: Audiodatei '{audio_file}' nicht gefunden.")
+            logger.error("Audiodatei '%s' nicht gefunden.", audio_file)
             return ""
         try:
             segments, info = self._model.transcribe(
@@ -48,7 +51,7 @@ class WhisperSTTAdapter:
             return text.strip()
 
         except Exception as e:
-            print(f"  STT Fehler: {type(e).__name__}: {e}")
+            logger.exception("STT Fehler: %s: %s", type(e).__name__, e)
             return ""
 
     def stop(self) -> None:
