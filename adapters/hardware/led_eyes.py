@@ -36,8 +36,8 @@ class LedEyesAdapter:
         self._eye_r = max(4, min(self.height // 6, self.width // 10))
         self._dot_r_base = max(2, self._eye_r // 2)
         self._cy = self.height // 2
-        self._left_cx = self.x_offset + self.width // 4
-        self._right_cx = self.x_offset + 3 * self.width // 4
+        self._left_cx = self.x_offset + int(self.width * 0.375)
+        self._right_cx = self.x_offset + int(self.width * 0.625)
 
         bus.subscribe(SpeechPlaybackStarted, self._on_speech_started)
         bus.subscribe(SpeechPlaybackEnded, self._on_speech_ended)

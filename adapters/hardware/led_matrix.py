@@ -14,8 +14,8 @@ class LedMatrix:
         brightness: int = 60,
         gpio_slowdown: int = 4,
         fps: int = 20,
-        limit_refresh_rate_hz: int = 120,
-        pwm_bits: int = 6,
+        limit_refresh_rate_hz: int = 0,
+        pwm_bits: int = 5,
     ) -> None:
         from rgbmatrix import RGBMatrix, RGBMatrixOptions
 
@@ -27,11 +27,14 @@ class LedMatrix:
         options.gpio_slowdown = gpio_slowdown
         options.hardware_mapping = "regular"
         options.drop_privileges = False
+        # 0 = no artificial cap, let it run at whatever the hardware/pwm_bits can
+        # achieve - we want maximum refresh rate for minimum flicker, not a fixed rate.
         options.limit_refresh_rate_hz = limit_refresh_rate_hz
-        # Lower pwm_bits trades color depth (still 128 levels/channel) for a
-        # meaningfully higher hardware refresh rate, i.e. less visible flicker.
-        # Worth spending here since nothing else on the Pi competes for CPU
-        # now that STT/LLM/TTS run in the cloud.
+        # Lower pwm_bits trades color depth (still 32 levels/channel at 5 bits -
+        # plenty for solid white dots and a few flat colors) for a meaningfully
+        # higher hardware refresh rate, i.e. less visible flicker. Worth spending
+        # here since nothing else on the Pi competes for CPU now that STT/LLM/TTS
+        # run in the cloud.
         options.pwm_bits = pwm_bits
 
         self.matrix = RGBMatrix(options=options)
