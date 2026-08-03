@@ -50,6 +50,7 @@ class StatusDisplayAdapter:
         self._scroll_hold_s = scroll_hold_s
         self._text_started_at: float | None = None
         self._lock = threading.Lock()
+        self._border = _border_points(self.x_offset, self.width, self.height)
 
         bus.subscribe(ListeningStateChanged, self._on_listening)
         bus.subscribe(SpeechPlaybackStarted, self._on_speech_started)
@@ -142,12 +143,16 @@ class StatusDisplayAdapter:
                 canvas.SetPixel(x + 1, self.height // 2 + dy, 30, 160, 220)
 
     def _render_idle(self, canvas, t: float) -> None:
-        cx = self.x_offset + self.width // 2
-        cy = self.height // 2
-        pulse = (1 + math.sin(t * 2.0)) / 2
-        radius = 3 + int(4 * pulse)
-        brightness = int(50 + 90 * pulse)
-        _fill_circle(canvas, cx, cy, radius, (brightness, brightness, brightness))
+        n = len(self._border)
+        speed_px_per_s = 24.0
+        tail_len = max(6, n // 10)
+        head = int(t * speed_px_per_s) % n
+
+        for i in range(tail_len):
+            x, y = self._border[(head - i) % n]
+            fade = 1.0 - i / tail_len
+            brightness = int(20 + 160 * fade)
+            canvas.SetPixel(x, y, brightness, brightness, brightness)
 
 
 def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
@@ -155,3 +160,14 @@ def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
         for dx in range(-r, r + 1):
             if dx * dx + dy * dy <= r * r:
                 canvas.SetPixel(cx + dx, cy + dy, *color)
+
+
+def _border_points(x_offset: int, width: int, height: int) -> list[tuple[int, int]]:
+    x0, x1 = x_offset, x_offset + width - 1
+    y0, y1 = 0, height - 1
+    points: list[tuple[int, int]] = []
+    points += [(x, y0) for x in range(x0, x1 + 1)]
+    points += [(x1, y) for y in range(y0 + 1, y1 + 1)]
+    points += [(x, y1) for x in range(x1 - 1, x0 - 1, -1)]
+    points += [(x0, y) for y in range(y1 - 1, y0, -1)]
+    return points

@@ -3,17 +3,18 @@ import math
 from domain.events import SpeechPlaybackStarted, SpeechPlaybackEnded, ListeningStateChanged
 from service_layer.bus import EventBus
 
-_BG = (10, 10, 15)
-_SCLERA = (230, 230, 230)
-_IRIS = (70, 160, 255)
+_WHITE = (255, 255, 255)
 
 
 class LedEyesAdapter:
-    """LED-matrix renderer drawing two eyes side by side within its panel.
+    """LED-matrix renderer drawing two plain white round eyes side by side.
 
     Same role as the old HDMI face display, but as a matrix renderer
     (`render(canvas, t)`) registered on `LedMatrix` instead of owning its
     own pygame window/thread.
+
+    `angle_degrees` follows the same DOA convention as `ServoTurntableAdapter`:
+    90 degrees means straight ahead.
     """
 
     BLINK_INTERVAL = 4.5
@@ -30,10 +31,10 @@ class LedEyesAdapter:
         self.width = width
         self.height = height
         self.state = "idle"
-        self._eye_angle = 180.0
+        self._eye_angle = 90.0
 
         self._eye_r = min(self.height // 2 - 2, self.width // 4 - 4)
-        self._pupil_r_base = max(2, self._eye_r // 3)
+        self._dot_r_base = max(2, self._eye_r // 2)
         self._cy = self.height // 2
         self._left_cx = self.x_offset + self.width // 4
         self._right_cx = self.x_offset + 3 * self.width // 4
@@ -56,23 +57,20 @@ class LedEyesAdapter:
 
     def render(self, canvas, t: float) -> None:
         blinking = (t % self.BLINK_INTERVAL) < self.BLINK_DURATION
-        pupil_r = self._pupil_r_base + (6 if self.state == "listening" else 0)
+        dot_r = self._dot_r_base + (4 if self.state == "listening" else 0)
         if self.state == "speaking":
-            pupil_r += int(4 * abs(math.sin(t * 8)))
-        pupil_r = min(pupil_r, self._eye_r - 1)
+            dot_r += int(3 * abs(math.sin(t * 8)))
+        dot_r = min(dot_r, self._eye_r)
 
-        rad = math.radians(self._eye_angle - 180.0)
-        px = int((self._eye_r - pupil_r) * 0.6 * math.sin(rad))
+        rad = math.radians(self._eye_angle - 90.0)
+        px = int((self._eye_r - dot_r) * 0.6 * math.sin(rad))
 
         for cx in (self._left_cx, self._right_cx):
             if blinking:
-                for dx in range(-self._eye_r, self._eye_r + 1):
-                    canvas.SetPixel(cx + dx, self._cy, *_SCLERA)
-                    canvas.SetPixel(cx + dx, self._cy + 1, *_SCLERA)
+                for dx in range(-dot_r, dot_r + 1):
+                    canvas.SetPixel(cx + dx, self._cy, *_WHITE)
                 continue
-            _fill_circle(canvas, cx, self._cy, self._eye_r, _SCLERA)
-            _fill_circle(canvas, cx + px, self._cy, pupil_r, _IRIS)
-            _fill_circle(canvas, cx + px, self._cy, max(1, pupil_r // 3), _BG)
+            _fill_circle(canvas, cx + px, self._cy, dot_r, _WHITE)
 
 
 def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:

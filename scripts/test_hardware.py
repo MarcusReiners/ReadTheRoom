@@ -67,7 +67,7 @@ def demo_display(bus: EventBus, status, face) -> None:
 
     if face is not None:
         print("Display: eyes tracking sweep...")
-        for angle in (90.0, 135.0, 180.0, 225.0, 270.0, 180.0):
+        for angle in (90.0, 45.0, 90.0, 135.0, 90.0):
             face.set_eye_direction(angle_degrees=angle)
             time.sleep(1)
 
@@ -76,6 +76,9 @@ def demo_servo(turntable) -> None:
     if turntable is None:
         return
 
+    # Note: rotate_towards() re-centers its input on 90 degrees = straight ahead, so
+    # this only sweeps the servo's true min/center/max as written while SERVO_MIN_ANGLE
+    # and SERVO_MAX_ANGLE straddle 90 degrees symmetrically (true for the defaults).
     print(f"Servo: sweeping {config.SERVO_MIN_ANGLE}-{config.SERVO_MAX_ANGLE} Grad...")
     for angle in (
         config.SERVO_MIN_ANGLE,
@@ -98,15 +101,20 @@ def live_doa_tracking(turntable, face, poll_interval_s: float = 0.3) -> None:
     print(
         f"Live-DOA-Tracking gestartet (Servo-Bereich {config.SERVO_MIN_ANGLE}-"
         f"{config.SERVO_MAX_ANGLE} Grad geklemmt). Strg+C zum Beenden.\n"
-        "Aus der Nase des Mikrofonarrays sprechen und beobachten, ob Servo/Augen folgen."
+        "Aus der Nase des Mikrofonarrays sprechen und beobachten, ob Servo/Augen folgen.\n"
+        "Bewegung erfolgt nur bei erkannter Sprachaktivitaet (Mikrofon-VAD) und geglaettet -"
+        " kurze/leise Stoergeraeusche bewegen den Motor nicht."
     )
     try:
         while True:
-            angle = doa.get_direction_degrees()
-            print(f"DOA: {angle:.0f} Grad")
-            turntable.rotate_towards(target_angle_degrees=angle)
-            if face is not None:
-                face.set_eye_direction(angle_degrees=angle)
+            if doa.get_voice_active():
+                angle = doa.get_direction_degrees()
+                print(f"DOA: {angle:.0f} Grad (Stimme aktiv)")
+                turntable.rotate_towards(target_angle_degrees=angle)
+                if face is not None:
+                    face.set_eye_direction(angle_degrees=angle)
+            else:
+                print("... (still)")
             time.sleep(poll_interval_s)
     finally:
         doa.close()

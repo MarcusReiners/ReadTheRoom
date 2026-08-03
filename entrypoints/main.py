@@ -166,8 +166,8 @@ def main() -> None:
             logger.info("Du hast gesagt: '%s'", user_text)
             conversation.add_user_message(user_text)
 
-            face.set_eye_direction(angle_degrees=180.0)
-            turntable.rotate_towards(target_angle_degrees=180.0)
+            face.set_eye_direction(angle_degrees=90.0)
+            turntable.rotate_towards(target_angle_degrees=90.0)
 
             ki_antwort = tts.speak_stream(llm.ask_stream(user_text))
             conversation.add_assistant_message(ki_antwort)
