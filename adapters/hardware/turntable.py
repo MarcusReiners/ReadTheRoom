@@ -13,12 +13,15 @@ logger = logging.getLogger(__name__)
 
 class DummyTurntableAdapter:
     def __init__(self) -> None:
-        self.current_heading_degrees = 0.0
+        self.current_heading_degrees = 90.0  # 90 degrees = front-facing home position
 
     def rotate_towards(self, target_angle_degrees: float) -> None:
         delta = target_angle_degrees - self.current_heading_degrees
         if abs(delta) > ROTATION_THRESHOLD_DEGREES:
             self.current_heading_degrees = target_angle_degrees
+
+    def home(self) -> None:
+        self.current_heading_degrees = 90.0
 
 
 class ServoTurntableAdapter:
@@ -73,6 +76,18 @@ class ServoTurntableAdapter:
             self._servo.angle = self.current_heading_degrees
             self._large_change_streak = 0
             self._last_move_time = time.monotonic()
+
+    def home(self) -> None:
+        """Return to the front-facing center position and reset tracking state,
+        bypassing the deadband/streak/cooldown gating - this is a deliberate
+        command, not a noisy DOA reading to be filtered."""
+        center = (self._min_angle + self._max_angle) / 2
+        self.current_heading_degrees = center
+        self._smoothed_target = center
+        self._large_change_streak = 0
+        self._last_move_time = time.monotonic()
+        self._servo.angle = center
+        logger.info("[Servo] Home-Position (%.0f Grad).", center)
 
     def stop(self) -> None:
         self._servo.detach()

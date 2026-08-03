@@ -146,6 +146,12 @@ python scripts/test_hardware.py         # canned demo: display states, scrolling
 python scripts/test_hardware.py --doa   # live: servo + eyes follow the ReSpeaker's direction-of-arrival
 ```
 
+[scripts/home_servo.py](scripts/home_servo.py) moves the servo to its front-facing center position and holds it there (doesn't detach) until you Ctrl+C — handy while physically assembling the head, so you can attach the horn/mount at a known reference angle instead of wherever it happened to power on at:
+
+```bash
+sudo venv/bin/python scripts/home_servo.py
+```
+
 The `--doa` mode needs `pyusb` and, once per Pi, a udev rule so the ReSpeaker's USB HID interface is readable without root:
 
 ```bash
