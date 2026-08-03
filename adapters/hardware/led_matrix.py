@@ -15,7 +15,7 @@ class LedMatrix:
         gpio_slowdown: int = 4,
         fps: int = 20,
         limit_refresh_rate_hz: int = 120,
-        pwm_bits: int = 7,
+        pwm_bits: int = 6,
     ) -> None:
         from rgbmatrix import RGBMatrix, RGBMatrixOptions
 

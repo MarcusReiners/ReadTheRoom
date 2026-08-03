@@ -33,7 +33,7 @@ class LedEyesAdapter:
         self.state = "idle"
         self._eye_angle = 90.0
 
-        self._eye_r = min(self.height // 2 - 2, self.width // 4 - 4)
+        self._eye_r = max(4, min(self.height // 6, self.width // 10))
         self._dot_r_base = max(2, self._eye_r // 2)
         self._cy = self.height // 2
         self._left_cx = self.x_offset + self.width // 4

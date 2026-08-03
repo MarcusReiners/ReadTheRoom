@@ -69,6 +69,9 @@ MAX_RECORD_SECONDS = int(_env("MAX_RECORD_SECONDS", "30"))
 
 # --- Hardware features ----------------------------------------------------
 USE_LED_MATRIX = _env_bool("USE_LED_MATRIX", True)
+# If eyes/status render on the wrong physical panel, the daisy-chain order is
+# opposite of what x_offset=0/96 assumes - flip this instead of rewiring.
+SWAP_LED_PANELS = _env_bool("SWAP_LED_PANELS", False)
 
 # --- Servo turntable (MG996R on hardware PWM) ------------------------------
 USE_SERVO = _env_bool("USE_SERVO", True)
