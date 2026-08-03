@@ -1,6 +1,10 @@
 import logging
 
-from domain.policies import DOA_SMOOTHING_ALPHA, ROTATION_THRESHOLD_DEGREES
+from domain.policies import (
+    DOA_SMOOTHING_ALPHA,
+    MIN_CONSECUTIVE_LARGE_CHANGES,
+    ROTATION_THRESHOLD_DEGREES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +34,7 @@ class ServoTurntableAdapter:
         self._max_angle = max_angle
         self.current_heading_degrees = (min_angle + max_angle) / 2
         self._smoothed_target = self.current_heading_degrees
+        self._large_change_streak = 0
         self._servo = AngularServo(
             pin,
             initial_angle=self.current_heading_degrees,
@@ -48,14 +53,21 @@ class ServoTurntableAdapter:
         raw_target = max(self._min_angle, min(self._max_angle, raw_target))
 
         # Low-pass filter so a single noisy reading can't jerk the servo - it only
-        # ever chases a smoothed estimate. Physical movement additionally only
-        # happens once that estimate has drifted past the deadband threshold, so
-        # small/noisy fluctuations leave the servo resting quietly.
+        # ever chases a smoothed estimate.
         self._smoothed_target += DOA_SMOOTHING_ALPHA * (raw_target - self._smoothed_target)
 
+        # Physical movement only happens once that estimate has drifted past the
+        # deadband threshold AND stayed there for several updates in a row - a
+        # one-off large reading doesn't move the servo, only a sustained one does.
         if abs(self._smoothed_target - self.current_heading_degrees) > ROTATION_THRESHOLD_DEGREES:
+            self._large_change_streak += 1
+        else:
+            self._large_change_streak = 0
+
+        if self._large_change_streak >= MIN_CONSECUTIVE_LARGE_CHANGES:
             self.current_heading_degrees = self._smoothed_target
             self._servo.angle = self.current_heading_degrees
+            self._large_change_streak = 0
 
     def stop(self) -> None:
         self._servo.detach()
