@@ -28,15 +28,15 @@ class ServoTurntableAdapter:
 
         self._min_angle = min_angle
         self._max_angle = max_angle
+        self.current_heading_degrees = (min_angle + max_angle) / 2
         self._servo = AngularServo(
             pin,
+            initial_angle=self.current_heading_degrees,
             min_angle=min_angle,
             max_angle=max_angle,
             min_pulse_width=min_pulse_width,
             max_pulse_width=max_pulse_width,
         )
-        self.current_heading_degrees = (min_angle + max_angle) / 2
-        self._servo.angle = self.current_heading_degrees
         logger.info("[Servo] GPIO%s bereit, Bereich %.0f-%.0f Grad.", pin, min_angle, max_angle)
 
     def rotate_towards(self, target_angle_degrees: float) -> None:

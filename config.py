@@ -72,7 +72,7 @@ USE_LED_MATRIX = _env_bool("USE_LED_MATRIX", True)
 
 # --- Servo turntable (MG996R on hardware PWM) ------------------------------
 USE_SERVO = _env_bool("USE_SERVO", True)
-SERVO_GPIO_PIN = int(_env("SERVO_GPIO_PIN", "18"))
+SERVO_GPIO_PIN = int(_env("SERVO_GPIO_PIN", "19"))
 SERVO_MIN_ANGLE = float(_env("SERVO_MIN_ANGLE", "20"))
 SERVO_MAX_ANGLE = float(_env("SERVO_MAX_ANGLE", "160"))
 
