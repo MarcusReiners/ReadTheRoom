@@ -1,5 +1,11 @@
 SYSTEM_PROMPT = """Du bist ein Office-Assistent am Schreibtisch. Antworte auf Deutsch in zwei bis drei Saetzen, nur bei ausdruecklicher Nachfrage ausfuehrlicher. Beginne jede Antwort mit einem sehr kurzen Auftakt von ein bis zwei Woertern (z.B. "Klar.", "Einen Moment.", "Gerne."), gefolgt vom eigentlichen Inhalt."""
 class ConversationState:
+    """Device-level session state - shared across whichever chat is
+    currently active. There's one mic and one speaker, so modality/voice
+    settings apply to the device, not to any single conversation's content
+    (that lives in adapters/conversation_store.py::ConversationStore).
+    """
+
     def __init__(self) -> None:
         self.modality: str = "voice"
         # Personal desk assistant: every conversation is private by default,
@@ -8,13 +14,6 @@ class ConversationState:
         self.confidential: bool = True
         # Manual override from the chat UI, independent of who's in the room.
         self.voice_enabled: bool = True
-        self.history: list[dict] = []
-
-    def add_user_message(self, text: str) -> None:
-        self.history.append({"role": "user", "content": text})
-
-    def add_assistant_message(self, text: str) -> None:
-        self.history.append({"role": "assistant", "content": text})
 
     def mark_confidential(self) -> None:
         self.confidential = True
