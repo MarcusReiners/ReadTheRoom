@@ -48,3 +48,17 @@ def build_tts(cfg, bus: EventBus):
             speaker_device=cfg.SPEAKER_DEVICE,
         )
     raise ValueError(f"Unbekannter TTS_PROVIDER: {cfg.TTS_PROVIDER!r}")
+
+
+def build_radar(cfg, bus: EventBus):
+    if cfg.RADAR_PROVIDER == "ld2450":
+        from adapters.hardware.radar_ld2450 import RadarLD2450Adapter
+        return RadarLD2450Adapter(
+            bus=bus,
+            url=cfg.RADAR_URL,
+            poll_interval_s=cfg.RADAR_POLL_INTERVAL_S,
+        )
+    if cfg.RADAR_PROVIDER == "dummy":
+        from adapters.hardware.radar_ld2450 import DummyRadarAdapter
+        return DummyRadarAdapter(bus=bus)
+    raise ValueError(f"Unbekannter RADAR_PROVIDER: {cfg.RADAR_PROVIDER!r}")

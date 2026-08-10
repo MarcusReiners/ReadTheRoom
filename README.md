@@ -13,6 +13,9 @@ A desk voice assistant that "reads the room": a radar sensor detects how many pe
 
 While the assistant is speaking, the answer can be redirected from speech to the display with `t` + ENTER — for example when a second person enters the room.
 
+7. A [Seeed XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/) running the LD2450 firmware polls the room for people over WiFi and serves target coordinates as JSON at `GET /targets` (mDNS: `mmwave.local`). The Pi polls that endpoint (`adapters/hardware/radar_ld2450.py::RadarLD2450Adapter`) and publishes `PersonCountChanged`.
+8. A small web chat app (`adapters/chat_bridge.py`, served at `http://<pi-address>:8765`) always mirrors the conversation as text and accepts typed messages as an alternative to speaking. When the radar detects a second person, the current/next answer is automatically redirected from speech to that chat instead of the LED matrix — reverting back to speech once alone again. A voice on/off toggle in the chat overrides this manually regardless of who's in the room.
+
 ## Architecture
 
 The project follows a ports-and-adapters structure with a central event bus:
@@ -26,7 +29,9 @@ adapters/
   tts/           Text-to-speech adapters (base.py, elevenlabs.py, local.py, remote.py)
   hardware/      Physical I/O: LED matrix, eyes, servo turntable, radar, buttons
   llm.py         LLM access via LiteLLM
-  factory.py     Builds the configured STT/TTS adapter from config.py
+  chat_bridge.py Web chat app (FastAPI/WebSocket): mirrors the conversation, accepts typed turns
+  factory.py     Builds the configured STT/TTS/radar adapter from config.py
+web/static/      Chat app frontend (single static index.html, no build step)
 config.py        All settings, read from environment variables
 ```
 
@@ -56,8 +61,9 @@ The LLM stays on [LiteLLM](https://github.com/BerriAI/litellm): change `LLM_MODE
 | `adapters/hardware/led_eyes.py` | Panel 2 of the same matrix: blinking eyes that track the last known direction | active (switchable) |
 | `adapters/hardware/face_display.py` | No-hardware fallback for the eyes (`DummyFaceDisplayAdapter`) | dummy |
 | `adapters/hardware/turntable.py` | MG996R servo (GPIO19, hardware PWM) panning the head towards the person/audio | active (switchable) |
-| `adapters/hardware/radar_ld2450.py` | Person detection (LD2450 radar) | dummy |
-| `adapters/hardware/buttons.py` | Button input (currently: `t` for display takeover) | dummy |
+| `adapters/hardware/radar_ld2450.py` | Person detection: polls the XIAO ESP32S3/LD2450 over WiFi | active (switchable via `RADAR_PROVIDER`) |
+| `adapters/chat_bridge.py` | Web chat app: mirrors the conversation, accepts typed turns, takeover target when someone enters | active |
+| `adapters/hardware/buttons.py` | Button input (currently: `t` for display takeover, handled inline by `console_input_loop` in `entrypoints/main.py`) | dummy, unused (no physical buttons yet) |
 
 ## Local fallback: running the pipeline on your Mac
 
@@ -97,7 +103,7 @@ You can also run the whole pipeline directly on the Mac (e.g. for development wi
 
 - Python 3.10+
 - System tools: `arecord`, `aplay` (ALSA, Pi) or `sox` (macOS)
-- Python packages: `litellm`, `requests`, `elevenlabs` (for the default cloud providers); optionally `faster-whisper`, `piper-tts` (for local fallback), `fastapi`, `uvicorn`, `python-multipart` (for the Mac server), `python-dotenv`, `rgbmatrix`, `gpiozero` (servo; `pigpio` is an optional smoother PWM backend for it), `pyusb` (ReSpeaker DOA)
+- Python packages: `litellm`, `requests`, `elevenlabs` (for the default cloud providers); `fastapi`, `uvicorn` (chat bridge, always required now; `python-multipart` additionally for the Mac server); optionally `faster-whisper`, `piper-tts` (for local fallback), `python-dotenv`, `rgbmatrix`, `gpiozero` (servo; `pigpio` is an optional smoother PWM backend for it), `pyusb` (ReSpeaker DOA)
 - A reachable LLM API (OpenAI/Anthropic/etc., or a local/LAN Ollama server)
 
 ## Configuration
@@ -118,6 +124,8 @@ All settings live in [config.py](config.py) and are read from environment variab
 | `SPEAKER_DEVICE` | ALSA playback device (Pi only) |
 | `USE_LED_MATRIX` | Enable/disable the LED matrix (status panel + eyes panel) |
 | `USE_SERVO`, `SERVO_GPIO_PIN`, `SERVO_MIN_ANGLE`, `SERVO_MAX_ANGLE` | Enable/disable the servo turntable, its GPIO pin, and its clamped safe sweep range |
+| `RADAR_PROVIDER`, `RADAR_URL`, `RADAR_POLL_INTERVAL_S` | `ld2450` (poll the XIAO's `/targets` over HTTP) \| `dummy`; the XIAO's URL (default `http://mmwave.local`); poll interval in seconds |
+| `CHAT_BRIDGE_HOST`, `CHAT_BRIDGE_PORT` | Address the chat web app binds to (default `0.0.0.0:8765`) — open `http://<pi-address>:8765` in a browser |
 | `MAX_RECORD_SECONDS` | Watchdog against endless recordings |
 | `LOG_DIR`, `LOG_FILE`, `LOG_LEVEL`, `LOG_MAX_BYTES`, `LOG_BACKUP_COUNT` | Logging (see below) |
 

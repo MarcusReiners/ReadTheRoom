@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReadTheRoom</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --panel: #ffffff;
+    --panel-2: #f4f4f5;
+    --text: #18181b;
+    --muted: #71717a;
+    --border: #e4e4e7;
+    --accent: #18181b;
+    --accent-text: #ffffff;
+    --danger: #dc2626;
+    --ok: #16a34a;
+    --radar-line: #d4d4d8;
+    --radar-fov: #f6f6f7;
+    --radar-dot: #18181b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0b0c;
+      --panel: #18181b;
+      --panel-2: #212124;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --border: #2c2c30;
+      --accent: #f4f4f5;
+      --accent-text: #0b0b0c;
+      --danger: #f87171;
+      --ok: #4ade80;
+      --radar-line: #3f3f46;
+      --radar-fov: #1c1c1f;
+      --radar-dot: #f4f4f5;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font-family: inherit; }
+  svg { display: block; }
+  .icon { width: 18px; height: 18px; flex: none; }
+
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  /* ---- Top bar ---- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .brand-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .tabs {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px;
+  }
+  .tab-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .tab-btn.active {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+  .conn { display: flex; align-items: center; }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    display: inline-block;
+  }
+  .dot.connected { background: var(--ok); }
+  .dot.disconnected { background: var(--danger); }
+
+  main { flex: 1; min-height: 0; display: flex; }
+  .view { flex: 1; min-width: 0; display: none; flex-direction: column; overflow: hidden; }
+  .view.active { display: flex; }
+
+  /* ---- Chat view ---- */
+  .chat-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  #voiceToggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  #voiceToggle.off { color: var(--danger); border-color: var(--danger); }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .bubble {
+    max-width: 78%;
+    padding: 10px 14px;
+    border-radius: 16px;
+    line-height: 1.45;
+    font-size: 15px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .bubble.user {
+    align-self: flex-end;
+    background: var(--accent);
+    color: var(--accent-text);
+    border-bottom-right-radius: 4px;
+  }
+  .bubble.assistant {
+    align-self: flex-start;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+
+  form#composer {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+  }
+  #textInput {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 10px 16px;
+    font-size: 15px;
+    background: var(--panel-2);
+    color: var(--text);
+  }
+  #textInput:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  #sendBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-text);
+    border-radius: 999px;
+    width: 42px;
+    height: 42px;
+    cursor: pointer;
+    flex: none;
+  }
+  #sendBtn:disabled { opacity: 0.4; cursor: default; }
+
+  /* ---- Settings view ---- */
+  .settings-panel {
+    padding: 20px 20px 28px;
+    overflow-y: auto;
+  }
+  .settings-panel h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  .hint { font-size: 12.5px; color: var(--muted); margin: 0 0 14px; }
+  .radar-wrap {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 10px;
+    max-width: 420px;
+  }
+  #radarSvg { width: 100%; height: auto; touch-action: none; }
+  .radar-status {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin: 10px 0 4px;
+  }
+  .radar-status.error { color: var(--danger); }
+  .btn {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .zone-actions { display: flex; gap: 8px; margin: 12px 0; }
+  .settings-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+
+  .radar-handle { fill: var(--panel); stroke: var(--accent); stroke-width: 2; cursor: grab; }
+  .radar-handle:active { cursor: grabbing; }
+  .radar-zone-rect { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: var(--accent); stroke-width: 1.5; cursor: move; }
+  .target-dot { fill: var(--radar-dot); transition: cx 0.25s linear, cy 0.25s linear; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand"><span class="brand-dot"></span>ReadTheRoom</div>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="chat" type="button">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="13" rx="3"/>
+          <path d="M8 17 L8 21 L12 17"/>
+        </svg>
+        Chat
+      </button>
+      <button class="tab-btn" data-tab="settings" type="button">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="7"/>
+          <circle cx="12" cy="12" r="2.5"/>
+          <g id="gearTeeth"></g>
+        </svg>
+        Einstellungen
+      </button>
+    </nav>
+    <div class="conn"><span class="dot disconnected" id="connDot"></span></div>
+  </header>
+
+  <main>
+    <section id="view-chat" class="view active">
+      <div class="chat-status">
+        <span id="modalityLabel">–</span>
+        <button id="voiceToggle" type="button">
+          <svg class="icon" id="voiceIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
+          <span id="voiceLabel">Stimme an</span>
+        </button>
+      </div>
+      <div id="messages"></div>
+      <form id="composer">
+        <input id="textInput" type="text" placeholder="Nachricht eingeben…" autocomplete="off">
+        <button id="sendBtn" type="submit" aria-label="Senden">
+          <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3 11 L20 3 L13 20 L11 13 L3 11 Z"/></svg>
+        </button>
+      </form>
+    </section>
+
+    <section id="view-settings" class="view">
+      <div class="settings-panel">
+        <h2>Raum-Zone</h2>
+        <p class="hint">Ziehe das Rechteck, um festzulegen, wo Personen erkannt werden sollen. Punkte zeigen aktuell erkannte Personen.</p>
+        <div class="radar-wrap">
+          <svg id="radarSvg" viewBox="0 0 340 300">
+            <g id="radarBackground"></g>
+            <g id="zoneGroup"></g>
+            <g id="targetsGroup"></g>
+          </svg>
+        </div>
+        <div id="radarStatus" class="radar-status">Lade…</div>
+        <div class="zone-actions" id="zoneActions" hidden>
+          <button id="saveZoneBtn" class="btn primary" type="button">Speichern</button>
+          <button id="discardZoneBtn" class="btn" type="button">Verwerfen</button>
+        </div>
+        <div class="settings-row">
+          <button id="resetZoneBtn" class="btn" type="button">Zone zurücksetzen</button>
+          <button id="calibrateBtn" class="btn" type="button">Kalibrierung starten</button>
+          <span id="calibrateStatus" class="hint"></span>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------- icons
+  const ICON_SPEAKER_ON =
+    '<path d="M3 9v6h4l5 4V5L7 9H3z"/><path d="M15.5 9a3.5 3.5 0 0 1 0 6"/><path d="M18 6.5a7 7 0 0 1 0 11"/>';
+  const ICON_SPEAKER_OFF =
+    '<path d="M3 9v6h4l5 4V5L7 9H3z"/><line x1="16" y1="9" x2="21" y2="15"/><line x1="21" y1="9" x2="16" y2="15"/>';
+  document.getElementById("voiceIcon").innerHTML = ICON_SPEAKER_ON;
+
+  // Gear teeth for the settings tab icon (8 small rects rotated around the center).
+  (function buildGearTeeth() {
+    const g = document.getElementById("gearTeeth");
+    for (let i = 0; i < 8; i++) {
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", "11"); rect.setAttribute("y", "1");
+      rect.setAttribute("width", "2"); rect.setAttribute("height", "4");
+      rect.setAttribute("rx", "0.6");
+      rect.setAttribute("transform", `rotate(${i * 45} 12 12)`);
+      g.appendChild(rect);
+    }
+  })();
+
+  // ---------------------------------------------------------------- tabs
+  const tabButtons = document.querySelectorAll(".tab-btn");
+  const views = { chat: document.getElementById("view-chat"), settings: document.getElementById("view-settings") };
+  tabButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      tabButtons.forEach((b) => b.classList.toggle("active", b === btn));
+      Object.entries(views).forEach(([name, el]) => el.classList.toggle("active", name === btn.dataset.tab));
+    });
+  });
+
+  // ---------------------------------------------------------------- chat
+  const messagesEl = document.getElementById("messages");
+  const composerEl = document.getElementById("composer");
+  const textInputEl = document.getElementById("textInput");
+  const connDotEl = document.getElementById("connDot");
+  const modalityLabelEl = document.getElementById("modalityLabel");
+  const voiceToggleEl = document.getElementById("voiceToggle");
+  const voiceIconEl = document.getElementById("voiceIcon");
+  const voiceLabelEl = document.getElementById("voiceLabel");
+
+  let ws = null;
+  let currentAssistantBubble = null;
+  let voiceEnabled = true;
+
+  function addBubble(role, text) {
+    const el = document.createElement("div");
+    el.className = "bubble " + role;
+    el.textContent = text;
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return el;
+  }
+
+  function renderHistory(msgs) {
+    messagesEl.innerHTML = "";
+    for (const m of msgs) addBubble(m.role === "user" ? "user" : "assistant", m.content);
+    currentAssistantBubble = null;
+  }
+
+  function setModalityLabel(modality) {
+    modalityLabelEl.textContent = modality === "voice" ? "Spricht" : "Nur Chat – Person im Raum";
+  }
+
+  function setVoiceToggle(enabled) {
+    voiceEnabled = enabled;
+    voiceIconEl.innerHTML = enabled ? ICON_SPEAKER_ON : ICON_SPEAKER_OFF;
+    voiceLabelEl.textContent = enabled ? "Stimme an" : "Stimme aus";
+    voiceToggleEl.classList.toggle("off", !enabled);
+  }
+
+  function handleMessage(data) {
+    switch (data.type) {
+      case "history":
+        renderHistory(data.messages || []);
+        setModalityLabel(data.modality || "voice");
+        setVoiceToggle(data.voice_enabled !== false);
+        break;
+      case "user_message":
+        currentAssistantBubble = null;
+        addBubble("user", data.text);
+        break;
+      case "assistant_delta":
+        if (!currentAssistantBubble) currentAssistantBubble = addBubble("assistant", "");
+        currentAssistantBubble.textContent += data.text;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        break;
+      case "assistant_done":
+        currentAssistantBubble = null;
+        break;
+      case "modality":
+        setModalityLabel(data.value);
+        break;
+      case "voice_enabled":
+        setVoiceToggle(data.value);
+        break;
+      case "radar_targets":
+        renderTargets(data.targets || []);
+        break;
+      default:
+        break;
+    }
+  }
+
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(proto + "//" + location.host + "/ws");
+
+    ws.onopen = () => { connDotEl.classList.remove("disconnected"); connDotEl.classList.add("connected"); };
+    ws.onclose = () => { connDotEl.classList.remove("connected"); connDotEl.classList.add("disconnected"); setTimeout(connect, 2000); };
+    ws.onerror = () => ws.close();
+    ws.onmessage = (event) => {
+      try { handleMessage(JSON.parse(event.data)); } catch (e) { console.error("Bad message", e); }
+    };
+  }
+
+  composerEl.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = textInputEl.value.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "user_text", text }));
+    textInputEl.value = "";
+  });
+
+  voiceToggleEl.addEventListener("click", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_voice_enabled", value: !voiceEnabled }));
+  });
+
+  connect();
+
+  // ---------------------------------------------------------------- radar
+  const VB_W = 340, VB_H = 300;
+  const SENSOR_X = VB_W / 2, SENSOR_Y = VB_H - 20;
+  const MAX_RANGE_MM = 6000;
+  const MAX_RADIUS_PX = 250;
+  const SCALE = MAX_RADIUS_PX / MAX_RANGE_MM; // px per mm
+  const FOV_HALF_DEG = 60;
+  const MIN_GAP_MM = 200;
+  const RING_STEPS_MM = [2000, 4000, 6000];
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const radarSvg = document.getElementById("radarSvg");
+  const backgroundG = document.getElementById("radarBackground");
+  const zoneG = document.getElementById("zoneGroup");
+  const targetsG = document.getElementById("targetsGroup");
+  const radarStatusEl = document.getElementById("radarStatus");
+  const zoneActionsEl = document.getElementById("zoneActions");
+
+  function mmToPoint(xMm, yMm) {
+    return { x: SENSOR_X + xMm * SCALE, y: SENSOR_Y - yMm * SCALE };
+  }
+  function pointToMm(x, y) {
+    return { x_mm: (x - SENSOR_X) / SCALE, y_mm: (SENSOR_Y - y) / SCALE };
+  }
+  function polar(angleDeg, radiusMm) {
+    const rad = (angleDeg * Math.PI) / 180;
+    return mmToPoint(radiusMm * Math.sin(rad), radiusMm * Math.cos(rad));
+  }
+  function el(tag, attrs) {
+    const e = document.createElementNS(svgNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  function buildRadarBackground() {
+    const left = polar(-FOV_HALF_DEG, MAX_RANGE_MM);
+    const right = polar(FOV_HALF_DEG, MAX_RANGE_MM);
+    backgroundG.appendChild(el("path", {
+      d: `M ${SENSOR_X} ${SENSOR_Y} L ${left.x} ${left.y} A ${MAX_RADIUS_PX} ${MAX_RADIUS_PX} 0 0 1 ${right.x} ${right.y} Z`,
+      fill: "var(--radar-fov)", stroke: "none",
+    }));
+
+    for (const rangeMm of RING_STEPS_MM) {
+      const l = polar(-FOV_HALF_DEG, rangeMm);
+      const r = polar(FOV_HALF_DEG, rangeMm);
+      const radiusPx = rangeMm * SCALE;
+      backgroundG.appendChild(el("path", {
+        d: `M ${l.x} ${l.y} A ${radiusPx} ${radiusPx} 0 0 1 ${r.x} ${r.y}`,
+        fill: "none", stroke: "var(--radar-line)", "stroke-width": "1",
+      }));
+      const top = polar(0, rangeMm);
+      const label = el("text", {
+        x: top.x + 4, y: top.y - 3, fill: "var(--muted)", "font-size": "9",
+      });
+      label.textContent = (rangeMm / 1000) + "m";
+      backgroundG.appendChild(label);
+    }
+
+    // Wedge edges
+    backgroundG.appendChild(el("line", { x1: SENSOR_X, y1: SENSOR_Y, x2: left.x, y2: left.y, stroke: "var(--radar-line)", "stroke-width": "1" }));
+    backgroundG.appendChild(el("line", { x1: SENSOR_X, y1: SENSOR_Y, x2: right.x, y2: right.y, stroke: "var(--radar-line)", "stroke-width": "1" }));
+
+    // Sensor marker
+    backgroundG.appendChild(el("rect", {
+      x: SENSOR_X - 10, y: SENSOR_Y - 4, width: 20, height: 8, rx: 2,
+      fill: "var(--text)",
+    }));
+    const sensorLabel = el("text", { x: SENSOR_X, y: SENSOR_Y + 16, fill: "var(--muted)", "font-size": "9", "text-anchor": "middle" });
+    sensorLabel.textContent = "Sensor";
+    backgroundG.appendChild(sensorLabel);
+  }
+  buildRadarBackground();
+
+  // ---- targets (live dots) ----
+  const dotElements = new Map();
+  function renderTargets(targets) {
+    const seen = new Set();
+    for (const t of targets) {
+      seen.add(t.id);
+      let dot = dotElements.get(t.id);
+      if (!dot) {
+        dot = el("circle", { r: 6, class: "target-dot" });
+        targetsG.appendChild(dot);
+        dotElements.set(t.id, dot);
+      }
+      const p = mmToPoint(t.x_mm, t.y_mm);
+      dot.setAttribute("cx", p.x);
+      dot.setAttribute("cy", p.y);
+    }
+    for (const [id, dot] of dotElements) {
+      if (!seen.has(id)) { dot.remove(); dotElements.delete(id); }
+    }
+  }
+
+  // ---- zone rectangle (draggable/resizable) ----
+  const DEFAULT_BOUNDS = { min_x_mm: -1000, max_x_mm: 1000, min_y_mm: 500, max_y_mm: 3000 };
+  let savedBounds = null;   // last known bounds from the sensor (null = none saved yet)
+  let bounds = null;        // currently displayed/edited bounds
+  let zoneValid = false;
+  let dragging = null;
+
+  const rectEl = el("rect", { class: "radar-zone-rect" });
+  zoneG.appendChild(rectEl);
+  const HANDLES = [
+    { id: "tl", x: "min", y: "max" },
+    { id: "tr", x: "max", y: "max" },
+    { id: "br", x: "max", y: "min" },
+    { id: "bl", x: "min", y: "min" },
+  ];
+  const handleElements = {};
+  for (const h of HANDLES) {
+    const c = el("circle", { r: 7, class: "radar-handle" });
+    c.addEventListener("pointerdown", (e) => startHandleDrag(e, h));
+    zoneG.appendChild(c);
+    handleElements[h.id] = c;
+  }
+  rectEl.addEventListener("pointerdown", startMoveDrag);
+
+  function renderZone() {
+    if (!bounds) return;
+    const p1 = mmToPoint(bounds.min_x_mm, bounds.max_y_mm);
+    const p2 = mmToPoint(bounds.max_x_mm, bounds.min_y_mm);
+    const x = Math.min(p1.x, p2.x), y = Math.min(p1.y, p2.y);
+    rectEl.setAttribute("x", x);
+    rectEl.setAttribute("y", y);
+    rectEl.setAttribute("width", Math.abs(p2.x - p1.x));
+    rectEl.setAttribute("height", Math.abs(p2.y - p1.y));
+
+    for (const h of HANDLES) {
+      const p = mmToPoint(bounds[h.x + "_x_mm"], bounds[h.y + "_y_mm"]);
+      handleElements[h.id].setAttribute("cx", p.x);
+      handleElements[h.id].setAttribute("cy", p.y);
+    }
+  }
+
+  function svgPointFromEvent(evt) {
+    const rect = radarSvg.getBoundingClientRect();
+    return {
+      x: ((evt.clientX - rect.left) / rect.width) * VB_W,
+      y: ((evt.clientY - rect.top) / rect.height) * VB_H,
+    };
+  }
+
+  function markDirty() { zoneActionsEl.hidden = false; }
+
+  function startHandleDrag(evt, handle) {
+    evt.preventDefault();
+    evt.target.setPointerCapture(evt.pointerId);
+    dragging = { type: "handle", handle, pointerId: evt.pointerId };
+  }
+  function startMoveDrag(evt) {
+    evt.preventDefault();
+    evt.target.setPointerCapture(evt.pointerId);
+    const p = svgPointFromEvent(evt);
+    dragging = { type: "move", pointerId: evt.pointerId, start: pointToMm(p.x, p.y), startBounds: { ...bounds } };
+  }
+
+  radarSvg.addEventListener("pointermove", (evt) => {
+    if (!dragging || evt.pointerId !== dragging.pointerId) return;
+    const p = svgPointFromEvent(evt);
+    const mm = pointToMm(p.x, p.y);
+
+    if (dragging.type === "handle") {
+      const { x: xk, y: yk } = dragging.handle;
+      const other_x = xk === "min" ? "max" : "min";
+      const other_y = yk === "min" ? "max" : "min";
+      let newX = mm.x_mm, newY = mm.y_mm;
+      if (xk === "min") newX = Math.min(newX, bounds[other_x + "_x_mm"] - MIN_GAP_MM);
+      else newX = Math.max(newX, bounds[other_x + "_x_mm"] + MIN_GAP_MM);
+      if (yk === "min") newY = Math.min(newY, bounds[other_y + "_y_mm"] - MIN_GAP_MM);
+      else newY = Math.max(newY, bounds[other_y + "_y_mm"] + MIN_GAP_MM);
+      bounds[xk + "_x_mm"] = Math.round(newX);
+      bounds[yk + "_y_mm"] = Math.round(newY);
+    } else if (dragging.type === "move") {
+      const dx = mm.x_mm - dragging.start.x_mm;
+      const dy = mm.y_mm - dragging.start.y_mm;
+      bounds.min_x_mm = Math.round(dragging.startBounds.min_x_mm + dx);
+      bounds.max_x_mm = Math.round(dragging.startBounds.max_x_mm + dx);
+      bounds.min_y_mm = Math.round(Math.max(0, dragging.startBounds.min_y_mm + dy));
+      bounds.max_y_mm = Math.round(dragging.startBounds.max_y_mm + dy);
+    }
+    renderZone();
+    markDirty();
+  });
+  radarSvg.addEventListener("pointerup", () => { dragging = null; });
+  radarSvg.addEventListener("pointercancel", () => { dragging = null; });
+
+  // ---- radar REST API ----
+  async function radarFetch(path, options) {
+    try {
+      const res = await fetch(path, options);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      return { ok: true, data };
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
+  }
+
+  async function loadZone() {
+    const result = await radarFetch("/api/radar/zone");
+    if (!result.ok) {
+      radarStatusEl.textContent = "Radar nicht erreichbar: " + result.error;
+      radarStatusEl.classList.add("error");
+      bounds = { ...DEFAULT_BOUNDS };
+      zoneValid = false;
+      renderZone();
+      return;
+    }
+    radarStatusEl.classList.remove("error");
+    if (result.data.valid) {
+      savedBounds = {
+        min_x_mm: result.data.min_x_mm, max_x_mm: result.data.max_x_mm,
+        min_y_mm: result.data.min_y_mm, max_y_mm: result.data.max_y_mm,
+      };
+      zoneValid = true;
+      radarStatusEl.textContent = "Zone gespeichert.";
+    } else {
+      savedBounds = null;
+      zoneValid = false;
+      radarStatusEl.textContent = "Keine Zone gespeichert – ziehe das Rechteck und speichere.";
+    }
+    bounds = { ...(savedBounds || DEFAULT_BOUNDS) };
+    renderZone();
+    zoneActionsEl.hidden = zoneValid; // no saved zone yet -> show Save immediately
+  }
+
+  document.getElementById("saveZoneBtn").addEventListener("click", async () => {
+    const result = await radarFetch("/api/radar/zone", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bounds),
+    });
+    if (!result.ok) {
+      radarStatusEl.textContent = "Speichern fehlgeschlagen: " + result.error;
+      radarStatusEl.classList.add("error");
+      return;
+    }
+    savedBounds = { ...bounds };
+    zoneValid = true;
+    radarStatusEl.classList.remove("error");
+    radarStatusEl.textContent = "Zone gespeichert.";
+    zoneActionsEl.hidden = true;
+  });
+
+  document.getElementById("discardZoneBtn").addEventListener("click", () => {
+    bounds = { ...(savedBounds || DEFAULT_BOUNDS) };
+    renderZone();
+    zoneActionsEl.hidden = zoneValid;
+  });
+
+  document.getElementById("resetZoneBtn").addEventListener("click", async () => {
+    const result = await radarFetch("/api/radar/zone/reset", { method: "POST" });
+    if (!result.ok) {
+      radarStatusEl.textContent = "Zurücksetzen fehlgeschlagen: " + result.error;
+      radarStatusEl.classList.add("error");
+      return;
+    }
+    savedBounds = null;
+    zoneValid = false;
+    bounds = { ...DEFAULT_BOUNDS };
+    renderZone();
+    radarStatusEl.classList.remove("error");
+    radarStatusEl.textContent = "Zone zurückgesetzt – Erkennung ist ungefiltert.";
+    zoneActionsEl.hidden = false;
+  });
+
+  // ---- calibration walk ----
+  const calibrateBtn = document.getElementById("calibrateBtn");
+  const calibrateStatusEl = document.getElementById("calibrateStatus");
+  let calibratePoll = null;
+
+  calibrateBtn.addEventListener("click", async () => {
+    const result = await radarFetch("/api/radar/calibrate/start", { method: "POST" });
+    if (!result.ok) {
+      calibrateStatusEl.textContent = "Fehler: " + result.error;
+      return;
+    }
+    calibrateStatusEl.textContent = "Läuft – gehe jetzt in alle Ecken des Raums…";
+    if (calibratePoll) clearInterval(calibratePoll);
+    calibratePoll = setInterval(async () => {
+      const status = await radarFetch("/api/radar/calibrate/status");
+      if (!status.ok) return;
+      if (status.data.calibrating) {
+        const secs = Math.ceil((status.data.remaining_ms || 0) / 1000);
+        calibrateStatusEl.textContent = `Läuft – noch ${secs}s, gehe in alle Ecken…`;
+      } else {
+        clearInterval(calibratePoll);
+        calibratePoll = null;
+        calibrateStatusEl.textContent = "Fertig.";
+        await loadZone();
+      }
+    }, 1000);
+  });
+
+  loadZone();
+})();
+</script>
+</body>
+</html>
