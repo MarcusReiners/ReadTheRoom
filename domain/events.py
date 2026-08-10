@@ -31,6 +31,7 @@ class PersonCountChanged(Event):
 @dataclass(frozen=True)
 class SpeechTranscribed(Event):
     text: str
+    conversation_id: str
 
 
 @dataclass(frozen=True)
@@ -68,11 +69,13 @@ class ModalitySwitched(Event):
 @dataclass(frozen=True)
 class AssistantDeltaReceived(Event):
     delta: str
+    conversation_id: str
 
 
 @dataclass(frozen=True)
 class AssistantMessageCompleted(Event):
     text: str
+    conversation_id: str
 
 
 @dataclass(frozen=True)

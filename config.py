@@ -91,6 +91,7 @@ RADAR_POLL_INTERVAL_S = float(_env("RADAR_POLL_INTERVAL_S", "0.3"))
 # --- Chat bridge (web chat app mirroring the conversation) -----------------
 CHAT_BRIDGE_HOST = _env("CHAT_BRIDGE_HOST", "0.0.0.0")
 CHAT_BRIDGE_PORT = int(_env("CHAT_BRIDGE_PORT", "8765"))
+CONVERSATIONS_DB_PATH = _env("CONVERSATIONS_DB_PATH", "conversations.db")
 
 # --- Logging (local only, never uploaded) ---------------------------------
 LOG_DIR = _env("LOG_DIR", "logs")

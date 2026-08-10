@@ -24,15 +24,15 @@ class LLMGatewayAdapter:
         self.fallback_model = fallback_model
         self.fallback_api_base = fallback_api_base
 
-    def ask_stream(self, user_text: str) -> Iterator[str]:
+    def ask_stream(self, user_text: str, history: Optional[list[dict]] = None) -> Iterator[str]:
         try:
-            yield from self._ask_stream(self.model, self.api_base, user_text)
+            yield from self._ask_stream(self.model, self.api_base, user_text, history)
         except litellm.exceptions.APIConnectionError:
             if self.fallback_model:
                 logger.warning("'%s' nicht erreichbar, weiche aus auf Fallback '%s'.",
                                 self.model, self.fallback_model)
                 try:
-                    yield from self._ask_stream(self.fallback_model, self.fallback_api_base, user_text)
+                    yield from self._ask_stream(self.fallback_model, self.fallback_api_base, user_text, history)
                     return
                 except litellm.exceptions.APIConnectionError:
                     pass
@@ -41,14 +41,17 @@ class LLMGatewayAdapter:
         except Exception as e:
             yield f"Fehler bei LLM: {e}"
 
-    def _ask_stream(self, model: str, api_base: Optional[str], user_text: str) -> Iterator[str]:
+    def _ask_stream(
+        self, model: str, api_base: Optional[str], user_text: str, history: Optional[list[dict]],
+    ) -> Iterator[str]:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages.extend(history or [])
+        messages.append({"role": "user", "content": user_text})
+
         response = litellm.completion(
             model=model,
             api_base=api_base,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": user_text},
-            ],
+            messages=messages,
             stream=True,
             max_tokens=200,
             keep_alive="24h",

@@ -23,6 +23,7 @@ from service_layer.handlers import register_handlers
 
 from adapters.factory import build_stt, build_tts, build_radar
 from adapters.chat_bridge import ChatBridgeAdapter
+from adapters.conversation_store import ConversationStore
 from adapters.llm import LLMGatewayAdapter
 from adapters.hardware.face_display import DummyFaceDisplayAdapter
 from adapters.hardware.status_display import DummyStatusDisplayAdapter
@@ -137,16 +138,22 @@ def console_input_loop(bus: EventBus, turn_queue: "queue.Queue[str]", stt) -> No
         turn_queue.put(user_text)
 
 
-def handle_turn(text: str, bus: EventBus, conversation: ConversationState, llm, tts, face, turntable) -> None:
-    conversation.add_user_message(text)
-    bus.publish(SpeechTranscribed(text=text))
+def handle_turn(
+    text: str, bus: EventBus, conversation: ConversationState, store: ConversationStore,
+    llm, tts, face, turntable,
+) -> None:
+    conversation_id = store.get_active_id()
+    history = store.get_history(conversation_id)
+
+    store.add_user_message(conversation_id, text)
+    bus.publish(SpeechTranscribed(text=text, conversation_id=conversation_id))
 
     face.set_eye_direction(angle_degrees=90.0)
     turntable.rotate_towards(target_angle_degrees=90.0)
 
     def mirrored_deltas():
-        for delta in llm.ask_stream(text):
-            bus.publish(AssistantDeltaReceived(delta=delta))
+        for delta in llm.ask_stream(text, history):
+            bus.publish(AssistantDeltaReceived(delta=delta, conversation_id=conversation_id))
             yield delta
 
     # Speak aloud only while alone (or voice hasn't been muted from the chat
@@ -157,8 +164,8 @@ def handle_turn(text: str, bus: EventBus, conversation: ConversationState, llm, 
     else:
         full_text = "".join(mirrored_deltas())
 
-    conversation.add_assistant_message(full_text)
-    bus.publish(AssistantMessageCompleted(text=full_text))
+    store.add_assistant_message(conversation_id, full_text)
+    bus.publish(AssistantMessageCompleted(text=full_text, conversation_id=conversation_id))
 
 
 def main() -> None:
@@ -166,6 +173,9 @@ def main() -> None:
 
     bus = EventBus()
     conversation = ConversationState()
+    store = ConversationStore(config.CONVERSATIONS_DB_PATH)
+    if store.get_active_id() is None:
+        store.set_active_id(store.create_conversation())
     turn_queue: "queue.Queue[str]" = queue.Queue()
 
     stt = build_stt(config)
@@ -209,7 +219,7 @@ def main() -> None:
     register_handlers(bus, conversation, tts, status)
 
     chat_bridge = ChatBridgeAdapter(
-        bus, conversation, turn_queue,
+        bus, conversation, store, turn_queue,
         radar_url=config.RADAR_URL,
         host=config.CHAT_BRIDGE_HOST, port=config.CHAT_BRIDGE_PORT,
     )
@@ -224,7 +234,7 @@ def main() -> None:
     while True:
         try:
             text = turn_queue.get()
-            handle_turn(text, bus, conversation, llm, tts, face, turntable)
+            handle_turn(text, bus, conversation, store, llm, tts, face, turntable)
         except KeyboardInterrupt:
             print("\nCiao!")
             stt.stop()

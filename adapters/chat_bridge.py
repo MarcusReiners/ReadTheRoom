@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from adapters.conversation_store import ConversationStore
 from domain.conversation import ConversationState
 from domain.events import (
     AssistantDeltaReceived,
@@ -39,6 +40,7 @@ class ChatBridgeAdapter:
         self,
         bus: EventBus,
         conversation: ConversationState,
+        store: ConversationStore,
         turn_queue: "queue.Queue[str]",
         radar_url: str,
         host: str = "0.0.0.0",
@@ -46,6 +48,7 @@ class ChatBridgeAdapter:
     ) -> None:
         self.bus = bus
         self.conversation = conversation
+        self.store = store
         self.turn_queue = turn_queue
         self.radar_url = radar_url.rstrip("/")
         self.host = host
@@ -58,12 +61,13 @@ class ChatBridgeAdapter:
         self.app = FastAPI(title="ReadTheRoom Chat Bridge")
         self._register_routes()
 
-        bus.subscribe(SpeechTranscribed,
-                       lambda e: self._broadcast({"type": "user_message", "text": e.text}))
-        bus.subscribe(AssistantDeltaReceived,
-                       lambda e: self._broadcast({"type": "assistant_delta", "text": e.delta}))
-        bus.subscribe(AssistantMessageCompleted,
-                       lambda e: self._broadcast({"type": "assistant_done", "text": e.text}))
+        bus.subscribe(SpeechTranscribed, lambda e: self._broadcast({
+            "type": "user_message", "text": e.text, "conversation_id": e.conversation_id,
+        }))
+        bus.subscribe(AssistantDeltaReceived, lambda e: self._broadcast({
+            "type": "assistant_delta", "text": e.delta, "conversation_id": e.conversation_id,
+        }))
+        bus.subscribe(AssistantMessageCompleted, lambda e: self._on_assistant_message_completed(e))
         bus.subscribe(ListeningStateChanged,
                        lambda e: self._broadcast({"type": "listening", "value": e.listening}))
         bus.subscribe(ModalitySwitched,
@@ -116,9 +120,15 @@ class ChatBridgeAdapter:
             await websocket.accept()
             with self._clients_lock:
                 self._clients.add(websocket)
+            active_id = self.store.get_active_id()
             await websocket.send_json({
-                "type": "history",
-                "messages": self.conversation.history,
+                "type": "conversations",
+                "items": self.store.list_conversations(),
+            })
+            await websocket.send_json({
+                "type": "conversation_selected",
+                "id": active_id,
+                "messages": self.store.get_history(active_id) if active_id else [],
                 "modality": self.conversation.modality,
                 "voice_enabled": self.conversation.voice_enabled,
             })
@@ -131,6 +141,11 @@ class ChatBridgeAdapter:
             finally:
                 with self._clients_lock:
                     self._clients.discard(websocket)
+
+    def _on_assistant_message_completed(self, event: AssistantMessageCompleted) -> None:
+        self._broadcast({"type": "assistant_done", "text": event.text, "conversation_id": event.conversation_id})
+        # Title may have just been set (first message) and recency order changed.
+        self._broadcast({"type": "conversations", "items": self.store.list_conversations()})
 
     def _radar_get(self, path: str) -> JSONResponse:
         try:
@@ -157,6 +172,41 @@ class ChatBridgeAdapter:
         elif msg_type == "set_voice_enabled":
             self.conversation.voice_enabled = bool(data.get("value"))
             self._broadcast({"type": "voice_enabled", "value": self.conversation.voice_enabled})
+        elif msg_type == "new_conversation":
+            new_id = self.store.create_conversation()
+            self.store.set_active_id(new_id)
+            self._broadcast_active_conversation()
+        elif msg_type == "select_conversation":
+            conversation_id = data.get("id")
+            if conversation_id:
+                self.store.set_active_id(conversation_id)
+                self._broadcast_active_conversation()
+        elif msg_type == "delete_conversation":
+            self._delete_conversation(data.get("id"))
+
+    def _delete_conversation(self, conversation_id: str | None) -> None:
+        if not conversation_id:
+            return
+        was_active = self.store.get_active_id() == conversation_id
+        self.store.delete_conversation(conversation_id)
+
+        if was_active:
+            remaining = self.store.list_conversations()
+            new_active = remaining[0]["id"] if remaining else self.store.create_conversation()
+            self.store.set_active_id(new_active)
+
+        self._broadcast_active_conversation()
+
+    def _broadcast_active_conversation(self) -> None:
+        active_id = self.store.get_active_id()
+        self._broadcast({"type": "conversations", "items": self.store.list_conversations()})
+        self._broadcast({
+            "type": "conversation_selected",
+            "id": active_id,
+            "messages": self.store.get_history(active_id) if active_id else [],
+            "modality": self.conversation.modality,
+            "voice_enabled": self.conversation.voice_enabled,
+        })
 
     def _broadcast(self, message: dict) -> None:
         if self._loop is None:
