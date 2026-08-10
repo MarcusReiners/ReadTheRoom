@@ -63,3 +63,18 @@ class DisplayTakeoverRequested(Event):
 class ModalitySwitched(Event):
     to_modality: str
     reason: str
+
+
+@dataclass(frozen=True)
+class AssistantDeltaReceived(Event):
+    delta: str
+
+
+@dataclass(frozen=True)
+class AssistantMessageCompleted(Event):
+    text: str
+
+
+@dataclass(frozen=True)
+class RadarTargetsUpdated(Event):
+    targets: list

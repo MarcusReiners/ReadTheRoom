@@ -82,6 +82,16 @@ SERVO_GPIO_PIN = int(_env("SERVO_GPIO_PIN", "19"))
 SERVO_MIN_ANGLE = float(_env("SERVO_MIN_ANGLE", "20"))
 SERVO_MAX_ANGLE = float(_env("SERVO_MAX_ANGLE", "160"))
 
+# --- Radar (HLK-LD2450 on a Seeed XIAO ESP32S3, HTTP JSON) -----------------
+# RADAR_PROVIDER: ld2450 | dummy
+RADAR_PROVIDER = _env("RADAR_PROVIDER", "ld2450")
+RADAR_URL = _env("RADAR_URL", "http://mmwave.local")
+RADAR_POLL_INTERVAL_S = float(_env("RADAR_POLL_INTERVAL_S", "0.3"))
+
+# --- Chat bridge (web chat app mirroring the conversation) -----------------
+CHAT_BRIDGE_HOST = _env("CHAT_BRIDGE_HOST", "0.0.0.0")
+CHAT_BRIDGE_PORT = int(_env("CHAT_BRIDGE_PORT", "8765"))
+
 # --- Logging (local only, never uploaded) ---------------------------------
 LOG_DIR = _env("LOG_DIR", "logs")
 LOG_FILE = _env("LOG_FILE", "readtheroom.log")

@@ -1,7 +1,7 @@
 import logging
 
 from domain.conversation import ConversationState
-from domain.events import PersonCountChanged, DisplayTakeoverRequested
+from domain.events import PersonCountChanged, DisplayTakeoverRequested, ModalitySwitched
 from service_layer.bus import EventBus
 from adapters.tts.base import StreamingTTSAdapter
 
@@ -17,10 +17,16 @@ def register_handlers(
     tts.takeover_sink = status_display.set_text
 
     def on_person_count_changed(event: PersonCountChanged) -> None:
-        if event.count > 1 and conversation.confidential:
+        if event.count > 1 and conversation.confidential and conversation.modality == "voice":
             conversation.switch_modality("web")
-            logger.info("Modalitätswechsel zu 'web' (PersonCount=%s, vertraulich=%s)",
-                        event.count, conversation.confidential)
+            bus.publish(ModalitySwitched(to_modality="web", reason="person_entered"))
+            logger.info("Modalitätswechsel zu 'web' (PersonCount=%s)", event.count)
+            if tts.request_takeover():
+                logger.info("Sprachausgabe unterbrochen (Person betrat den Raum).")
+        elif event.count <= 1 and conversation.modality == "web":
+            conversation.switch_modality("voice")
+            bus.publish(ModalitySwitched(to_modality="voice", reason="alone_again"))
+            logger.info("Modalitätswechsel zurück zu 'voice' (wieder allein)")
 
     def on_display_takeover(event: DisplayTakeoverRequested) -> None:
         if status_display.text_active:

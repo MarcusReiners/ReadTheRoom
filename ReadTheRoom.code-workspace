@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "mmWave",
+			"path": "../../../Documents/PlatformIO/Projects/mmWave"
+		}
+	],
+	"settings": {}
+}

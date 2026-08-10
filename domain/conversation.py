@@ -2,7 +2,12 @@ SYSTEM_PROMPT = """Du bist ein Office-Assistent am Schreibtisch. Antworte auf De
 class ConversationState:
     def __init__(self) -> None:
         self.modality: str = "voice"
-        self.confidential: bool = False
+        # Personal desk assistant: every conversation is private by default,
+        # not just ones explicitly flagged - a second person entering the
+        # room is reason enough to switch away from speaking it aloud.
+        self.confidential: bool = True
+        # Manual override from the chat UI, independent of who's in the room.
+        self.voice_enabled: bool = True
         self.history: list[dict] = []
 
     def add_user_message(self, text: str) -> None:
