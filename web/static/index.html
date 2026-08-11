@@ -70,7 +70,7 @@
   }
   button { font-family: inherit; }
   svg { display: block; }
-  .icon { width: 18px; height: 18px; flex: none; }
+  .icon { width: 18px; height: 18px; flex: none; object-fit: contain; }
 
   #app {
     display: flex;
@@ -127,6 +127,19 @@
   .tab-btn.active {
     background: var(--accent);
     color: var(--accent-text);
+  }
+  .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 999px;
+    width: 32px;
+    height: 32px;
+    cursor: pointer;
+    flex: none;
   }
   .conn { display: flex; align-items: center; }
   .dot {
@@ -237,6 +250,19 @@
     flex-direction: column;
     gap: 10px;
   }
+  .message-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+  }
+  .message-row.user { justify-content: flex-end; }
+  .message-row.assistant { justify-content: flex-start; }
+  .avatar {
+    width: 26px;
+    height: 26px;
+    object-fit: contain;
+    flex: none;
+  }
   .bubble {
     max-width: 78%;
     padding: 10px 14px;
@@ -247,13 +273,11 @@
     word-wrap: break-word;
   }
   .bubble.user {
-    align-self: flex-end;
     background: var(--accent);
     color: var(--accent-text);
     border-bottom-right-radius: 4px;
   }
   .bubble.assistant {
-    align-self: flex-start;
     background: var(--panel-2);
     color: var(--text);
     border: 1px solid var(--border);
@@ -305,7 +329,6 @@
     font-weight: 600;
     margin: 0 0 14px;
   }
-  .settings-section { flex: none; margin-bottom: 28px; }
   .radar-section {
     flex: 1;
     display: flex;
@@ -313,28 +336,6 @@
     align-items: center;
     justify-content: center;
   }
-  .segmented {
-    display: inline-flex;
-    gap: 4px;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 3px;
-  }
-  .segmented-btn {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    border: none;
-    background: transparent;
-    color: var(--muted);
-    border-radius: 999px;
-    padding: 6px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-  }
-  .segmented-btn.active { background: var(--accent); color: var(--accent-text); }
   .radar-wrap {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -364,10 +365,7 @@
     <div class="brand"><img class="brand-icon" src="/robot.png" alt="">ReadTheRoom</div>
     <nav class="tabs">
       <button class="tab-btn active" data-tab="chat" type="button">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="4" width="18" height="13" rx="3"/>
-          <path d="M8 17 L8 21 L12 17"/>
-        </svg>
+        <img class="icon" src="/robot.png" alt="">
         Chat
       </button>
       <button class="tab-btn" data-tab="settings" type="button">
@@ -379,6 +377,9 @@
         Einstellungen
       </button>
     </nav>
+    <button id="themeToggle" class="icon-btn" type="button" aria-label="Theme wechseln">
+      <svg class="icon" id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
+    </button>
     <div class="conn"><span class="dot disconnected" id="connDot"></span></div>
   </header>
 
@@ -413,14 +414,6 @@
 
     <section id="view-settings" class="view">
       <div class="settings-panel">
-        <div class="settings-section">
-          <h2>Anzeige</h2>
-          <div class="segmented" id="themeSwitch">
-            <button class="segmented-btn" type="button" data-theme="system">System</button>
-            <button class="segmented-btn" type="button" data-theme="light">Hell</button>
-            <button class="segmented-btn" type="button" data-theme="dark">Dunkel</button>
-          </div>
-        </div>
         <div class="radar-section">
           <h2>Tracking-Zone</h2>
           <div class="radar-wrap">
@@ -472,28 +465,33 @@
   });
 
   // ---------------------------------------------------------------- theme
-  const themeButtons = document.querySelectorAll("#themeSwitch .segmented-btn");
+  const ICON_SUN =
+    '<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>' +
+    '<line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>' +
+    '<line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>' +
+    '<line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>';
+  const ICON_MOON = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
 
-  function setThemeActiveButton(theme) {
-    themeButtons.forEach((b) => b.classList.toggle("active", b.dataset.theme === theme));
+  const themeToggleEl = document.getElementById("themeToggle");
+  const themeIconEl = document.getElementById("themeIcon");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+
+  function effectiveTheme() {
+    return document.documentElement.getAttribute("data-theme") || (prefersDark.matches ? "dark" : "light");
   }
 
-  function applyTheme(theme) {
-    if (theme === "light" || theme === "dark") {
-      document.documentElement.setAttribute("data-theme", theme);
-      localStorage.setItem("theme", theme);
-    } else {
-      document.documentElement.removeAttribute("data-theme");
-      localStorage.removeItem("theme");
-    }
-    setThemeActiveButton(theme);
+  function updateThemeIcon() {
+    themeIconEl.innerHTML = effectiveTheme() === "dark" ? ICON_SUN : ICON_MOON;
   }
 
-  themeButtons.forEach((btn) => {
-    btn.addEventListener("click", () => applyTheme(btn.dataset.theme));
+  themeToggleEl.addEventListener("click", () => {
+    const next = effectiveTheme() === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    localStorage.setItem("theme", next);
+    updateThemeIcon();
   });
 
-  setThemeActiveButton(localStorage.getItem("theme") || "system");
+  updateThemeIcon();
 
   // ---------------------------------------------------------------- chat
   const messagesEl = document.getElementById("messages");
@@ -517,10 +515,23 @@
   let activeConversationId = null;
 
   function addBubble(role, text) {
+    const row = document.createElement("div");
+    row.className = "message-row " + role;
+
+    if (role === "assistant") {
+      const avatar = document.createElement("img");
+      avatar.className = "avatar";
+      avatar.src = "/robot.png";
+      avatar.alt = "";
+      row.appendChild(avatar);
+    }
+
     const el = document.createElement("div");
     el.className = "bubble " + role;
     el.textContent = text;
-    messagesEl.appendChild(el);
+    row.appendChild(el);
+
+    messagesEl.appendChild(row);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     return el;
   }
