@@ -257,12 +257,6 @@
   }
   .message-row.user { justify-content: flex-end; }
   .message-row.assistant { justify-content: flex-start; }
-  .avatar {
-    width: 56px;
-    height: 56px;
-    object-fit: contain;
-    flex: none;
-  }
   .bubble {
     max-width: 78%;
     padding: 10px 14px;
@@ -520,14 +514,6 @@
   function addBubble(role, text) {
     const row = document.createElement("div");
     row.className = "message-row " + role;
-
-    if (role === "assistant") {
-      const avatar = document.createElement("img");
-      avatar.className = "avatar";
-      avatar.src = "/robot.png";
-      avatar.alt = "";
-      row.appendChild(avatar);
-    }
 
     const el = document.createElement("div");
     el.className = "bubble " + role;
