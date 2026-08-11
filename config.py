@@ -86,7 +86,10 @@ SERVO_MAX_ANGLE = float(_env("SERVO_MAX_ANGLE", "160"))
 # RADAR_PROVIDER: ld2450 | dummy
 RADAR_PROVIDER = _env("RADAR_PROVIDER", "ld2450")
 RADAR_URL = _env("RADAR_URL", "http://mmwave.local")
-RADAR_POLL_INTERVAL_S = float(_env("RADAR_POLL_INTERVAL_S", "0.3"))
+# The LD2450 itself streams frames at ~10Hz over UART to the XIAO - polling
+# much slower than that (the old 0.3s default) just discards most of what
+# it already produces, adding needless latency to the person-count switch.
+RADAR_POLL_INTERVAL_S = float(_env("RADAR_POLL_INTERVAL_S", "0.1"))
 
 # --- Chat bridge (web chat app mirroring the conversation) -----------------
 CHAT_BRIDGE_HOST = _env("CHAT_BRIDGE_HOST", "0.0.0.0")

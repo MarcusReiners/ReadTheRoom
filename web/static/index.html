@@ -722,7 +722,13 @@
   buildRadarBackground();
 
   // ---- targets (live dots) ----
+  // Purely visual smoothing (low-pass filter, same idea as the servo's
+  // DOA_SMOOTHING_ALPHA in domain/policies.py) - only softens dot jitter on
+  // screen. The zone/person-count logic elsewhere always uses raw readings,
+  // since that decision should react immediately, not lag behind a filter.
+  const DOT_SMOOTHING_ALPHA = 0.35;
   const dotElements = new Map();
+  const smoothedPositions = new Map();
   function renderTargets(targets) {
     // radar_targets only arrives when the Pi's poll of the XIAO just
     // succeeded - a reliable signal the radar is back, so clear a stale
@@ -732,18 +738,26 @@
     const seen = new Set();
     for (const t of targets) {
       seen.add(t.id);
+
+      const prev = smoothedPositions.get(t.id);
+      const smoothed = prev ? {
+        x_mm: prev.x_mm + DOT_SMOOTHING_ALPHA * (t.x_mm - prev.x_mm),
+        y_mm: prev.y_mm + DOT_SMOOTHING_ALPHA * (t.y_mm - prev.y_mm),
+      } : { x_mm: t.x_mm, y_mm: t.y_mm };
+      smoothedPositions.set(t.id, smoothed);
+
       let dot = dotElements.get(t.id);
       if (!dot) {
         dot = el("circle", { r: 6, class: "target-dot" });
         targetsG.appendChild(dot);
         dotElements.set(t.id, dot);
       }
-      const p = mmToPoint(t.x_mm, t.y_mm);
+      const p = mmToPoint(smoothed.x_mm, smoothed.y_mm);
       dot.setAttribute("cx", p.x);
       dot.setAttribute("cy", p.y);
     }
     for (const [id, dot] of dotElements) {
-      if (!seen.has(id)) { dot.remove(); dotElements.delete(id); }
+      if (!seen.has(id)) { dot.remove(); dotElements.delete(id); smoothedPositions.delete(id); }
     }
   }
 
