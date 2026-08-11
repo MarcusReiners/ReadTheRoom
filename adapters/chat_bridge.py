@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from adapters.conversation_store import ConversationStore
@@ -81,6 +81,10 @@ class ChatBridgeAdapter:
         @self.app.get("/")
         async def index():
             return HTMLResponse(index_html)
+
+        @self.app.get("/robot.png")
+        async def robot_icon():
+            return FileResponse(_STATIC_DIR / "robot.png")
 
         # Plain `def` (not `async def`): FastAPI runs sync route handlers in
         # its own threadpool, so the blocking `requests` call to the XIAO

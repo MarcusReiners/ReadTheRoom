@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ReadTheRoom</title>
+<link rel="icon" type="image/png" href="/robot.png">
+<script>
+  (function () {
+    var t = localStorage.getItem("theme");
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
 <style>
   :root {
     --bg: #fafafa;
@@ -21,7 +28,7 @@
     --radar-dot: #18181b;
   }
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #0b0b0c;
       --panel: #18181b;
       --panel-2: #212124;
@@ -36,6 +43,21 @@
       --radar-fov: #1c1c1f;
       --radar-dot: #f4f4f5;
     }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0b0c;
+    --panel: #18181b;
+    --panel-2: #212124;
+    --text: #f4f4f5;
+    --muted: #a1a1aa;
+    --border: #2c2c30;
+    --accent: #f4f4f5;
+    --accent-text: #0b0b0c;
+    --danger: #f87171;
+    --ok: #4ade80;
+    --radar-line: #3f3f46;
+    --radar-fov: #1c1c1f;
+    --radar-dot: #f4f4f5;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -74,11 +96,11 @@
     font-weight: 600;
     letter-spacing: -0.01em;
   }
-  .brand-dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: var(--accent);
+  .brand-icon {
+    width: 24px;
+    height: 24px;
+    object-fit: contain;
+    flex: none;
   }
   .tabs {
     display: flex;
@@ -275,8 +297,6 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
     padding: 20px 20px 28px;
     overflow-y: auto;
   }
@@ -285,6 +305,36 @@
     font-weight: 600;
     margin: 0 0 14px;
   }
+  .settings-section { flex: none; margin-bottom: 28px; }
+  .radar-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .segmented {
+    display: inline-flex;
+    gap: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px;
+  }
+  .segmented-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .segmented-btn.active { background: var(--accent); color: var(--accent-text); }
   .radar-wrap {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -311,7 +361,7 @@
 <body>
 <div id="app">
   <header class="topbar">
-    <div class="brand"><span class="brand-dot"></span>ReadTheRoom</div>
+    <div class="brand"><img class="brand-icon" src="/robot.png" alt="">ReadTheRoom</div>
     <nav class="tabs">
       <button class="tab-btn active" data-tab="chat" type="button">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -363,15 +413,25 @@
 
     <section id="view-settings" class="view">
       <div class="settings-panel">
-        <h2>Tracking-Zone</h2>
-        <div class="radar-wrap">
-          <svg id="radarSvg" viewBox="0 0 340 300">
-            <g id="radarBackground"></g>
-            <g id="zoneGroup"></g>
-            <g id="targetsGroup"></g>
-          </svg>
+        <div class="settings-section">
+          <h2>Anzeige</h2>
+          <div class="segmented" id="themeSwitch">
+            <button class="segmented-btn" type="button" data-theme="system">System</button>
+            <button class="segmented-btn" type="button" data-theme="light">Hell</button>
+            <button class="segmented-btn" type="button" data-theme="dark">Dunkel</button>
+          </div>
         </div>
-        <div id="radarStatus" class="radar-status">Lade…</div>
+        <div class="radar-section">
+          <h2>Tracking-Zone</h2>
+          <div class="radar-wrap">
+            <svg id="radarSvg" viewBox="0 0 340 300">
+              <g id="radarBackground"></g>
+              <g id="zoneGroup"></g>
+              <g id="targetsGroup"></g>
+            </svg>
+          </div>
+          <div id="radarStatus" class="radar-status">Lade…</div>
+        </div>
       </div>
     </section>
   </main>
@@ -410,6 +470,30 @@
       Object.entries(views).forEach(([name, el]) => el.classList.toggle("active", name === btn.dataset.tab));
     });
   });
+
+  // ---------------------------------------------------------------- theme
+  const themeButtons = document.querySelectorAll("#themeSwitch .segmented-btn");
+
+  function setThemeActiveButton(theme) {
+    themeButtons.forEach((b) => b.classList.toggle("active", b.dataset.theme === theme));
+  }
+
+  function applyTheme(theme) {
+    if (theme === "light" || theme === "dark") {
+      document.documentElement.setAttribute("data-theme", theme);
+      localStorage.setItem("theme", theme);
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.removeItem("theme");
+    }
+    setThemeActiveButton(theme);
+  }
+
+  themeButtons.forEach((btn) => {
+    btn.addEventListener("click", () => applyTheme(btn.dataset.theme));
+  });
+
+  setThemeActiveButton(localStorage.getItem("theme") || "system");
 
   // ---------------------------------------------------------------- chat
   const messagesEl = document.getElementById("messages");
