@@ -220,7 +220,7 @@ def main() -> None:
 
     chat_bridge = ChatBridgeAdapter(
         bus, conversation, store, turn_queue,
-        radar_url=config.RADAR_URL,
+        radar=radar,
         host=config.CHAT_BRIDGE_HOST, port=config.CHAT_BRIDGE_PORT,
     )
     chat_bridge.start()

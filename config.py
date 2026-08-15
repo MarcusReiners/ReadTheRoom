@@ -33,6 +33,7 @@ TTS_PROVIDER = _env("TTS_PROVIDER", "elevenlabs")
 # --- API keys (never hardcode these) -----------------------------------
 ELEVENLABS_API_KEY = _env_opt("ELEVENLABS_API_KEY")
 OPENAI_API_KEY = _env_opt("OPENAI_API_KEY")
+GEMINI_API_KEY = _env_opt("GEMINI_API_KEY")
 
 # --- ElevenLabs settings ------------------------------------------------
 ELEVENLABS_VOICE_ID = _env("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
@@ -82,14 +83,12 @@ SERVO_GPIO_PIN = int(_env("SERVO_GPIO_PIN", "19"))
 SERVO_MIN_ANGLE = float(_env("SERVO_MIN_ANGLE", "20"))
 SERVO_MAX_ANGLE = float(_env("SERVO_MAX_ANGLE", "160"))
 
-# --- Radar (HLK-LD2450 on a Seeed XIAO ESP32S3, HTTP JSON) -----------------
+# --- Radar (HLK-LD2450 on a Seeed XIAO ESP32S3 -> ESP-NOW -> bridge ESP32 --
+# --- -> USB serial into the Pi; see mmWave/ and mmWaveBridge/) -------------
 # RADAR_PROVIDER: ld2450 | dummy
 RADAR_PROVIDER = _env("RADAR_PROVIDER", "ld2450")
-RADAR_URL = _env("RADAR_URL", "http://mmwave.local")
-# The LD2450 itself streams frames at ~10Hz over UART to the XIAO - polling
-# much slower than that (the old 0.3s default) just discards most of what
-# it already produces, adding needless latency to the person-count switch.
-RADAR_POLL_INTERVAL_S = float(_env("RADAR_POLL_INTERVAL_S", "0.1"))
+RADAR_SERIAL_PORT = _env("RADAR_SERIAL_PORT", "/dev/ttyUSB0")
+RADAR_SERIAL_BAUD = int(_env("RADAR_SERIAL_BAUD", "115200"))
 
 # --- Chat bridge (web chat app mirroring the conversation) -----------------
 CHAT_BRIDGE_HOST = _env("CHAT_BRIDGE_HOST", "0.0.0.0")

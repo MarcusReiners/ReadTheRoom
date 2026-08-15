@@ -351,6 +351,7 @@
   .radar-handle:active { cursor: grabbing; }
   .radar-zone-rect { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: var(--accent); stroke-width: 1.5; cursor: move; }
   .target-dot { fill: var(--radar-dot); transition: cx 0.25s linear, cy 0.25s linear; }
+  .target-dot.out-of-zone { fill: var(--muted); opacity: 0.55; }
 </style>
 </head>
 <body>
@@ -755,6 +756,9 @@
       const p = mmToPoint(smoothed.x_mm, smoothed.y_mm);
       dot.setAttribute("cx", p.x);
       dot.setAttribute("cy", p.y);
+      // Shown regardless of zone (to check the sensor is really tracking
+      // everyone), but only in-zone ones are muted-vs-solid distinguished.
+      dot.classList.toggle("out-of-zone", t.in_zone === false);
     }
     for (const [id, dot] of dotElements) {
       if (!seen.has(id)) { dot.remove(); dotElements.delete(id); smoothedPositions.delete(id); }
