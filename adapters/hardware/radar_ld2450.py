@@ -1,8 +1,9 @@
+import json
 import logging
 import threading
 import time
 
-import requests
+import serial
 
 from domain.events import PersonCountChanged, RadarTargetsUpdated
 from service_layer.bus import EventBus
@@ -30,27 +31,44 @@ class DummyRadarAdapter:
         self._person_count = 1
         self.bus.publish(PersonCountChanged(count=self._person_count))
 
+    def get_zone(self) -> dict:
+        return {"valid": False}
+
+    def get_calibration_status(self) -> dict:
+        return {"calibrating": False}
+
+    def send_command(self, command: dict) -> None:
+        pass
+
 
 class RadarLD2450Adapter:
-    """Polls a Seeed XIAO ESP32S3 running the LD2450 firmware's HTTP JSON
-    endpoint (GET {url}/targets -> {"targets": [...]})and republishes the
-    active target count as PersonCountChanged, on change only.
+    """Reads newline-delimited JSON status lines from the ESP-NOW bridge
+    ESP32 (see mmWaveBridge/ - it relays packets from the XIAO's LD2450
+    sensor over ESP-NOW), connected to the Pi over USB serial, and
+    republishes the in-zone target count as PersonCountChanged, on change
+    only. The full raw target list (including out-of-zone ones, each
+    tagged "in_zone") is still broadcast via RadarTargetsUpdated so the
+    settings page can show everything the sensor is tracking, not just
+    what counts for presence.
     """
 
     def __init__(
         self,
         bus: EventBus,
-        url: str,
-        poll_interval_s: float = 0.3,
-        request_timeout_s: float = 1.0,
+        serial_port: str,
+        baud_rate: int = 115200,
     ) -> None:
         self.bus = bus
-        self._targets_url = url.rstrip("/") + "/targets"
-        self._poll_interval_s = poll_interval_s
-        self._request_timeout_s = request_timeout_s
+        self._serial_port = serial_port
+        self._baud_rate = baud_rate
         self._person_count = 1
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._write_lock = threading.Lock()
+        self._serial: serial.Serial | None = None
+
+        self._latest_zone: dict = {"valid": False}
+        self._latest_calibration: dict = {"calibrating": False}
 
     @property
     def person_count(self) -> int:
@@ -58,25 +76,71 @@ class RadarLD2450Adapter:
 
     def start(self) -> None:
         self.bus.publish(PersonCountChanged(count=self._person_count))
-        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
 
-    def _poll_loop(self) -> None:
+    def get_zone(self) -> dict:
+        return dict(self._latest_zone)
+
+    def get_calibration_status(self) -> dict:
+        return dict(self._latest_calibration)
+
+    def send_command(self, command: dict) -> None:
+        line = json.dumps(command) + "\n"
+        with self._write_lock:
+            if self._serial is not None and self._serial.is_open:
+                try:
+                    self._serial.write(line.encode("utf-8"))
+                except serial.SerialException as e:
+                    logger.warning("[Radar] Befehl konnte nicht gesendet werden: %s", e)
+
+    def _read_loop(self) -> None:
         while not self._stop.is_set():
             try:
-                response = requests.get(self._targets_url, timeout=self._request_timeout_s)
-                response.raise_for_status()
-                targets = response.json().get("targets", [])
-                self.bus.publish(RadarTargetsUpdated(targets=targets))
+                self._serial = serial.Serial(self._serial_port, self._baud_rate, timeout=1)
+                logger.info("[Radar] Verbunden mit Bridge auf %s", self._serial_port)
+                self._consume(self._serial)
+            except serial.SerialException as e:
+                logger.warning("[Radar] Bridge auf %s nicht erreichbar: %s", self._serial_port, e)
+                time.sleep(1.0)
+            finally:
+                with self._write_lock:
+                    if self._serial is not None:
+                        try:
+                            self._serial.close()
+                        except Exception:
+                            pass
+                        self._serial = None
 
-                count = len(targets)
-                if count != self._person_count:
-                    self._person_count = count
-                    self.bus.publish(PersonCountChanged(count=count))
-            except requests.RequestException as e:
-                logger.warning("[Radar] %s nicht erreichbar: %s", self._targets_url, e)
+    def _consume(self, ser: "serial.Serial") -> None:
+        while not self._stop.is_set():
+            line = ser.readline()
+            if not line:
+                continue
+            try:
+                data = json.loads(line.decode("utf-8", errors="ignore").strip())
+            except ValueError:
+                continue
+            self._handle_status(data)
 
-            time.sleep(self._poll_interval_s)
+    def _handle_status(self, data: dict) -> None:
+        targets = data.get("targets", [])
+        self.bus.publish(RadarTargetsUpdated(targets=targets))
+
+        count = sum(1 for t in targets if t.get("in_zone", True))
+        if count != self._person_count:
+            self._person_count = count
+            self.bus.publish(PersonCountChanged(count=count))
+
+        zone = data.get("zone")
+        if zone is not None:
+            self._latest_zone = zone
+
+        calibrating = bool(data.get("calibrating", False))
+        calibration = {"calibrating": calibrating}
+        if calibrating:
+            calibration["remaining_ms"] = data.get("remaining_ms", 0)
+        self._latest_calibration = calibration

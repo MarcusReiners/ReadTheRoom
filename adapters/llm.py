@@ -48,15 +48,26 @@ class LLMGatewayAdapter:
         messages.extend(history or [])
         messages.append({"role": "user", "content": user_text})
 
-        response = litellm.completion(
+        completion_kwargs = dict(
             model=model,
             api_base=api_base,
             messages=messages,
             stream=True,
-            max_tokens=200,
-            keep_alive="24h",
-            extra_body={"think": False},
+            # High enough that a "thinking" model (e.g. Gemini's flash
+            # models reason internally before answering) doesn't get cut
+            # off before it ever reaches the actual reply text - a plain
+            # non-reasoning model just stops early via finish_reason=stop
+            # well under this ceiling, so it costs those nothing.
+            max_tokens=500,
         )
+        if model.startswith("ollama"):
+            # Ollama-specific: disables qwen3's "think" preamble via its
+            # native REST field. Other providers reject unknown fields
+            # (Gemini hard-errors on this), so it must not be sent to them.
+            completion_kwargs["extra_body"] = {"think": False}
+            completion_kwargs["keep_alive"] = "24h"
+
+        response = litellm.completion(**completion_kwargs)
         t_start = time.monotonic()
         t_first = None
         for chunk in response:

@@ -4,11 +4,9 @@ import queue
 import threading
 from pathlib import Path
 
-import requests
 import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from starlette.concurrency import run_in_threadpool
 
 from adapters.conversation_store import ConversationStore
 from domain.conversation import ConversationState
@@ -21,8 +19,6 @@ from domain.events import (
     SpeechTranscribed,
 )
 from service_layer.bus import EventBus
-
-_RADAR_REQUEST_TIMEOUT_S = 2.0
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +38,7 @@ class ChatBridgeAdapter:
         conversation: ConversationState,
         store: ConversationStore,
         turn_queue: "queue.Queue[str]",
-        radar_url: str,
+        radar,
         host: str = "0.0.0.0",
         port: int = 8765,
     ) -> None:
@@ -50,7 +46,7 @@ class ChatBridgeAdapter:
         self.conversation = conversation
         self.store = store
         self.turn_queue = turn_queue
-        self.radar_url = radar_url.rstrip("/")
+        self.radar = radar
         self.host = host
         self.port = port
 
@@ -86,38 +82,45 @@ class ChatBridgeAdapter:
         async def robot_icon():
             return FileResponse(_STATIC_DIR / "robot.png")
 
-        # Plain `def` (not `async def`): FastAPI runs sync route handlers in
-        # its own threadpool, so the blocking `requests` call to the XIAO
-        # doesn't stall the WebSocket/event loop. Same pattern as the sync
-        # `speak()` route in entrypoints/mac_server.py.
+        # The radar adapter owns the actual link to the sensor (ESP-NOW via
+        # a USB-serial bridge) and keeps the latest zone/calibration state
+        # cached in memory, so these just read/write that directly - no
+        # network call, and no need for a threadpool hop.
         @self.app.get("/api/radar/zone")
         def get_zone():
-            return self._radar_get("/zone")
+            return JSONResponse(self.radar.get_zone())
 
         @self.app.post("/api/radar/zone")
         async def set_zone(request: Request):
             bounds = await request.json()
-            return await run_in_threadpool(
-                self._radar_post, "/zone/set", data={
-                    "min_x_mm": bounds.get("min_x_mm"),
-                    "max_x_mm": bounds.get("max_x_mm"),
-                    "min_y_mm": bounds.get("min_y_mm"),
-                    "max_y_mm": bounds.get("max_y_mm"),
-                },
-            )
+            self.radar.send_command({
+                "cmd": "set_zone",
+                "min_x_mm": bounds.get("min_x_mm"),
+                "max_x_mm": bounds.get("max_x_mm"),
+                "min_y_mm": bounds.get("min_y_mm"),
+                "max_y_mm": bounds.get("max_y_mm"),
+            })
+            return JSONResponse({
+                "valid": True,
+                "min_x_mm": bounds.get("min_x_mm"),
+                "max_x_mm": bounds.get("max_x_mm"),
+                "min_y_mm": bounds.get("min_y_mm"),
+                "max_y_mm": bounds.get("max_y_mm"),
+            })
 
         @self.app.post("/api/radar/zone/reset")
         def reset_zone():
-            return self._radar_post("/zone/reset")
+            self.radar.send_command({"cmd": "reset_zone"})
+            return JSONResponse({"valid": False})
 
         @self.app.post("/api/radar/calibrate/start")
         def start_calibration(seconds: int | None = None):
-            params = {"seconds": seconds} if seconds is not None else None
-            return self._radar_post("/calibrate/start", params=params)
+            self.radar.send_command({"cmd": "start_calibration", "seconds": seconds or 20})
+            return JSONResponse({"calibrating": True})
 
         @self.app.get("/api/radar/calibrate/status")
         def calibration_status():
-            return self._radar_get("/calibrate/status")
+            return JSONResponse(self.radar.get_calibration_status())
 
         @self.app.websocket("/ws")
         async def ws_endpoint(websocket: WebSocket):
@@ -150,22 +153,6 @@ class ChatBridgeAdapter:
         self._broadcast({"type": "assistant_done", "text": event.text, "conversation_id": event.conversation_id})
         # Title may have just been set (first message) and recency order changed.
         self._broadcast({"type": "conversations", "items": self.store.list_conversations()})
-
-    def _radar_get(self, path: str) -> JSONResponse:
-        try:
-            response = requests.get(self.radar_url + path, timeout=_RADAR_REQUEST_TIMEOUT_S)
-            return JSONResponse(response.json(), status_code=response.status_code)
-        except (requests.RequestException, ValueError) as e:
-            return JSONResponse({"error": f"Radar nicht erreichbar: {e}"}, status_code=502)
-
-    def _radar_post(self, path: str, data: dict | None = None, params: dict | None = None) -> JSONResponse:
-        try:
-            response = requests.post(
-                self.radar_url + path, data=data, params=params, timeout=_RADAR_REQUEST_TIMEOUT_S,
-            )
-            return JSONResponse(response.json(), status_code=response.status_code)
-        except (requests.RequestException, ValueError) as e:
-            return JSONResponse({"error": f"Radar nicht erreichbar: {e}"}, status_code=502)
 
     def _handle_client_message(self, data: dict) -> None:
         msg_type = data.get("type")
