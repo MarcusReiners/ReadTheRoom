@@ -1,11 +1,23 @@
 import logging
 
 from domain.conversation import ConversationState
-from domain.events import PersonCountChanged, DisplayTakeoverRequested, ModalitySwitched
+from domain.events import (
+    DisplayTakeoverRequested,
+    ListeningStateChanged,
+    ModalitySwitched,
+    PersonCountChanged,
+    SpeechPlaybackEnded,
+    SpeechPlaybackStarted,
+)
 from service_layer.bus import EventBus
 from adapters.tts.base import StreamingTTSAdapter
 
 logger = logging.getLogger(__name__)
+
+# Tie LED colors (r, g, b) - idle/listening pulse gently, speaking is solid.
+TIE_LED_IDLE_COLOR = (0, 60, 160)
+TIE_LED_LISTENING_COLOR = (160, 20, 20)
+TIE_LED_SPEAKING_COLOR = (200, 160, 90)
 
 
 def register_handlers(
@@ -39,3 +51,34 @@ def register_handlers(
 
     bus.subscribe(PersonCountChanged, on_person_count_changed)
     bus.subscribe(DisplayTakeoverRequested, on_display_takeover)
+
+
+def _tie_led_command(mode: str, color: tuple[int, int, int]) -> dict:
+    r, g, b = color
+    return {"cmd": "set_led", "mode": mode, "r": r, "g": g, "b": b}
+
+
+def register_tie_led_handlers(bus: EventBus, radar) -> None:
+    """Drives the 7-LED tie strip via the same serial command channel the
+    radar adapter already has open to the bridge ESP32 (see
+    mmWaveBridge/src/main.cpp's set_led command) - idle/listening pulse
+    gently, a spoken answer shows as a solid color.
+    """
+
+    def on_listening_changed(event: ListeningStateChanged) -> None:
+        if event.listening:
+            radar.send_command(_tie_led_command("pulse", TIE_LED_LISTENING_COLOR))
+        else:
+            radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_COLOR))
+
+    def on_speech_started(event: SpeechPlaybackStarted) -> None:
+        radar.send_command(_tie_led_command("solid", TIE_LED_SPEAKING_COLOR))
+
+    def on_speech_ended(event: SpeechPlaybackEnded) -> None:
+        radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_COLOR))
+
+    bus.subscribe(ListeningStateChanged, on_listening_changed)
+    bus.subscribe(SpeechPlaybackStarted, on_speech_started)
+    bus.subscribe(SpeechPlaybackEnded, on_speech_ended)
+
+    radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_COLOR))

@@ -19,7 +19,7 @@ from domain.events import (
     SpeechTranscribed,
 )
 from service_layer.bus import EventBus
-from service_layer.handlers import register_handlers
+from service_layer.handlers import register_handlers, register_tie_led_handlers
 
 from adapters.factory import build_stt, build_tts, build_radar
 from adapters.chat_bridge import ChatBridgeAdapter
@@ -226,6 +226,7 @@ def main() -> None:
     chat_bridge.start()
 
     radar.start()
+    register_tie_led_handlers(bus, radar)
 
     threading.Thread(target=console_input_loop, args=(bus, turn_queue, stt), daemon=True).start()
 
