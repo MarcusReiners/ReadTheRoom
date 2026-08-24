@@ -97,16 +97,33 @@ class ServoTurntableAdapter:
         )
 
     def _windowed_range(self, offset_degrees: float) -> tuple[float, float]:
+        width = self._base_max_angle - self._base_min_angle
         lo = self._base_min_angle + offset_degrees
-        hi = self._base_max_angle + offset_degrees
-        if lo < self._hardware_min_angle or hi > self._hardware_max_angle:
+        hi = lo + width
+
+        # Shift the whole window back inside hardware bounds rather than clipping
+        # each edge independently - clipping edges separately would shrink the
+        # window's width instead of just repositioning it, silently narrowing the
+        # cable-safety range instead of preserving it.
+        shifted = False
+        if lo < self._hardware_min_angle:
+            shift = self._hardware_min_angle - lo
+            lo += shift
+            hi += shift
+            shifted = True
+        if hi > self._hardware_max_angle:
+            shift = hi - self._hardware_max_angle
+            lo -= shift
+            hi -= shift
+            shifted = True
+
+        if shifted:
             logger.warning(
-                "[Servo] Home-Offset %.1f wuerde den sicheren Bereich (%.1f-%.1f) ausserhalb "
-                "des Hardware-Bereichs (%.0f-%.0f) schieben - wird geklemmt.",
-                offset_degrees, lo, hi, self._hardware_min_angle, self._hardware_max_angle,
+                "[Servo] Home-Offset %.1f wuerde den sicheren Bereich ausserhalb des "
+                "Hardware-Bereichs (%.0f-%.0f) schieben - Fenster auf %.1f-%.1f verschoben "
+                "(Breite %.0f Grad bleibt erhalten).",
+                offset_degrees, self._hardware_min_angle, self._hardware_max_angle, lo, hi, width,
             )
-            lo = max(lo, self._hardware_min_angle)
-            hi = min(hi, self._hardware_max_angle)
         return lo, hi
 
     def set_home_offset(self, offset_degrees: float) -> None:
