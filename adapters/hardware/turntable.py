@@ -96,7 +96,7 @@ class ServoTurntableAdapter:
         self.current_heading_degrees = (self._min_angle + self._max_angle) / 2
         self._servo = AngularServo(
             pin,
-            initial_angle=self.current_heading_degrees if move_to_home_on_start else None,
+            initial_angle=self.current_heading_degrees % 360.0 if move_to_home_on_start else None,
             min_angle=hardware_min_angle,
             max_angle=hardware_max_angle,
             min_pulse_width=min_pulse_width,
@@ -108,33 +108,18 @@ class ServoTurntableAdapter:
         )
 
     def _windowed_range(self, offset_degrees: float) -> tuple[float, float]:
+        """A 360-degree positional servo has no real edge to avoid - -25 and
+        335 degrees are the same physical position. So unlike an earlier
+        version of this method, there's no "shift the window to stay inside
+        0-360" logic here: lo is just normalized into [0, 360) and hi is
+        simply lo+width, deliberately left unwrapped (may exceed 360) so
+        everything that uses this pair (center, set_angle_immediate's clamp)
+        can keep doing plain linear arithmetic in this pair's own consistent
+        frame. Only the single angle actually written to hardware gets
+        wrapped back to [0, 360) with a final %, in set_angle_immediate()."""
         width = self._base_max_angle - self._base_min_angle
-        lo = self._base_min_angle + offset_degrees
+        lo = (self._base_min_angle + offset_degrees) % 360.0
         hi = lo + width
-
-        # Shift the whole window back inside hardware bounds rather than clipping
-        # each edge independently - clipping edges separately would shrink the
-        # window's width instead of just repositioning it, silently narrowing the
-        # cable-safety range instead of preserving it.
-        shifted = False
-        if lo < self._hardware_min_angle:
-            shift = self._hardware_min_angle - lo
-            lo += shift
-            hi += shift
-            shifted = True
-        if hi > self._hardware_max_angle:
-            shift = hi - self._hardware_max_angle
-            lo -= shift
-            hi -= shift
-            shifted = True
-
-        if shifted:
-            logger.warning(
-                "[Servo] Home-Offset %.1f wuerde den sicheren Bereich ausserhalb des "
-                "Hardware-Bereichs (%.0f-%.0f) schieben - Fenster auf %.1f-%.1f verschoben "
-                "(Breite %.0f Grad bleibt erhalten).",
-                offset_degrees, self._hardware_min_angle, self._hardware_max_angle, lo, hi, width,
-            )
         return lo, hi
 
     def set_home_offset(self, offset_degrees: float) -> None:
@@ -145,29 +130,31 @@ class ServoTurntableAdapter:
         self._min_angle, self._max_angle = self._windowed_range(offset_degrees)
 
     def set_raw_angle(self, angle_degrees: float) -> float:
-        """Drives the servo to an exact angle on its true hardware range,
-        clamped only to hardware_min_angle/hardware_max_angle - NOT the
-        cable-safety window. For interactive home calibration only, while a
-        person is watching and nudging by hand: the safety window exists to
-        bound autonomous conversation-driven movement, not a supervised
-        calibration session, so it shouldn't fight you while you're trying to
-        find where "forward" actually is. Use offset_for_raw_angle() afterward
-        to convert the angle you land on into a home offset, then
-        set_home_offset() to actually apply the (still cable-safe) window for
-        normal operation - this method never touches that window itself.
+        """Drives the servo to an exact angle, wrapped onto its true hardware
+        range (a full circle - 0 and 360 are the same position) - NOT clamped
+        to the cable-safety window. For interactive home calibration only,
+        while a person is watching and nudging by hand: the safety window
+        exists to bound autonomous conversation-driven movement, not a
+        supervised calibration session, so it shouldn't fight you while
+        you're trying to find where "forward" actually is. Use
+        offset_for_raw_angle() afterward to convert the angle you land on
+        into a home offset, then set_home_offset() to actually apply the
+        (still cable-safe) window for normal operation - this method never
+        touches that window itself.
 
-        Returns the actually-applied (hardware-clamped) angle - callers MUST
-        track this return value rather than their own running total, or their
+        Returns the actually-applied (wrapped) angle - callers MUST track
+        this return value rather than their own running total, or their
         tracked position silently drifts away from where the servo really is
-        once a requested angle goes out of hardware range."""
+        once a requested angle goes outside a single 0-360 turn."""
         angle_degrees = self.clamp_raw_angle(angle_degrees)
         self._servo.angle = angle_degrees
         return angle_degrees
 
     def clamp_raw_angle(self, angle_degrees: float) -> float:
-        """Same clamp set_raw_angle() applies, without moving the servo -
-        for bookkeeping that needs to match what a real call would resolve to."""
-        return max(self._hardware_min_angle, min(self._hardware_max_angle, angle_degrees))
+        """Same wrap set_raw_angle() applies, without moving the servo - for
+        bookkeeping that needs to match what a real call would resolve to."""
+        span = self._hardware_max_angle - self._hardware_min_angle
+        return self._hardware_min_angle + (angle_degrees - self._hardware_min_angle) % span
 
     def offset_for_raw_angle(self, angle_degrees: float) -> float:
         """The home_offset_degrees that makes angle_degrees the center of the
@@ -176,17 +163,11 @@ class ServoTurntableAdapter:
         return angle_degrees - self._default_center_angle
 
     def raw_angle_for_offset(self, offset_degrees: float) -> float:
-        """The real hardware angle a given home offset currently resolves to -
-        e.g. to resume calibration from wherever the last saved offset
-        actually sits. Must go through _windowed_range() rather than just
-        _default_center_angle + offset_degrees: for an offset extreme enough
-        to saturate against the hardware edge (like the window already does
-        in __init__/set_home_offset), the effective center isn't the naive
-        sum - using the naive formula here would visibly jerk the servo a
-        second time on startup, disagreeing with where __init__ already
-        parked it."""
+        """The real hardware angle (normalized to [0, 360)) a given home
+        offset currently resolves to - e.g. to resume calibration from
+        wherever the last saved offset actually sits."""
         lo, hi = self._windowed_range(offset_degrees)
-        return (lo + hi) / 2
+        return (lo + hi) / 2 % 360.0
 
     @property
     def _default_center_angle(self) -> float:
@@ -205,17 +186,24 @@ class ServoTurntableAdapter:
         not a DOA reading."""
         center = (self._min_angle + self._max_angle) / 2
         self.current_heading_degrees = center
-        self._servo.angle = center
-        logger.info("[Servo] Home-Position (%.0f Grad).", center)
+        self._servo.angle = center % 360.0
+        logger.info("[Servo] Home-Position (%.0f Grad).", center % 360.0)
 
     def set_angle_immediate(self, angle_degrees: float) -> None:
         """Directly drives the servo to an exact angle already expressed in
-        the safe window's own coordinates (NOT the DOA 90-degrees-is-home
-        convention) - for deliberate test/calibration movements, same idea
-        as home()."""
+        the safe window's own (possibly-unwrapped, e.g. up to 475 for a
+        window that wraps past 360) coordinates - NOT the DOA
+        90-degrees-is-home convention - for deliberate test/calibration
+        movements, same idea as home(). Clamped to the window using plain
+        linear comparison, which is correct here specifically because
+        _min_angle/_max_angle are always in this same unwrapped frame
+        (self._max_angle = self._min_angle + width, never independently
+        wrapped) - only the final write to hardware gets wrapped back to
+        [0, 360) with a %, since gpiozero itself only accepts angles in that
+        range."""
         angle_degrees = max(self._min_angle, min(self._max_angle, angle_degrees))
         self.current_heading_degrees = angle_degrees
-        self._servo.angle = angle_degrees
+        self._servo.angle = angle_degrees % 360.0
 
     def set_doa_angle_immediate(self, target_angle_degrees: float) -> None:
         """Like set_angle_immediate(), but target_angle_degrees is in the DOA
@@ -229,14 +217,20 @@ class ServoTurntableAdapter:
         behind") would otherwise snap to opposite ends of the window instead
         of both landing on the edge that's really closer."""
         center = (self._min_angle + self._max_angle) / 2
-        raw_target = (center + (target_angle_degrees - 90.0)) % 360.0
+        raw_target = center + (target_angle_degrees - 90.0)
         self.set_angle_immediate(self._nearest_reachable_angle(raw_target))
 
     def _nearest_reachable_angle(self, angle_degrees: float) -> float:
-        if self._min_angle <= angle_degrees <= self._max_angle:
-            return angle_degrees
-        dist_to_min = min((angle_degrees - self._min_angle) % 360.0, (self._min_angle - angle_degrees) % 360.0)
-        dist_to_max = min((angle_degrees - self._max_angle) % 360.0, (self._max_angle - angle_degrees) % 360.0)
+        """angle_degrees can be any real number, wrapped or not - normalizes
+        via its circular offset from _min_angle rather than comparing raw
+        numbers directly, so this works regardless of how _min_angle/_max_angle
+        happen to sit relative to the 0/360 seam."""
+        width = self._max_angle - self._min_angle
+        offset_from_min = (angle_degrees - self._min_angle) % 360.0
+        if offset_from_min <= width:
+            return self._min_angle + offset_from_min
+        dist_to_min = 360.0 - offset_from_min
+        dist_to_max = offset_from_min - width
         return self._min_angle if dist_to_min <= dist_to_max else self._max_angle
 
     def stop(self) -> None:
