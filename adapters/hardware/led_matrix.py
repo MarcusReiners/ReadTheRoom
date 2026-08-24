@@ -11,7 +11,7 @@ class LedMatrix:
         rows: int = 48,
         cols: int = 96,
         chain: int = 2,
-        brightness: int = 60,
+        brightness: int = 90,
         gpio_slowdown: int = 4,
         fps: int = 20,
         limit_refresh_rate_hz: int = 0,

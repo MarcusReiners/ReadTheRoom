@@ -72,31 +72,28 @@ def register_tie_led_handlers(bus: EventBus, radar) -> None:
     radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_COLOR))
 
 
-def register_doa_tracking_handlers(
-    bus: EventBus, doa, turntable, face, poll_interval_s: float = 0.3,
-) -> None:
-    """While the user is actively recording (ListeningStateChanged True), polls
-    the ReSpeaker's onboard DOA/VAD on a background thread and turns the
-    head/eyes toward detected speech - same logic as
-    scripts/test_hardware.py's live_doa_tracking(), just gated to the
-    listening window instead of running unconditionally, so it doesn't chase
-    the assistant's own voice picked back up by the mic during TTS playback.
+def start_doa_tracking(doa, turntable, face, poll_interval_s: float = 0.3) -> None:
+    """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
+    thread for the lifetime of the process, turning the head/eyes toward
+    detected speech - same logic as scripts/test_hardware.py's
+    live_doa_tracking(). Runs unconditionally rather than being gated to the
+    recording window, so note it will also react to the assistant's own
+    voice being picked back up by the mic during TTS playback.
     """
-    stop_event = threading.Event()
 
     def _tracking_loop() -> None:
-        while not stop_event.is_set():
-            if doa.get_voice_active():
-                angle = doa.get_direction_degrees()
-                turntable.rotate_towards(target_angle_degrees=angle)
-                face.set_eye_direction(angle_degrees=angle)
+        logger.info("[DOA] Tracking gestartet.")
+        while True:
+            try:
+                active = doa.get_voice_active()
+                logger.debug("[DOA] voice_active=%s", active)
+                if active:
+                    angle = doa.get_direction_degrees()
+                    logger.info("[DOA] Stimme erkannt bei %.0f Grad.", angle)
+                    turntable.rotate_towards(target_angle_degrees=angle)
+                    face.set_eye_direction(angle_degrees=angle)
+            except Exception:
+                logger.exception("[DOA] Fehler beim Lesen/Ansteuern - Tracking-Thread beendet sich NICHT.")
             time.sleep(poll_interval_s)
 
-    def on_listening_changed(event: ListeningStateChanged) -> None:
-        if event.listening:
-            stop_event.clear()
-            threading.Thread(target=_tracking_loop, daemon=True).start()
-        else:
-            stop_event.set()
-
-    bus.subscribe(ListeningStateChanged, on_listening_changed)
+    threading.Thread(target=_tracking_loop, daemon=True).start()

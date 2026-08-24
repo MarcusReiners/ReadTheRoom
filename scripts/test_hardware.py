@@ -19,7 +19,12 @@ def build_display(bus: EventBus):
     from adapters.hardware.led_matrix import LedMatrix
     from adapters.hardware.led_eyes import LedEyesAdapter
 
-    matrix = LedMatrix(rows=48, cols=96, chain=1, gpio_slowdown=config.GPIO_SLOWDOWN)
+    matrix = LedMatrix(
+        rows=48, cols=96, chain=1,
+        gpio_slowdown=config.GPIO_SLOWDOWN,
+        brightness=config.LED_MATRIX_BRIGHTNESS,
+        pwm_bits=config.LED_MATRIX_PWM_BITS,
+    )
     face = LedEyesAdapter(bus=bus, x_offset=0, width=96, height=48)
     matrix.add_renderer(face)
     matrix.start()
