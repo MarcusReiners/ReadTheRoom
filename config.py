@@ -43,7 +43,7 @@ ELEVENLABS_LANGUAGE_CODE = _env("ELEVENLABS_LANGUAGE_CODE", "deu")
 # ISO 639-1 (two-letter), unlike ELEVENLABS_LANGUAGE_CODE above which is
 # STT's ISO 639-3 - only eleven_flash_v2_5/eleven_turbo_v2_5-class models
 # actually enforce this for TTS.
-ELEVENLABS_TTS_LANGUAGE_CODE = _env("ELEVENLABS_TTS_LANGUAGE_CODE", "de")
+ELEVENLABS_TTS_LANGUAGE_CODE = _env("ELEVENLABS_TTS_LANGUAGE_CODE", "en")
 
 # --- LLM (via LiteLLM, provider swap = change the model string) --------
 LLM_MODEL = _env("LLM_MODEL", "openai/gpt-4o-mini")
@@ -102,10 +102,15 @@ SERVO_USE_PIGPIO = _env_bool("SERVO_USE_PIGPIO", False)
 # is persisted - survives restarts, editable via scripts/calibrate_servo_home.py
 # or the web app's settings page.
 SERVO_CALIBRATION_PATH = _env("SERVO_CALIBRATION_PATH", "servo_calibration.json")
-# Softens live DOA tracking moves (1.0 = no smoothing/jump straight to target,
-# lower = takes multiple similar readings to fully converge). Doesn't affect
-# deliberate one-off moves (home_servo.py --angle, calibration).
-SERVO_TRACKING_SMOOTHING_ALPHA = float(_env("SERVO_TRACKING_SMOOTHING_ALPHA", "0.6"))
+# Softens live DOA tracking moves (1.0 = no smoothing/jump straight to target
+# in one motion, lower = takes multiple similar readings to fully converge).
+# Defaults to no smoothing - confirmed on the bench this combined with the
+# settle-time gate in start_doa_tracking() to produce a visibly multi-step
+# "stutter" toward the target instead of one fluid move; noise rejection is
+# handled more precisely now anyway by that same settle-time gate, the VAD
+# confirm-phase, and the assistant_speaking guard. Doesn't affect deliberate
+# one-off moves (home_servo.py --angle, calibration).
+SERVO_TRACKING_SMOOTHING_ALPHA = float(_env("SERVO_TRACKING_SMOOTHING_ALPHA", "1.0"))
 # Raw DOA degrees the ReSpeaker reports when someone is actually standing
 # straight ahead of the mount - see RespeakerDOAAdapter.get_direction_degrees().
 # Tune by watching "[DOA] Stimme erkannt bei X Grad" while standing dead ahead.
