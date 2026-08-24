@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 
@@ -8,6 +9,13 @@ import logging_setup
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Servo auf eine feste Position fahren und dort halten.")
+    parser.add_argument(
+        "--angle", type=float, default=None,
+        help="Zielwinkel in Grad (Standard: Mitte von SERVO_MIN_ANGLE/SERVO_MAX_ANGLE).",
+    )
+    args = parser.parse_args()
+
     logging_setup.configure_logging(config)
 
     if not config.USE_SERVO:
@@ -23,9 +31,10 @@ def main() -> None:
         hardware_min_angle=config.SERVO_HARDWARE_MIN_ANGLE,
         hardware_max_angle=config.SERVO_HARDWARE_MAX_ANGLE,
     )
-    turntable.home()
     center = (config.SERVO_MIN_ANGLE + config.SERVO_MAX_ANGLE) / 2
-    print(f"Servo in Home-Position ({center:.0f} Grad) - haelt die Position zum Montieren.")
+    target = args.angle if args.angle is not None else center
+    turntable.set_angle_immediate(target)
+    print(f"Servo haelt bei {target:.0f} Grad.")
     print("Strg+C zum Beenden (Servo wird danach freigegeben).")
 
     try:
