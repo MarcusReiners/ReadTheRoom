@@ -55,6 +55,12 @@ class ChatBridgeAdapter:
         self.host = host
         self.port = port
 
+        # In-progress calibration position on the servo's true hardware range,
+        # unclamped by the cable-safety window (see calibrate_servo_home.py) -
+        # nudges move this and the servo directly; only "save" commits it as
+        # the new home_offset_degrees.
+        self._calibration_raw_angle = self.turntable.raw_angle_for_offset(self.turntable.home_offset_degrees)
+
         self._loop: asyncio.AbstractEventLoop | None = None
         self._clients: set[WebSocket] = set()
         self._clients_lock = threading.Lock()
@@ -128,25 +134,32 @@ class ChatBridgeAdapter:
             return JSONResponse(self.radar.get_calibration_status())
 
         # The servo's home offset compensates for wherever the 360-degree
-        # servo's horn actually ended up mounted - nudge moves it live for
-        # visual feedback, save persists it so it survives a restart.
+        # servo's horn actually ended up mounted. Nudge moves the servo
+        # directly on its true hardware range (unclamped by the cable-safety
+        # window that bounds normal conversation-driven movement - this is a
+        # supervised calibration session, it shouldn't fight the operator);
+        # save converts wherever that landed into a home_offset_degrees and
+        # commits it, same two-step flow as calibrate_servo_home.py.
         @self.app.get("/api/servo/calibration")
         def get_servo_calibration():
-            return JSONResponse({"home_offset_degrees": self.turntable.home_offset_degrees})
+            offset = self.turntable.offset_for_raw_angle(self._calibration_raw_angle)
+            return JSONResponse({"home_offset_degrees": offset})
 
         @self.app.post("/api/servo/nudge")
         async def nudge_servo(request: Request):
             body = await request.json()
             delta = float(body.get("delta", 0))
-            new_offset = self.turntable.home_offset_degrees + delta
-            self.turntable.set_home_offset(new_offset)
-            self.turntable.home()
-            return JSONResponse({"home_offset_degrees": self.turntable.home_offset_degrees})
+            self._calibration_raw_angle += delta
+            self.turntable.set_raw_angle(self._calibration_raw_angle)
+            offset = self.turntable.offset_for_raw_angle(self._calibration_raw_angle)
+            return JSONResponse({"home_offset_degrees": offset})
 
         @self.app.post("/api/servo/save")
         def save_servo_calibration():
-            save_home_offset(self.servo_calibration_path, self.turntable.home_offset_degrees)
-            return JSONResponse({"saved": True, "home_offset_degrees": self.turntable.home_offset_degrees})
+            offset = self.turntable.offset_for_raw_angle(self._calibration_raw_angle)
+            self.turntable.set_home_offset(offset)
+            save_home_offset(self.servo_calibration_path, offset)
+            return JSONResponse({"saved": True, "home_offset_degrees": offset})
 
         @self.app.websocket("/ws")
         async def ws_endpoint(websocket: WebSocket):

@@ -30,6 +30,15 @@ class DummyTurntableAdapter:
     def set_home_offset(self, offset_degrees: float) -> None:
         self.home_offset_degrees = offset_degrees
 
+    def set_raw_angle(self, angle_degrees: float) -> None:
+        self.current_heading_degrees = angle_degrees
+
+    def offset_for_raw_angle(self, angle_degrees: float) -> float:
+        return angle_degrees - 90.0
+
+    def raw_angle_for_offset(self, offset_degrees: float) -> float:
+        return 90.0 + offset_degrees
+
 
 class ServoTurntableAdapter:
     def __init__(
@@ -132,6 +141,36 @@ class ServoTurntableAdapter:
         call home() afterward to actually drive there."""
         self.home_offset_degrees = offset_degrees
         self._min_angle, self._max_angle = self._windowed_range(offset_degrees)
+
+    def set_raw_angle(self, angle_degrees: float) -> None:
+        """Drives the servo to an exact angle on its true hardware range,
+        clamped only to hardware_min_angle/hardware_max_angle - NOT the
+        cable-safety window. For interactive home calibration only, while a
+        person is watching and nudging by hand: the safety window exists to
+        bound autonomous conversation-driven movement, not a supervised
+        calibration session, so it shouldn't fight you while you're trying to
+        find where "forward" actually is. Use offset_for_raw_angle() afterward
+        to convert the angle you land on into a home offset, then
+        set_home_offset() to actually apply the (still cable-safe) window for
+        normal operation - this method never touches that window itself."""
+        angle_degrees = max(self._hardware_min_angle, min(self._hardware_max_angle, angle_degrees))
+        self._servo.angle = angle_degrees
+
+    def offset_for_raw_angle(self, angle_degrees: float) -> float:
+        """The home_offset_degrees that makes angle_degrees the center of the
+        (still 140-degree-wide) safe window, i.e. what set_raw_angle() found
+        during calibration becomes the new "straight ahead" for normal use."""
+        return angle_degrees - self._default_center_angle
+
+    def raw_angle_for_offset(self, offset_degrees: float) -> float:
+        """Inverse of offset_for_raw_angle() - the real hardware angle a given
+        home offset currently points to, e.g. to resume calibration from
+        wherever the last saved offset actually sits."""
+        return self._default_center_angle + offset_degrees
+
+    @property
+    def _default_center_angle(self) -> float:
+        return (self._base_min_angle + self._base_max_angle) / 2
 
     def rotate_towards(self, target_angle_degrees: float) -> None:
         # target_angle_degrees is DOA-style (90 degrees = straight ahead), independent
