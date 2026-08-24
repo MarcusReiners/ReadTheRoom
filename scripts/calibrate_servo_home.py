@@ -17,25 +17,29 @@ def main() -> None:
     from adapters.factory import build_turntable
     from adapters.hardware.servo_calibration import save_home_offset
 
-    # move_to_home_on_start=False: the servo stays exactly wherever it already
-    # physically is - constructing the adapter (or anything below, before the
-    # first nudge) must not command any movement of its own.
+    # move_to_home_on_start=False: we explicitly drive it to the hardware
+    # midpoint ourselves right below, not to whatever the last saved (likely
+    # stale - e.g. after remounting the horn) home offset would compute.
     turntable = build_turntable(config, move_to_home_on_start=False)
 
-    # Label only, not applied to hardware - servos have no position feedback,
-    # so this is just a reference point for computing relative deltas. It
-    # will very likely NOT match reality (the servo may have been powered
-    # off, bumped, etc. since it was last commanded) - the first nudge you
-    # type is what actually starts moving it, from wherever it really is.
-    raw_angle = turntable.raw_angle_for_offset(turntable.home_offset_degrees)
+    # Always start at the servo's own hardware midpoint (180 by default) -
+    # the middle of its LINEAR pulse-width range, as far as possible from
+    # both physical ends. This hardware doesn't wrap around (confirmed on
+    # the bench - commanded the "short way" across 0/360, it took the long
+    # way instead), so keeping the safe window centered far from either end
+    # is what actually avoids that problem, rather than any software fix.
+    # Mount/adjust the horn here so this becomes "forward", then fine-tune
+    # with nudges below if it's not perfectly aligned.
+    mid = (config.SERVO_HARDWARE_MIN_ANGLE + config.SERVO_HARDWARE_MAX_ANGLE) / 2
+    raw_angle = turntable.set_raw_angle(mid)
 
     print(
-        "Servo-Home-Kalibrierung - der Servo bewegt sich NICHT beim Start, "
-        "erst durch deine Eingaben.\n"
-        f"Referenzwert: {raw_angle:.1f} Grad (aus gespeichertem Offset "
-        f"{turntable.home_offset_degrees:.1f}) - entspricht evtl. nicht der "
-        "tatsaechlichen Position, da der Servo keine Positionsrueckmeldung hat.\n"
-        "Zahl + Enter (z.B. 5 oder -3) bewegt den Kopf um diese Gradzahl, "
+        "Servo-Home-Kalibrierung - der Servo faehrt auf seine Hardware-Mitte "
+        f"({raw_angle:.0f} Grad), moeglichst weit von beiden physischen Enden "
+        "entfernt.\n"
+        "Falls noch nicht geschehen: jetzt den Kopf/Horn auf dieser Position "
+        "montieren, sodass sie 'geradeaus' entspricht.\n"
+        "Zahl + Enter (z.B. 5 oder -3) feinjustiert die Position, "
         "unbeschraenkt vom sicheren 140-Grad-Fenster.\n"
         "'s' + Enter speichert die aktuelle Position als neue Home-Position "
         "(danach im Normalbetrieb wieder auf +/-70 Grad ab hier begrenzt).\n"
