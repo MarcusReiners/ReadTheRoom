@@ -294,7 +294,7 @@ def main() -> None:
     if config.USE_SERVO:
         from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
 
-        doa = RespeakerDOAAdapter()
+        doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
         doa_lock = threading.Lock()
         start_doa_tracking(doa, turntable, face, lock=doa_lock)
 

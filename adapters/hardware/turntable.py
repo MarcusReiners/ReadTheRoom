@@ -220,9 +220,24 @@ class ServoTurntableAdapter:
     def set_doa_angle_immediate(self, target_angle_degrees: float) -> None:
         """Like set_angle_immediate(), but target_angle_degrees is in the DOA
         convention (90 = home/straight ahead) instead of the safe window's own
-        coordinates."""
+        coordinates, and treated as a full circular value (a mic array can
+        hear all 360 degrees around it, not just the servo's reachable arc).
+        Out-of-window directions clamp to whichever safe-window edge is
+        actually closer by true circular distance - a plain linear clamp has
+        a hidden discontinuity exactly opposite the window's center, where
+        two nearly-identical real-world directions (either side of "directly
+        behind") would otherwise snap to opposite ends of the window instead
+        of both landing on the edge that's really closer."""
         center = (self._min_angle + self._max_angle) / 2
-        self.set_angle_immediate(center + (target_angle_degrees - 90.0))
+        raw_target = (center + (target_angle_degrees - 90.0)) % 360.0
+        self.set_angle_immediate(self._nearest_reachable_angle(raw_target))
+
+    def _nearest_reachable_angle(self, angle_degrees: float) -> float:
+        if self._min_angle <= angle_degrees <= self._max_angle:
+            return angle_degrees
+        dist_to_min = min((angle_degrees - self._min_angle) % 360.0, (self._min_angle - angle_degrees) % 360.0)
+        dist_to_max = min((angle_degrees - self._max_angle) % 360.0, (self._max_angle - angle_degrees) % 360.0)
+        return self._min_angle if dist_to_min <= dist_to_max else self._max_angle
 
     def stop(self) -> None:
         self._servo.detach()
