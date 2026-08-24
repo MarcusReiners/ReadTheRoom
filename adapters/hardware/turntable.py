@@ -1,12 +1,4 @@
 import logging
-import time
-
-from domain.policies import (
-    DOA_SMOOTHING_ALPHA,
-    MIN_CONSECUTIVE_LARGE_CHANGES,
-    MOVE_COOLDOWN_SECONDS,
-    ROTATION_THRESHOLD_DEGREES,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +9,7 @@ class DummyTurntableAdapter:
         self.home_offset_degrees = 0.0
 
     def rotate_towards(self, target_angle_degrees: float) -> None:
-        delta = target_angle_degrees - self.current_heading_degrees
-        if abs(delta) > ROTATION_THRESHOLD_DEGREES:
-            self.current_heading_degrees = target_angle_degrees
+        self.current_heading_degrees = target_angle_degrees
 
     def home(self) -> None:
         self.current_heading_degrees = 90.0
@@ -104,9 +94,6 @@ class ServoTurntableAdapter:
         self._min_angle, self._max_angle = self._windowed_range(home_offset_degrees)
 
         self.current_heading_degrees = (self._min_angle + self._max_angle) / 2
-        self._smoothed_target = self.current_heading_degrees
-        self._large_change_streak = 0
-        self._last_move_time = time.monotonic()
         self._servo = AngularServo(
             pin,
             initial_angle=self.current_heading_degrees if move_to_home_on_start else None,
@@ -206,58 +193,34 @@ class ServoTurntableAdapter:
         return (self._base_min_angle + self._base_max_angle) / 2
 
     def rotate_towards(self, target_angle_degrees: float) -> None:
-        # target_angle_degrees is DOA-style (90 degrees = straight ahead), independent
-        # of how min/max_angle happen to be configured; re-center onto the servo's own range.
-        center = (self._min_angle + self._max_angle) / 2
-        raw_target = center + (target_angle_degrees - 90.0)
-        raw_target = max(self._min_angle, min(self._max_angle, raw_target))
-
-        # Low-pass filter so a single noisy reading can't jerk the servo - it only
-        # ever chases a smoothed estimate.
-        self._smoothed_target += DOA_SMOOTHING_ALPHA * (raw_target - self._smoothed_target)
-
-        # Physical movement only happens once that estimate has drifted past the
-        # deadband threshold AND stayed there for several updates in a row - a
-        # one-off large reading doesn't move the servo, only a sustained one does.
-        if abs(self._smoothed_target - self.current_heading_degrees) > ROTATION_THRESHOLD_DEGREES:
-            self._large_change_streak += 1
-        else:
-            self._large_change_streak = 0
-
-        cooled_down = (time.monotonic() - self._last_move_time) >= MOVE_COOLDOWN_SECONDS
-        if self._large_change_streak >= MIN_CONSECUTIVE_LARGE_CHANGES and cooled_down:
-            self.current_heading_degrees = self._smoothed_target
-            self._servo.angle = self.current_heading_degrees
-            self._large_change_streak = 0
-            self._last_move_time = time.monotonic()
+        """Moves immediately to target_angle_degrees, every call - no
+        smoothing/deadband/cooldown. Noise rejection is the caller's job:
+        start_doa_tracking() only calls this while the ReSpeaker's onboard
+        VAD reports actual voice activity, so a still room simply never
+        calls this rather than being filtered out here after the fact."""
+        self.set_doa_angle_immediate(target_angle_degrees)
 
     def home(self) -> None:
-        """Return to the front-facing center position and reset tracking state,
-        bypassing the deadband/streak/cooldown gating - this is a deliberate
-        command, not a noisy DOA reading to be filtered."""
+        """Return to the front-facing center position - a deliberate command,
+        not a DOA reading."""
         center = (self._min_angle + self._max_angle) / 2
         self.current_heading_degrees = center
-        self._smoothed_target = center
-        self._large_change_streak = 0
-        self._last_move_time = time.monotonic()
         self._servo.angle = center
         logger.info("[Servo] Home-Position (%.0f Grad).", center)
 
     def set_angle_immediate(self, angle_degrees: float) -> None:
         """Directly drives the servo to an exact angle already expressed in
         the safe window's own coordinates (NOT the DOA 90-degrees-is-home
-        convention), bypassing the DOA smoothing/deadband/cooldown gating -
-        for deliberate test/calibration movements only, same idea as home()."""
+        convention) - for deliberate test/calibration movements, same idea
+        as home()."""
         angle_degrees = max(self._min_angle, min(self._max_angle, angle_degrees))
         self.current_heading_degrees = angle_degrees
-        self._smoothed_target = angle_degrees
         self._servo.angle = angle_degrees
 
     def set_doa_angle_immediate(self, target_angle_degrees: float) -> None:
         """Like set_angle_immediate(), but target_angle_degrees is in the DOA
         convention (90 = home/straight ahead) instead of the safe window's own
-        coordinates - same mapping rotate_towards() uses, applied immediately
-        without its smoothing/deadband/cooldown gating."""
+        coordinates."""
         center = (self._min_angle + self._max_angle) / 2
         self.set_angle_immediate(center + (target_angle_degrees - 90.0))
 
