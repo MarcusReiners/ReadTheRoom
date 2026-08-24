@@ -234,7 +234,13 @@ class ServoTurntableAdapter:
         set_doa_angle_immediate() is for one-off moves where "relative to
         home" is what's actually wanted (e.g. explicit angle tests)."""
         raw_target = self.current_heading_degrees + (target_angle_degrees - 90.0)
-        self.set_angle_immediate(self._nearest_reachable_angle(raw_target))
+        reachable = self._nearest_reachable_angle(raw_target)
+        logger.debug(
+            "[Servo] track_relative_angle: current=%.1f target=%.1f raw_target=%.1f -> %.1f (window %.1f-%.1f)",
+            self.current_heading_degrees, target_angle_degrees, raw_target, reachable,
+            self._min_angle, self._max_angle,
+        )
+        self.set_angle_immediate(reachable)
 
     def _nearest_reachable_angle(self, angle_degrees: float) -> float:
         """angle_degrees can be any real number, wrapped or not - normalizes
