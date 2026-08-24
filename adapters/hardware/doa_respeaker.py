@@ -17,10 +17,24 @@ _VOICEACTIVITY_PARAM = (19, 0x20)
 
 def raw_to_target_degrees(raw: float, front_reference_degrees: float) -> float:
     """Converts a raw array reading into a DOA-convention angle (90 = straight
-    ahead, matching ServoTurntableAdapter's rotate_towards()/track_relative_angle()).
-    Module-level and shared with scripts/simulate_doa.py so the two can't drift
-    out of sync with each other the way an inline-duplicated copy would."""
-    return (90.0 + (raw - front_reference_degrees)) % 360.0
+    ahead, matching ServoTurntableAdapter's rotate_towards()/track_relative_angle()
+    - track_relative_angle() derives its actual servo delta from
+    target_angle_degrees - 90). Module-level and shared with
+    scripts/simulate_doa.py so the two can't drift out of sync with each
+    other the way an inline-duplicated copy would.
+
+    The raw-front_reference_degrees difference is wrapped to the SIGNED
+    range (-180, 180], not a plain % 360 into [0, 360) - confirmed on the
+    bench this matters: since the servo moves linearly rather than wrapping
+    around (0 and 360 are NOT the same position to it), a reading just past
+    the front reference on the "high" side used to produce a target near
+    360, which set_angle_immediate()'s linear clamp then read as a huge
+    delta in the wrong direction, instead of the small, correct one on the
+    other side of 90. Reducing to the shortest signed difference first means
+    target - 90 is always the smallest real turn that reaches the intended
+    direction, which is the only sensible reading for hardware with no wraparound."""
+    diff = (raw - front_reference_degrees + 180.0) % 360.0 - 180.0
+    return 90.0 + diff
 
 
 class RespeakerDOAAdapter:

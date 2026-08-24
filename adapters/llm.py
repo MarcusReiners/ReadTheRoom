@@ -27,14 +27,14 @@ class LLMGatewayAdapter:
     def ask_stream(self, user_text: str, history: Optional[list[dict]] = None) -> Iterator[str]:
         try:
             yield from self._ask_stream(self.model, self.api_base, user_text, history)
-        except litellm.exceptions.APIConnectionError:
+        except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout):
             if self.fallback_model:
-                logger.warning("'%s' nicht erreichbar, weiche aus auf Fallback '%s'.",
+                logger.warning("'%s' nicht erreichbar/zu langsam, weiche aus auf Fallback '%s'.",
                                 self.model, self.fallback_model)
                 try:
                     yield from self._ask_stream(self.fallback_model, self.fallback_api_base, user_text, history)
                     return
-                except litellm.exceptions.APIConnectionError:
+                except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout):
                     pass
             yield ("Fehler: Kann das LLM-Backend nicht erreichen. "
                    "Läuft der Server und ist die URL korrekt?")
@@ -59,6 +59,11 @@ class LLMGatewayAdapter:
             # non-reasoning model just stops early via finish_reason=stop
             # well under this ceiling, so it costs those nothing.
             max_tokens=500,
+            # No timeout previously meant a slow/hung API response (seen once
+            # taking 46s+) blocked the whole turn with nothing to make it
+            # fail fast - this raises Timeout instead, which now also
+            # triggers the fallback model the same way a connection error does.
+            timeout=15,
         )
         if model.startswith("ollama"):
             # Ollama-specific: disables qwen3's "think" preamble via its
