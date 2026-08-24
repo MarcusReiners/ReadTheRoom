@@ -177,6 +177,7 @@ def vad_input_loop(
             time.sleep(poll_interval_s)
             continue
 
+        aborted = False
         try:
             temp_in = "temp_in_vad.wav"
             bus.publish(ListeningStateChanged(listening=True))
@@ -186,6 +187,12 @@ def vad_input_loop(
             last_active_time = start_time
             while True:
                 time.sleep(poll_interval_s)
+                if assistant_speaking.is_set():
+                    # TTS started mid-recording - almost certainly means this
+                    # recording has picked up (or is about to pick up) the
+                    # assistant's own voice. Discard rather than transcribe it.
+                    aborted = True
+                    break
                 with doa_lock:
                     still_active = doa.get_voice_active()
                 if still_active:
@@ -199,6 +206,12 @@ def vad_input_loop(
             success = _finish_recording(proc, raw_file, temp_in)
         finally:
             mic_lock.release()
+
+        if aborted:
+            if os.path.exists(temp_in):
+                os.remove(temp_in)
+            logger.info("[VAD] Aufnahme verworfen (Assistent hat zu sprechen begonnen).")
+            continue
 
         if not success:
             logger.error("VAD-Aufnahme fehlgeschlagen.")
@@ -296,11 +309,12 @@ def main() -> None:
 
         doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
         doa_lock = threading.Lock()
-        start_doa_tracking(doa, turntable, face, lock=doa_lock)
 
         assistant_speaking = threading.Event()
         bus.subscribe(SpeechPlaybackStarted, lambda e: assistant_speaking.set())
         bus.subscribe(SpeechPlaybackEnded, lambda e: assistant_speaking.clear())
+
+        start_doa_tracking(doa, turntable, face, lock=doa_lock, assistant_speaking=assistant_speaking)
         threading.Thread(
             target=vad_input_loop,
             args=(bus, turn_queue, stt, doa, doa_lock, mic_lock, assistant_speaking),

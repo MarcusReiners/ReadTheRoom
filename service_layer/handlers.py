@@ -78,32 +78,42 @@ def register_tie_led_handlers(bus: EventBus, radar) -> None:
     radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_PERIOD_MS))
 
 
-def start_doa_tracking(doa, turntable, face, poll_interval_s: float = 0.3, lock=None) -> None:
+def start_doa_tracking(
+    doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
+) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
     detected speech - same logic as scripts/test_hardware.py's
-    live_doa_tracking(). Runs unconditionally rather than being gated to the
-    recording window, so note it will also react to the assistant's own
-    voice being picked back up by the mic during TTS playback.
+    live_doa_tracking().
 
     lock serializes USB control-transfer access to the ReSpeaker with any
     other thread reading the same device concurrently (see main.py's
     vad_input_loop) - pass None if this is the only consumer.
-    """
+
+    assistant_speaking (a threading.Event, set for the duration of
+    SpeechPlaybackStarted..SpeechPlaybackEnded) skips reacting entirely while
+    TTS is playing - confirmed on the bench this isn't just cosmetic: without
+    it, the head swings wildly tracking its own voice mid-sentence, and the
+    resulting servo motor noise is itself loud enough to trip the VAD and
+    trigger a bogus recording, which is picked up by main.py's
+    vad_input_loop as if a person had spoken - a real feedback loop, not a
+    hypothetical one. Pass None to disable the guard (not recommended for
+    normal use)."""
     lock = lock or contextlib.nullcontext()
 
     def _tracking_loop() -> None:
         logger.info("[DOA] Tracking gestartet.")
         while True:
             try:
-                with lock:
-                    active = doa.get_voice_active()
-                    angle = doa.get_direction_degrees() if active else None
-                logger.debug("[DOA] voice_active=%s", active)
-                if active:
-                    logger.info("[DOA] Stimme erkannt bei %.0f Grad.", angle)
-                    turntable.rotate_towards(target_angle_degrees=angle)
-                    face.set_eye_direction(angle_degrees=angle)
+                if assistant_speaking is None or not assistant_speaking.is_set():
+                    with lock:
+                        active = doa.get_voice_active()
+                        angle = doa.get_direction_degrees() if active else None
+                    logger.debug("[DOA] voice_active=%s", active)
+                    if active:
+                        logger.info("[DOA] Stimme erkannt bei %.0f Grad.", angle)
+                        turntable.rotate_towards(target_angle_degrees=angle)
+                        face.set_eye_direction(angle_degrees=angle)
             except Exception:
                 logger.exception("[DOA] Fehler beim Lesen/Ansteuern - Tracking-Thread beendet sich NICHT.")
             time.sleep(poll_interval_s)
