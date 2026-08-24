@@ -51,7 +51,7 @@ def build_tts(cfg, bus: EventBus):
     raise ValueError(f"Unbekannter TTS_PROVIDER: {cfg.TTS_PROVIDER!r}")
 
 
-def build_turntable(cfg):
+def build_turntable(cfg, move_to_home_on_start: bool = True):
     if not cfg.USE_SERVO:
         from adapters.hardware.turntable import DummyTurntableAdapter
         return DummyTurntableAdapter()
@@ -67,6 +67,7 @@ def build_turntable(cfg):
         hardware_max_angle=cfg.SERVO_HARDWARE_MAX_ANGLE,
         use_pigpio=cfg.SERVO_USE_PIGPIO,
         home_offset_degrees=load_home_offset(cfg.SERVO_CALIBRATION_PATH),
+        move_to_home_on_start=move_to_home_on_start,
     )
 
 

@@ -17,23 +17,28 @@ def main() -> None:
     from adapters.factory import build_turntable
     from adapters.hardware.servo_calibration import save_home_offset
 
-    turntable = build_turntable(config)
+    # move_to_home_on_start=False: the servo stays exactly wherever it already
+    # physically is - constructing the adapter (or anything below, before the
+    # first nudge) must not command any movement of its own.
+    turntable = build_turntable(config, move_to_home_on_start=False)
 
-    # Start from wherever the last saved home offset actually points to in
-    # real hardware degrees, not the offset number itself - nudges from here
-    # move the servo directly on its true 0-360 range, unclamped by the
-    # cable-safety window (that window is for autonomous conversation-driven
-    # movement, not a supervised calibration session watching every move).
+    # Label only, not applied to hardware - servos have no position feedback,
+    # so this is just a reference point for computing relative deltas. It
+    # will very likely NOT match reality (the servo may have been powered
+    # off, bumped, etc. since it was last commanded) - the first nudge you
+    # type is what actually starts moving it, from wherever it really is.
     raw_angle = turntable.raw_angle_for_offset(turntable.home_offset_degrees)
-    turntable.set_raw_angle(raw_angle)
 
     print(
-        "Servo-Home-Kalibrierung (unbeschraenkt - bewegt sich frei auf dem vollen "
-        "Hardware-Bereich, nicht nur im sicheren 140-Grad-Fenster).\n"
-        f"Aktuelle Position: {raw_angle:.1f} Grad "
-        f"(entspricht gespeichertem Offset {turntable.home_offset_degrees:.1f}).\n"
-        "Zahl + Enter (z.B. 5 oder -3) bewegt den Kopf um diese Gradzahl.\n"
-        "'s' + Enter speichert die aktuelle Position als neue Home-Position.\n"
+        "Servo-Home-Kalibrierung - der Servo bewegt sich NICHT beim Start, "
+        "erst durch deine Eingaben.\n"
+        f"Referenzwert: {raw_angle:.1f} Grad (aus gespeichertem Offset "
+        f"{turntable.home_offset_degrees:.1f}) - entspricht evtl. nicht der "
+        "tatsaechlichen Position, da der Servo keine Positionsrueckmeldung hat.\n"
+        "Zahl + Enter (z.B. 5 oder -3) bewegt den Kopf um diese Gradzahl, "
+        "unbeschraenkt vom sicheren 140-Grad-Fenster.\n"
+        "'s' + Enter speichert die aktuelle Position als neue Home-Position "
+        "(danach im Normalbetrieb wieder auf +/-70 Grad ab hier begrenzt).\n"
         "'q' + Enter oder Strg+C beendet (ungespeicherte Aenderungen gehen verloren).\n"
     )
 
@@ -56,8 +61,7 @@ def main() -> None:
                 print("Unbekannte Eingabe - Zahl, 's' zum Speichern, oder 'q' zum Beenden.")
                 continue
 
-            raw_angle += delta
-            turntable.set_raw_angle(raw_angle)
+            raw_angle = turntable.set_raw_angle(raw_angle + delta)
     except KeyboardInterrupt:
         pass
     finally:

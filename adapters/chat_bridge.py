@@ -59,7 +59,12 @@ class ChatBridgeAdapter:
         # unclamped by the cable-safety window (see calibrate_servo_home.py) -
         # nudges move this and the servo directly; only "save" commits it as
         # the new home_offset_degrees.
-        self._calibration_raw_angle = self.turntable.raw_angle_for_offset(self.turntable.home_offset_degrees)
+        # Note: does not itself move the servo - it's just clamped bookkeeping
+        # in sync with whatever position ServoTurntableAdapter's own __init__
+        # already drove it to via the (still cable-safe) home_offset_degrees.
+        self._calibration_raw_angle = self.turntable.clamp_raw_angle(
+            self.turntable.raw_angle_for_offset(self.turntable.home_offset_degrees)
+        )
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._clients: set[WebSocket] = set()
@@ -149,8 +154,7 @@ class ChatBridgeAdapter:
         async def nudge_servo(request: Request):
             body = await request.json()
             delta = float(body.get("delta", 0))
-            self._calibration_raw_angle += delta
-            self.turntable.set_raw_angle(self._calibration_raw_angle)
+            self._calibration_raw_angle = self.turntable.set_raw_angle(self._calibration_raw_angle + delta)
             offset = self.turntable.offset_for_raw_angle(self._calibration_raw_angle)
             return JSONResponse({"home_offset_degrees": offset})
 
