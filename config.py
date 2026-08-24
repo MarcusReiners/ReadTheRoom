@@ -36,10 +36,14 @@ OPENAI_API_KEY = _env_opt("OPENAI_API_KEY")
 GEMINI_API_KEY = _env_opt("GEMINI_API_KEY")
 
 # --- ElevenLabs settings ------------------------------------------------
-ELEVENLABS_VOICE_ID = _env("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+ELEVENLABS_VOICE_ID = _env("ELEVENLABS_VOICE_ID", "17emZEdpFxzVxRKIMpMN")
 ELEVENLABS_TTS_MODEL = _env("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
 ELEVENLABS_STT_MODEL = _env("ELEVENLABS_STT_MODEL", "scribe_v1")
 ELEVENLABS_LANGUAGE_CODE = _env("ELEVENLABS_LANGUAGE_CODE", "deu")
+# ISO 639-1 (two-letter), unlike ELEVENLABS_LANGUAGE_CODE above which is
+# STT's ISO 639-3 - only eleven_flash_v2_5/eleven_turbo_v2_5-class models
+# actually enforce this for TTS.
+ELEVENLABS_TTS_LANGUAGE_CODE = _env("ELEVENLABS_TTS_LANGUAGE_CODE", "de")
 
 # --- LLM (via LiteLLM, provider swap = change the model string) --------
 LLM_MODEL = _env("LLM_MODEL", "openai/gpt-4o-mini")

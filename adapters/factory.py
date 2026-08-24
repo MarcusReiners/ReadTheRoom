@@ -31,6 +31,7 @@ def build_tts(cfg, bus: EventBus):
             voice_id=cfg.ELEVENLABS_VOICE_ID,
             model_id=cfg.ELEVENLABS_TTS_MODEL,
             speaker_device=cfg.SPEAKER_DEVICE,
+            language_code=cfg.ELEVENLABS_TTS_LANGUAGE_CODE,
         )
     if cfg.TTS_PROVIDER == "remote":
         from adapters.tts.remote import RemoteTTSAdapter

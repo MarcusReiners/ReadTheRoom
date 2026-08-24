@@ -8,22 +8,24 @@ import config
 import logging_setup
 from service_layer.bus import EventBus
 
-HOLD_SECONDS = 2.5
+HOLD_SECONDS = 4.0
+WHITE = (255, 255, 255)
 
-# (name, mode, r, g, b)
+# (name, mode, period_ms) - white only, states differ by animation speed/mode.
 STEPS = [
-    ("Aus", "off", 0, 0, 0),
-    ("Solid Rot", "solid", 200, 20, 20),
-    ("Solid Gruen", "solid", 20, 180, 60),
-    ("Solid Blau", "solid", 0, 60, 200),
-    ("Solid Gold (Speaking-Farbe)", "solid", 200, 160, 90),
-    ("Pulse Blau (Idle-Farbe)", "pulse", 0, 60, 160),
-    ("Pulse Rot (Listening-Farbe)", "pulse", 160, 20, 20),
+    ("Aus", "off", None),
+    ("Solid (Speaking-Zustand)", "solid", None),
+    ("Pulse langsam (Idle-Zustand, 3000ms)", "pulse", 3000),
+    ("Pulse schnell (Listening-Zustand, 900ms)", "pulse", 900),
 ]
 
 
-def send_led(radar, mode: str, r: int, g: int, b: int) -> None:
-    radar.send_command({"cmd": "set_led", "mode": mode, "r": r, "g": g, "b": b})
+def send_led(radar, mode: str, period_ms: int | None) -> None:
+    r, g, b = WHITE
+    cmd = {"cmd": "set_led", "mode": mode, "r": r, "g": g, "b": b}
+    if period_ms is not None:
+        cmd["period_ms"] = period_ms
+    radar.send_command(cmd)
 
 
 def main() -> None:
@@ -50,15 +52,15 @@ def main() -> None:
 
     try:
         while True:
-            for name, mode, r, g, b in STEPS:
-                print(f"-> {name} ({mode}, r={r} g={g} b={b})")
-                send_led(radar, mode, r, g, b)
+            for name, mode, period_ms in STEPS:
+                print(f"-> {name} ({mode}, period_ms={period_ms})")
+                send_led(radar, mode, period_ms)
                 time.sleep(HOLD_SECONDS)
             print("Durchlauf fertig, Strg+C zum Beenden oder weiter im Kreis...\n")
     except KeyboardInterrupt:
         pass
     finally:
-        send_led(radar, "off", 0, 0, 0)
+        send_led(radar, "off", None)
         if hasattr(radar, "stop"):
             radar.stop()
         print("\nLEDs aus. Ciao!")
