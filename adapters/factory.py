@@ -68,7 +68,6 @@ def build_turntable(cfg, move_to_home_on_start: bool = True):
         use_pigpio=cfg.SERVO_USE_PIGPIO,
         home_offset_degrees=load_home_offset(cfg.SERVO_CALIBRATION_PATH),
         move_to_home_on_start=move_to_home_on_start,
-        tracking_smoothing_alpha=cfg.SERVO_TRACKING_SMOOTHING_ALPHA,
     )
 
 

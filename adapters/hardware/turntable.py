@@ -1,4 +1,5 @@
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -8,7 +9,7 @@ class DummyTurntableAdapter:
         self.current_heading_degrees = 90.0  # 90 degrees = front-facing home position
         self.home_offset_degrees = 0.0
 
-    def rotate_towards(self, target_angle_degrees: float) -> None:
+    def rotate_towards(self, target_angle_degrees: float, ramp_duration_s: float | None = None) -> None:
         self.current_heading_degrees = target_angle_degrees
 
     def home(self) -> None:
@@ -20,8 +21,11 @@ class DummyTurntableAdapter:
     def set_doa_angle_immediate(self, target_angle_degrees: float) -> None:
         self.set_angle_immediate(target_angle_degrees)
 
-    def track_relative_angle(self, target_angle_degrees: float) -> None:
+    def track_relative_angle(self, target_angle_degrees: float, ramp_duration_s: float | None = None) -> None:
         self.current_heading_degrees = self.current_heading_degrees + (target_angle_degrees - 90.0)
+
+    def predict_relative_move(self, target_angle_degrees: float) -> float:
+        return abs(target_angle_degrees - 90.0)
 
     def set_home_offset(self, offset_degrees: float) -> None:
         self.home_offset_degrees = offset_degrees
@@ -53,7 +57,6 @@ class ServoTurntableAdapter:
         use_pigpio: bool = False,
         home_offset_degrees: float = 0.0,
         move_to_home_on_start: bool = True,
-        tracking_smoothing_alpha: float = 0.6,
     ) -> None:
         """min_angle/max_angle is the safe clamp every commanded move is restricted
         to (cable-safety window); hardware_min_angle/hardware_max_angle is the
@@ -81,13 +84,6 @@ class ServoTurntableAdapter:
         jumping to a stale computed home before the operator has even started
         adjusting it by hand. Normal/production use (main.py, test scripts)
         wants the default True - moving to a known position on startup.
-
-        tracking_smoothing_alpha softens track_relative_angle()'s live DOA
-        moves (1.0 = no smoothing, jump straight to the new target every
-        time; lower = softer, takes multiple consecutive similar readings to
-        fully converge). Deliberately NOT applied to set_doa_angle_immediate()/
-        set_angle_immediate(), which are for deliberate one-off moves that
-        should land exactly where asked.
         """
         if use_pigpio:
             from gpiozero import Device
@@ -101,7 +97,6 @@ class ServoTurntableAdapter:
         self._base_max_angle = max_angle
         self._hardware_min_angle = hardware_min_angle
         self._hardware_max_angle = hardware_max_angle
-        self._tracking_smoothing_alpha = tracking_smoothing_alpha
         self.home_offset_degrees = home_offset_degrees
         self._min_angle, self._max_angle = self._windowed_range(home_offset_degrees)
 
@@ -203,17 +198,19 @@ class ServoTurntableAdapter:
     def _default_center_angle(self) -> float:
         return (self._base_min_angle + self._base_max_angle) / 2
 
-    def rotate_towards(self, target_angle_degrees: float) -> None:
-        """Moves immediately to target_angle_degrees, every call - no
-        smoothing/deadband/cooldown. Noise rejection is the caller's job:
-        start_doa_tracking() only calls this while the ReSpeaker's onboard
-        VAD reports actual voice activity, so a still room simply never
-        calls this rather than being filtered out here after the fact.
+    def rotate_towards(self, target_angle_degrees: float, ramp_duration_s: float | None = None) -> None:
+        """Moves to target_angle_degrees, every call - no deadband/cooldown.
+        Noise rejection is the caller's job: start_doa_tracking() only calls
+        this while the ReSpeaker's onboard VAD reports actual voice activity,
+        so a still room simply never calls this rather than being filtered
+        out here after the fact.
 
         Uses track_relative_angle(), not set_doa_angle_immediate() - the mic
         array is mounted on the moving head, so every live reading has to be
-        interpreted relative to the head's current position, not home."""
-        self.track_relative_angle(target_angle_degrees)
+        interpreted relative to the head's current position, not home.
+
+        ramp_duration_s: see track_relative_angle()."""
+        self.track_relative_angle(target_angle_degrees, ramp_duration_s=ramp_duration_s)
 
     def home(self) -> None:
         """Return to the front-facing center position - a deliberate command,
@@ -247,7 +244,7 @@ class ServoTurntableAdapter:
         raw_target = center + (target_angle_degrees - 90.0)
         self.set_angle_immediate(raw_target)
 
-    def track_relative_angle(self, target_angle_degrees: float) -> None:
+    def track_relative_angle(self, target_angle_degrees: float, ramp_duration_s: float | None = None) -> None:
         """Like set_doa_angle_immediate(), but applied relative to wherever
         the head is CURRENTLY pointing instead of home. The mic array is
         mounted rigidly on the moving head, so its own DOA reading (90 =
@@ -265,17 +262,41 @@ class ServoTurntableAdapter:
         window range, which was wrong: this hardware's angle-to-pulse-width
         mapping is a straight line, not a circle, so out-of-window targets
         just clamp to whichever literal edge value (min or max) is closer on
-        that line - normal linear clamping, nothing circular about it."""
+        that line - normal linear clamping, nothing circular about it.
+
+        ramp_duration_s: if given (not None), glides there over that many
+        seconds via small intermediate PWM updates instead of jumping in one
+        - confirmed on the bench that a single instant update looks abrupt
+        (the servo moves at its own max speed), where a short eased glide
+        looks like natural head motion instead."""
         raw_target = self.current_heading_degrees + (target_angle_degrees - 90.0)
-        smoothed_target = self.current_heading_degrees + self._tracking_smoothing_alpha * (
-            raw_target - self.current_heading_degrees
-        )
         logger.debug(
-            "[Servo] track_relative_angle: current=%.1f target=%.1f raw_target=%.1f smoothed=%.1f (window %.1f-%.1f)",
-            self.current_heading_degrees, target_angle_degrees, raw_target, smoothed_target,
+            "[Servo] track_relative_angle: current=%.1f target=%.1f raw_target=%.1f (window %.1f-%.1f)",
+            self.current_heading_degrees, target_angle_degrees, raw_target,
             self._min_angle, self._max_angle,
         )
-        self.set_angle_immediate(smoothed_target)
+        if ramp_duration_s and ramp_duration_s > 0:
+            self._ramp_to(raw_target, ramp_duration_s)
+        else:
+            self.set_angle_immediate(raw_target)
+
+    def predict_relative_move(self, target_angle_degrees: float) -> float:
+        """How far track_relative_angle(target_angle_degrees) would actually
+        move the servo (after clamping), without moving it - lets a caller
+        size a ramp/settle duration before committing to the move."""
+        raw_target = self.current_heading_degrees + (target_angle_degrees - 90.0)
+        clamped = max(self._min_angle, min(self._max_angle, raw_target))
+        return abs(clamped - self.current_heading_degrees)
+
+    def _ramp_to(self, target_angle_degrees: float, duration_s: float, steps_per_s: float = 50.0) -> None:
+        start_angle = self.current_heading_degrees
+        n_steps = max(1, int(duration_s * steps_per_s))
+        interval = duration_s / n_steps
+        for i in range(1, n_steps + 1):
+            angle = start_angle + (target_angle_degrees - start_angle) * (i / n_steps)
+            self.set_angle_immediate(angle)
+            if i < n_steps:
+                time.sleep(interval)
 
     def stop(self) -> None:
         self._servo.detach()

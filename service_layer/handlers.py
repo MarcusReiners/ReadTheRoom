@@ -140,9 +140,7 @@ def start_doa_tracking(
                         face.set_eye_direction(angle_degrees=angle)
                         time.sleep(eye_lead_s)
 
-                        before = turntable.current_heading_degrees
-                        turntable.rotate_towards(target_angle_degrees=angle)
-                        moved = abs(turntable.current_heading_degrees - before)
+                        moved = turntable.predict_relative_move(angle)
                         if moved > 0.5:
                             settle_s = settle_base_s + moved / settle_deg_per_s
                             moving_until = time.monotonic() + settle_s
@@ -151,7 +149,14 @@ def start_doa_tracking(
                             # aligned together instead of the eyes staying
                             # cocked to the side after the head catches up.
                             face.animate_eye_direction(90.0, duration_s=settle_s)
+                            # Glides there over settle_s instead of jumping in
+                            # one PWM update - an instant snap looks abrupt,
+                            # this reads as natural head motion. Blocks this
+                            # thread for the ramp's duration, which is fine:
+                            # nothing else would happen during settling anyway.
+                            turntable.rotate_towards(target_angle_degrees=angle, ramp_duration_s=settle_s)
                         else:
+                            turntable.rotate_towards(target_angle_degrees=angle)
                             face.set_eye_direction(angle_degrees=90.0)
             except Exception:
                 logger.exception("[DOA] Fehler beim Lesen/Ansteuern - Tracking-Thread beendet sich NICHT.")

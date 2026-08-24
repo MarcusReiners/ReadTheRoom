@@ -166,7 +166,7 @@ def console_input_loop(
 def vad_input_loop(
     bus: EventBus, turn_queue: "queue.Queue[str]", stt, doa, doa_lock: threading.Lock,
     mic_lock: threading.Lock, assistant_speaking: threading.Event,
-    poll_interval_s: float = 0.2, trailing_silence_s: float = 1.5, trigger_confirm_polls: int = 2,
+    poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8, trigger_confirm_polls: int = 2,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
     onboard VAD and starts recording automatically once it detects speech,
