@@ -68,9 +68,10 @@ def demo_servo(turntable) -> None:
     if turntable is None:
         return
 
-    # Note: rotate_towards() re-centers its input on 90 degrees = straight ahead, so
-    # this only sweeps the servo's true min/center/max as written while SERVO_MIN_ANGLE
-    # and SERVO_MAX_ANGLE straddle 90 degrees symmetrically (true for the defaults).
+    # set_doa_angle_immediate() (relative to HOME, not current position) - a
+    # fixed, repeatable sweep, unlike rotate_towards()/track_relative_angle()
+    # which live DOA tracking uses and which would compound with each step
+    # here instead of landing on the same three positions every time.
     print(f"Servo: sweeping {config.SERVO_MIN_ANGLE}-{config.SERVO_MAX_ANGLE} Grad...")
     for angle in (
         config.SERVO_MIN_ANGLE,
@@ -78,7 +79,7 @@ def demo_servo(turntable) -> None:
         (config.SERVO_MIN_ANGLE + config.SERVO_MAX_ANGLE) / 2,
     ):
         print(f"  -> {angle} Grad")
-        turntable.rotate_towards(target_angle_degrees=angle)
+        turntable.set_doa_angle_immediate(target_angle_degrees=angle)
         time.sleep(2)
 
 
