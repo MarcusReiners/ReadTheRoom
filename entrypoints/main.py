@@ -270,7 +270,7 @@ def vad_input_loop(
 
 def handle_turn(
     text: str, bus: EventBus, conversation: ConversationState, store: ConversationStore,
-    llm, tts, face, turntable,
+    llm, tts,
 ) -> None:
     conversation_id = store.get_active_id()
     history = store.get_history(conversation_id)
@@ -278,8 +278,12 @@ def handle_turn(
     store.add_user_message(conversation_id, text)
     bus.publish(SpeechTranscribed(text=text, conversation_id=conversation_id))
 
-    face.set_eye_direction(angle_degrees=90.0)
-    turntable.home()
+    # No recentering here on purpose: the head should stay exactly where DOA
+    # tracking last left it (facing whoever just spoke) all the way through
+    # the reply, not snap back to home first. start_doa_tracking()'s own
+    # assistant_speaking guard already stops it from reacting to anything
+    # further while the reply plays, so it just holds this position until
+    # tracking resumes afterward.
 
     def mirrored_deltas():
         for delta in llm.ask_stream(text, history):
@@ -376,7 +380,7 @@ def main() -> None:
     while True:
         try:
             text = turn_queue.get()
-            handle_turn(text, bus, conversation, store, llm, tts, face, turntable)
+            handle_turn(text, bus, conversation, store, llm, tts)
         except KeyboardInterrupt:
             print("\nCiao!")
             stt.stop()
