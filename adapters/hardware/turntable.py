@@ -27,6 +27,9 @@ class DummyTurntableAdapter:
     def set_angle_immediate(self, angle_degrees: float) -> None:
         self.current_heading_degrees = angle_degrees
 
+    def set_doa_angle_immediate(self, target_angle_degrees: float) -> None:
+        self.set_angle_immediate(target_angle_degrees)
+
     def set_home_offset(self, offset_degrees: float) -> None:
         self.home_offset_degrees = offset_degrees
 
@@ -241,13 +244,22 @@ class ServoTurntableAdapter:
         logger.info("[Servo] Home-Position (%.0f Grad).", center)
 
     def set_angle_immediate(self, angle_degrees: float) -> None:
-        """Directly drives the servo to an exact angle, bypassing the DOA
-        smoothing/deadband/cooldown gating - for deliberate test/calibration
-        movements only, same idea as home()."""
+        """Directly drives the servo to an exact angle already expressed in
+        the safe window's own coordinates (NOT the DOA 90-degrees-is-home
+        convention), bypassing the DOA smoothing/deadband/cooldown gating -
+        for deliberate test/calibration movements only, same idea as home()."""
         angle_degrees = max(self._min_angle, min(self._max_angle, angle_degrees))
         self.current_heading_degrees = angle_degrees
         self._smoothed_target = angle_degrees
         self._servo.angle = angle_degrees
+
+    def set_doa_angle_immediate(self, target_angle_degrees: float) -> None:
+        """Like set_angle_immediate(), but target_angle_degrees is in the DOA
+        convention (90 = home/straight ahead) instead of the safe window's own
+        coordinates - same mapping rotate_towards() uses, applied immediately
+        without its smoothing/deadband/cooldown gating."""
+        center = (self._min_angle + self._max_angle) / 2
+        self.set_angle_immediate(center + (target_angle_degrees - 90.0))
 
     def stop(self) -> None:
         self._servo.detach()
