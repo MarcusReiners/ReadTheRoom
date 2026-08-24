@@ -28,14 +28,16 @@ def main() -> None:
         return
 
     from adapters.factory import build_turntable
+    from adapters.hardware.doa_respeaker import raw_to_target_degrees
 
     turntable = build_turntable(config)
     front_reference = config.DOA_FRONT_REFERENCE_DEGREES
     print(
         "DOA-Simulation - speist simulierte RAW-Sensorwerte durch dieselbe "
-        "Umrechnung wie RespeakerDOAAdapter.get_direction_degrees(), dann in "
-        "rotate_towards() (exakt derselbe Pfad wie beim echten Tracking) - "
-        "ganz ohne Sensor, um reine Code-Logik von Sensor-Rauschen zu trennen.\n"
+        "Umrechnung wie RespeakerDOAAdapter.get_direction_degrees() (importiert, "
+        "nicht dupliziert), dann in rotate_towards() (exakt derselbe Pfad wie "
+        "beim echten Tracking) - ganz ohne Sensor, um reine Code-Logik von "
+        "Sensor-Rauschen zu trennen.\n"
         f"front_reference={front_reference:.1f}\n"
         f"Start: current_heading_degrees={turntable.current_heading_degrees:.1f} "
         f"(sicherer Bereich {turntable._min_angle:.1f}-{turntable._max_angle:.1f})\n"
@@ -43,7 +45,7 @@ def main() -> None:
 
     try:
         for raw in RAW_READINGS:
-            target = (90.0 + (raw - front_reference)) % 360.0
+            target = raw_to_target_degrees(raw, front_reference)
             before = turntable.current_heading_degrees
             print(f"-> Simuliere RAW={raw:.0f} Grad -> target={target:.1f} Grad (aktuell: {before:.1f})")
             turntable.rotate_towards(target_angle_degrees=target)

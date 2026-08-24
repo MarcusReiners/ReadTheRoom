@@ -15,6 +15,21 @@ _DOAANGLE_PARAM = (21, 0x00)
 _VOICEACTIVITY_PARAM = (19, 0x20)
 
 
+def raw_to_target_degrees(raw: float, front_reference_degrees: float) -> float:
+    """Converts a raw array reading into a DOA-convention angle (90 = straight
+    ahead, matching ServoTurntableAdapter's rotate_towards()/track_relative_angle()).
+    Module-level and shared with scripts/simulate_doa.py so the two can't drift
+    out of sync with each other the way an inline-duplicated copy would.
+
+    The delta from front_reference_degrees is SUBTRACTED, not added -
+    confirmed empirically on the bench: with the addition sign, the head
+    turned away from the sound source instead of toward it (inverted
+    left/right). This is a property of how the array's raw angle convention
+    relates to real-world direction for this specific unit/mount, not
+    something derivable from the datasheet alone."""
+    return (90.0 - (raw - front_reference_degrees)) % 360.0
+
+
 class RespeakerDOAAdapter:
     """Reads onboard direction-of-arrival and voice activity from a
     ReSpeaker USB Mic Array v2.0.
@@ -64,18 +79,8 @@ class RespeakerDOAAdapter:
         return value
 
     def get_direction_degrees(self) -> float:
-        """Returns a DOA-convention angle (90 = straight ahead, matching
-        ServoTurntableAdapter's rotate_towards()), as a plain circular shift
-        of the array's raw 0-360 reading by front_reference_degrees - modulo
-        360, deliberately with NO attempt to resolve it to a "shortest path"
-        signed value here. That resolution has to happen against the servo's
-        actual reachable window (see ServoTurntableAdapter._nearest_reachable_angle),
-        not against an arbitrary +/-180 cut from the front reference - doing
-        it here caused two nearly-identical real-world directions, just
-        either side of "directly behind", to snap to opposite ends of the
-        safe window instead of both landing on whichever edge is truly closer."""
         raw = float(self._read_param(*_DOAANGLE_PARAM))
-        return (90.0 + (raw - self._front_reference_degrees)) % 360.0
+        return raw_to_target_degrees(raw, self._front_reference_degrees)
 
     def get_voice_active(self) -> bool:
         """Onboard VAD flag - use this to gate on "loud enough"/speech-like sound
