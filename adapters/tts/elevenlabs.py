@@ -17,12 +17,14 @@ class ElevenLabsTTSAdapter(StreamingTTSAdapter):
         voice_id: str,
         model_id: str = "eleven_flash_v2_5",
         speaker_device: str = "default",
+        language_code: str | None = None,
     ) -> None:
         super().__init__(bus=bus, speaker_device=speaker_device)
         if not api_key:
             raise ValueError("ELEVENLABS_API_KEY ist nicht gesetzt.")
         self.voice_id = voice_id
         self.model_id = model_id
+        self.language_code = language_code
         self._client = ElevenLabs(api_key=api_key)
 
     @property
@@ -35,6 +37,7 @@ class ElevenLabsTTSAdapter(StreamingTTSAdapter):
             voice_id=self.voice_id,
             model_id=self.model_id,
             output_format=_OUTPUT_FORMAT,
+            language_code=self.language_code,
         )
         for chunk in stream:
             if chunk:
