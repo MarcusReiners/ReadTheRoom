@@ -19,25 +19,36 @@ def main() -> None:
 
     turntable = build_turntable(config)
 
+    # Start from wherever the last saved home offset actually points to in
+    # real hardware degrees, not the offset number itself - nudges from here
+    # move the servo directly on its true 0-360 range, unclamped by the
+    # cable-safety window (that window is for autonomous conversation-driven
+    # movement, not a supervised calibration session watching every move).
+    raw_angle = turntable.raw_angle_for_offset(turntable.home_offset_degrees)
+    turntable.set_raw_angle(raw_angle)
+
     print(
-        "Servo-Home-Kalibrierung.\n"
-        f"Aktueller Offset: {turntable.home_offset_degrees:.1f} Grad "
-        f"(aus {config.SERVO_CALIBRATION_PATH}, 0 falls noch nie gespeichert).\n"
+        "Servo-Home-Kalibrierung (unbeschraenkt - bewegt sich frei auf dem vollen "
+        "Hardware-Bereich, nicht nur im sicheren 140-Grad-Fenster).\n"
+        f"Aktuelle Position: {raw_angle:.1f} Grad "
+        f"(entspricht gespeichertem Offset {turntable.home_offset_degrees:.1f}).\n"
         "Zahl + Enter (z.B. 5 oder -3) bewegt den Kopf um diese Gradzahl.\n"
-        "'s' + Enter speichert den aktuellen Offset als neue Home-Position.\n"
+        "'s' + Enter speichert die aktuelle Position als neue Home-Position.\n"
         "'q' + Enter oder Strg+C beendet (ungespeicherte Aenderungen gehen verloren).\n"
     )
 
     try:
         while True:
-            line = input(f"[Offset {turntable.home_offset_degrees:.1f}] > ").strip().lower()
+            line = input(f"[Position {raw_angle:.1f}] > ").strip().lower()
             if not line:
                 continue
             if line in ("q", "quit"):
                 break
             if line in ("s", "save"):
-                save_home_offset(config.SERVO_CALIBRATION_PATH, turntable.home_offset_degrees)
-                print(f"Gespeichert: {turntable.home_offset_degrees:.1f} Grad.")
+                offset = turntable.offset_for_raw_angle(raw_angle)
+                turntable.set_home_offset(offset)
+                save_home_offset(config.SERVO_CALIBRATION_PATH, offset)
+                print(f"Gespeichert: Offset {offset:.1f} Grad (Position {raw_angle:.1f}).")
                 continue
             try:
                 delta = float(line)
@@ -45,9 +56,8 @@ def main() -> None:
                 print("Unbekannte Eingabe - Zahl, 's' zum Speichern, oder 'q' zum Beenden.")
                 continue
 
-            new_offset = turntable.home_offset_degrees + delta
-            turntable.set_home_offset(new_offset)
-            turntable.home()
+            raw_angle += delta
+            turntable.set_raw_angle(raw_angle)
     except KeyboardInterrupt:
         pass
     finally:
