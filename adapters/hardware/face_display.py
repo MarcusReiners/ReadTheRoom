@@ -12,6 +12,9 @@ class DummyFaceDisplayAdapter:
     def set_eye_direction(self, angle_degrees: float) -> None:
         pass
 
+    def animate_eye_direction(self, to_angle_degrees: float, duration_s: float) -> None:
+        pass
+
     def _on_speech_started(self, event: SpeechPlaybackStarted) -> None:
         pass
 

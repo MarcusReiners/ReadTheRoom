@@ -102,6 +102,10 @@ SERVO_USE_PIGPIO = _env_bool("SERVO_USE_PIGPIO", False)
 # is persisted - survives restarts, editable via scripts/calibrate_servo_home.py
 # or the web app's settings page.
 SERVO_CALIBRATION_PATH = _env("SERVO_CALIBRATION_PATH", "servo_calibration.json")
+# Softens live DOA tracking moves (1.0 = no smoothing/jump straight to target,
+# lower = takes multiple similar readings to fully converge). Doesn't affect
+# deliberate one-off moves (home_servo.py --angle, calibration).
+SERVO_TRACKING_SMOOTHING_ALPHA = float(_env("SERVO_TRACKING_SMOOTHING_ALPHA", "0.6"))
 # Raw DOA degrees the ReSpeaker reports when someone is actually standing
 # straight ahead of the mount - see RespeakerDOAAdapter.get_direction_degrees().
 # Tune by watching "[DOA] Stimme erkannt bei X Grad" while standing dead ahead.

@@ -53,6 +53,7 @@ class ServoTurntableAdapter:
         use_pigpio: bool = False,
         home_offset_degrees: float = 0.0,
         move_to_home_on_start: bool = True,
+        tracking_smoothing_alpha: float = 0.6,
     ) -> None:
         """min_angle/max_angle is the safe clamp every commanded move is restricted
         to (cable-safety window); hardware_min_angle/hardware_max_angle is the
@@ -80,6 +81,13 @@ class ServoTurntableAdapter:
         jumping to a stale computed home before the operator has even started
         adjusting it by hand. Normal/production use (main.py, test scripts)
         wants the default True - moving to a known position on startup.
+
+        tracking_smoothing_alpha softens track_relative_angle()'s live DOA
+        moves (1.0 = no smoothing, jump straight to the new target every
+        time; lower = softer, takes multiple consecutive similar readings to
+        fully converge). Deliberately NOT applied to set_doa_angle_immediate()/
+        set_angle_immediate(), which are for deliberate one-off moves that
+        should land exactly where asked.
         """
         if use_pigpio:
             from gpiozero import Device
@@ -93,6 +101,7 @@ class ServoTurntableAdapter:
         self._base_max_angle = max_angle
         self._hardware_min_angle = hardware_min_angle
         self._hardware_max_angle = hardware_max_angle
+        self._tracking_smoothing_alpha = tracking_smoothing_alpha
         self.home_offset_degrees = home_offset_degrees
         self._min_angle, self._max_angle = self._windowed_range(home_offset_degrees)
 
@@ -258,12 +267,15 @@ class ServoTurntableAdapter:
         just clamp to whichever literal edge value (min or max) is closer on
         that line - normal linear clamping, nothing circular about it."""
         raw_target = self.current_heading_degrees + (target_angle_degrees - 90.0)
+        smoothed_target = self.current_heading_degrees + self._tracking_smoothing_alpha * (
+            raw_target - self.current_heading_degrees
+        )
         logger.debug(
-            "[Servo] track_relative_angle: current=%.1f target=%.1f raw_target=%.1f (window %.1f-%.1f)",
-            self.current_heading_degrees, target_angle_degrees, raw_target,
+            "[Servo] track_relative_angle: current=%.1f target=%.1f raw_target=%.1f smoothed=%.1f (window %.1f-%.1f)",
+            self.current_heading_degrees, target_angle_degrees, raw_target, smoothed_target,
             self._min_angle, self._max_angle,
         )
-        self.set_angle_immediate(raw_target)
+        self.set_angle_immediate(smoothed_target)
 
     def stop(self) -> None:
         self._servo.detach()

@@ -80,6 +80,7 @@ def register_tie_led_handlers(bus: EventBus, radar) -> None:
 
 def start_doa_tracking(
     doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
+    settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -98,22 +99,60 @@ def start_doa_tracking(
     trigger a bogus recording, which is picked up by main.py's
     vad_input_loop as if a person had spoken - a real feedback loop, not a
     hypothetical one. Pass None to disable the guard (not recommended for
-    normal use)."""
+    normal use).
+
+    settle_base_s/settle_deg_per_s: after actually commanding a move, DOA is
+    ignored entirely (not even polled) for settle_base_s + moved_degrees /
+    settle_deg_per_s - the servo has no position feedback, so a poll taken
+    while it's still physically mid-turn would compute the next target from a
+    current_heading_degrees that doesn't yet match reality, and the motor's
+    own noise while moving risks tripping the VAD the same way speech
+    playback does. settle_deg_per_s is a conservative estimate of this
+    servo's turning speed, not a measured spec - tune down if it still reacts
+    before finishing a large turn, or up if it feels sluggish on small ones.
+
+    eye_lead_s: on a detected direction, the eyes dart to it immediately and
+    the head follows eye_lead_s later (a person's eyes move before their head
+    does), then drift back to center over the servo's own settle window via
+    face.animate_eye_direction() - by the time the head physically arrives,
+    eyes and head are aligned again instead of the eyes staying cocked to the
+    side.
+    """
     lock = lock or contextlib.nullcontext()
+    moving_until = 0.0
 
     def _tracking_loop() -> None:
+        nonlocal moving_until
         logger.info("[DOA] Tracking gestartet.")
         while True:
             try:
-                if assistant_speaking is None or not assistant_speaking.is_set():
+                speaking = assistant_speaking is not None and assistant_speaking.is_set()
+                settling = time.monotonic() < moving_until
+                if not speaking and not settling:
                     with lock:
                         active = doa.get_voice_active()
                         angle = doa.get_direction_degrees() if active else None
                     logger.debug("[DOA] voice_active=%s", active)
                     if active:
                         logger.info("[DOA] Stimme erkannt bei %.0f Grad.", angle)
-                        turntable.rotate_towards(target_angle_degrees=angle)
+                        # Eyes dart to the sound first, human-like, before the
+                        # head starts physically catching up.
                         face.set_eye_direction(angle_degrees=angle)
+                        time.sleep(eye_lead_s)
+
+                        before = turntable.current_heading_degrees
+                        turntable.rotate_towards(target_angle_degrees=angle)
+                        moved = abs(turntable.current_heading_degrees - before)
+                        if moved > 0.5:
+                            settle_s = settle_base_s + moved / settle_deg_per_s
+                            moving_until = time.monotonic() + settle_s
+                            # Eyes drift back to center over the same span the
+                            # head takes to physically arrive, so both land
+                            # aligned together instead of the eyes staying
+                            # cocked to the side after the head catches up.
+                            face.animate_eye_direction(90.0, duration_s=settle_s)
+                        else:
+                            face.set_eye_direction(angle_degrees=90.0)
             except Exception:
                 logger.exception("[DOA] Fehler beim Lesen/Ansteuern - Tracking-Thread beendet sich NICHT.")
             time.sleep(poll_interval_s)
