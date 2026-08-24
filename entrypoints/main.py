@@ -1,6 +1,7 @@
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -98,6 +99,21 @@ def record_audio(output_file: str) -> bool:
     return _finish_recording(proc, raw_file, output_file)
 
 
+# ElevenLabs Scribe (and Whisper-family STT generally) transcribes non-speech
+# sounds it can still identify - coughs, throat-clears, drumming - as bracketed
+# annotations like "[hustet]" or "[Trommel]" instead of refusing outright.
+# That's it correctly telling us "this wasn't speech", so strip these out
+# wherever they appear (not just when the whole transcript is one) - a
+# transcript like "Ja [hustet] genau" should become "Ja genau", not be kept
+# or discarded wholesale.
+_NON_SPEECH_ANNOTATION_RE = re.compile(r"[\[(][^\])]*[\])]")
+
+
+def _strip_non_speech_annotations(text: str) -> str:
+    stripped = _NON_SPEECH_ANNOTATION_RE.sub("", text)
+    return re.sub(r"\s+", " ", stripped).strip()
+
+
 def _transcribe_and_enqueue(stt, turn_queue: "queue.Queue[str]", temp_in: str, log_prefix: str) -> None:
     audio_s = max(0, os.path.getsize(temp_in) - 44) / (config.MIC_RATE * 2)
     t_stt = time.monotonic()
@@ -106,7 +122,13 @@ def _transcribe_and_enqueue(stt, turn_queue: "queue.Queue[str]", temp_in: str, l
     if os.path.exists(temp_in):
         os.remove(temp_in)
 
-    if not user_text or len(user_text.strip()) < 2:
+    if user_text:
+        cleaned = _strip_non_speech_annotations(user_text)
+        if cleaned != user_text.strip():
+            logger.info("[%s] Nicht-Sprache-Anmerkungen entfernt: '%s' -> '%s'", log_prefix, user_text, cleaned)
+        user_text = cleaned
+
+    if not user_text or len(user_text) < 2:
         logger.warning("%s: nichts erkannt.", log_prefix)
         return
 

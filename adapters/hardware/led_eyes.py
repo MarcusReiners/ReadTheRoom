@@ -1,4 +1,5 @@
 import math
+import time
 
 from service_layer.bus import EventBus
 
@@ -31,6 +32,14 @@ class LedEyesAdapter:
         self.height = height
         self._eye_angle = 90.0
 
+        # animate_eye_direction()'s state - a separate wall-clock-driven
+        # transition, independent of render(t)'s own blink clock, since it's
+        # triggered from outside the render loop (the DOA tracking thread).
+        self._anim_start_angle = 90.0
+        self._anim_target_angle = 90.0
+        self._anim_start_time = 0.0
+        self._anim_duration_s = 0.0
+
         self._eye_r = max(4, min(self.height // 6, self.width // 10))
         self._dot_r = max(2, self._eye_r // 2)
         self._cy = self.height // 2
@@ -38,12 +47,36 @@ class LedEyesAdapter:
         self._right_cx = self.x_offset + int(self.width * 0.625)
 
     def set_eye_direction(self, angle_degrees: float) -> None:
+        """Instant snap - cancels any in-progress animate_eye_direction()."""
         self._eye_angle = angle_degrees
+        self._anim_duration_s = 0.0
+
+    def animate_eye_direction(self, to_angle_degrees: float, duration_s: float) -> None:
+        """Smoothly transitions from the current (possibly still-animating)
+        eye angle to to_angle_degrees over duration_s, computed each frame in
+        render() from elapsed wall time - e.g. eyes drifting back to center
+        over the same span the head takes to physically catch up, instead of
+        snapping back the instant the head starts moving."""
+        self._anim_start_angle = self._current_angle()
+        self._anim_target_angle = to_angle_degrees
+        self._anim_start_time = time.monotonic()
+        self._anim_duration_s = max(duration_s, 0.001)
+
+    def _current_angle(self) -> float:
+        if self._anim_duration_s <= 0:
+            return self._eye_angle
+        elapsed = time.monotonic() - self._anim_start_time
+        if elapsed >= self._anim_duration_s:
+            self._eye_angle = self._anim_target_angle
+            self._anim_duration_s = 0.0
+            return self._eye_angle
+        progress = elapsed / self._anim_duration_s
+        return self._anim_start_angle + (self._anim_target_angle - self._anim_start_angle) * progress
 
     def render(self, canvas, t: float) -> None:
         blinking = (t % self.BLINK_INTERVAL) < self.BLINK_DURATION
 
-        rad = math.radians(self._eye_angle - 90.0)
+        rad = math.radians(self._current_angle() - 90.0)
         px = int((self._eye_r - self._dot_r) * 0.6 * math.sin(rad))
 
         for cx in (self._left_cx, self._right_cx):
