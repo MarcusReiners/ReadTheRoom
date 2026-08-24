@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 
 from domain.conversation import ConversationState
 from domain.events import (
@@ -68,3 +70,33 @@ def register_tie_led_handlers(bus: EventBus, radar) -> None:
     bus.subscribe(SpeechPlaybackEnded, on_speech_ended)
 
     radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_COLOR))
+
+
+def register_doa_tracking_handlers(
+    bus: EventBus, doa, turntable, face, poll_interval_s: float = 0.3,
+) -> None:
+    """While the user is actively recording (ListeningStateChanged True), polls
+    the ReSpeaker's onboard DOA/VAD on a background thread and turns the
+    head/eyes toward detected speech - same logic as
+    scripts/test_hardware.py's live_doa_tracking(), just gated to the
+    listening window instead of running unconditionally, so it doesn't chase
+    the assistant's own voice picked back up by the mic during TTS playback.
+    """
+    stop_event = threading.Event()
+
+    def _tracking_loop() -> None:
+        while not stop_event.is_set():
+            if doa.get_voice_active():
+                angle = doa.get_direction_degrees()
+                turntable.rotate_towards(target_angle_degrees=angle)
+                face.set_eye_direction(angle_degrees=angle)
+            time.sleep(poll_interval_s)
+
+    def on_listening_changed(event: ListeningStateChanged) -> None:
+        if event.listening:
+            stop_event.clear()
+            threading.Thread(target=_tracking_loop, daemon=True).start()
+        else:
+            stop_event.set()
+
+    bus.subscribe(ListeningStateChanged, on_listening_changed)

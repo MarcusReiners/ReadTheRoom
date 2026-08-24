@@ -18,14 +18,13 @@ from domain.events import (
     SpeechTranscribed,
 )
 from service_layer.bus import EventBus
-from service_layer.handlers import register_handlers, register_tie_led_handlers
+from service_layer.handlers import register_doa_tracking_handlers, register_handlers, register_tie_led_handlers
 
-from adapters.factory import build_stt, build_tts, build_radar
+from adapters.factory import build_stt, build_tts, build_radar, build_turntable
 from adapters.chat_bridge import ChatBridgeAdapter
 from adapters.conversation_store import ConversationStore
 from adapters.llm import LLMGatewayAdapter
 from adapters.hardware.face_display import DummyFaceDisplayAdapter
-from adapters.hardware.turntable import DummyTurntableAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -176,20 +175,7 @@ def main() -> None:
     )
 
     radar = build_radar(config, bus)
-
-    if config.USE_SERVO:
-        from adapters.hardware.turntable import ServoTurntableAdapter
-
-        turntable = ServoTurntableAdapter(
-            pin=config.SERVO_GPIO_PIN,
-            min_angle=config.SERVO_MIN_ANGLE,
-            max_angle=config.SERVO_MAX_ANGLE,
-            hardware_min_angle=config.SERVO_HARDWARE_MIN_ANGLE,
-            hardware_max_angle=config.SERVO_HARDWARE_MAX_ANGLE,
-            use_pigpio=config.SERVO_USE_PIGPIO,
-        )
-    else:
-        turntable = DummyTurntableAdapter()
+    turntable = build_turntable(config)
 
     if config.USE_LED_MATRIX:
         from adapters.hardware.led_matrix import LedMatrix
@@ -207,12 +193,20 @@ def main() -> None:
     chat_bridge = ChatBridgeAdapter(
         bus, conversation, store, turn_queue,
         radar=radar,
+        turntable=turntable,
+        servo_calibration_path=config.SERVO_CALIBRATION_PATH,
         host=config.CHAT_BRIDGE_HOST, port=config.CHAT_BRIDGE_PORT,
     )
     chat_bridge.start()
 
     radar.start()
     register_tie_led_handlers(bus, radar)
+
+    if config.USE_SERVO:
+        from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
+
+        doa = RespeakerDOAAdapter()
+        register_doa_tracking_handlers(bus, doa, turntable, face)
 
     threading.Thread(target=console_input_loop, args=(bus, turn_queue, stt), daemon=True).start()
 

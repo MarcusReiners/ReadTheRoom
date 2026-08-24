@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class DummyTurntableAdapter:
     def __init__(self) -> None:
         self.current_heading_degrees = 90.0  # 90 degrees = front-facing home position
+        self.home_offset_degrees = 0.0
 
     def rotate_towards(self, target_angle_degrees: float) -> None:
         delta = target_angle_degrees - self.current_heading_degrees
@@ -25,6 +26,9 @@ class DummyTurntableAdapter:
 
     def set_angle_immediate(self, angle_degrees: float) -> None:
         self.current_heading_degrees = angle_degrees
+
+    def set_home_offset(self, offset_degrees: float) -> None:
+        self.home_offset_degrees = offset_degrees
 
 
 class ServoTurntableAdapter:
@@ -38,6 +42,7 @@ class ServoTurntableAdapter:
         min_pulse_width: float = 0.0005,
         max_pulse_width: float = 0.0025,
         use_pigpio: bool = False,
+        home_offset_degrees: float = 0.0,
     ) -> None:
         """min_angle/max_angle is the safe clamp every commanded move is restricted
         to (cable-safety window); hardware_min_angle/hardware_max_angle is the
@@ -50,6 +55,14 @@ class ServoTurntableAdapter:
         servo chattering while holding a fixed position (still while tracking a
         moving target) by removing the OS-scheduling jitter it was chasing.
         Requires `sudo pigpiod` running and the `pigpio` package installed.
+
+        home_offset_degrees shifts the whole safe window by a fixed amount to
+        compensate for the servo horn's mounted orientation - a 360-degree servo
+        has no inherent "forward" until it's bolted on, so whatever the mount
+        ended up at needs to be dialed in in software. The window's width never
+        changes, only where it sits on the servo's true 0-360 range - cable
+        safety holds regardless of the offset. Adjustable later via
+        set_home_offset() without remounting the horn.
         """
         if use_pigpio:
             from gpiozero import Device
@@ -59,9 +72,14 @@ class ServoTurntableAdapter:
 
         from gpiozero import AngularServo
 
-        self._min_angle = min_angle
-        self._max_angle = max_angle
-        self.current_heading_degrees = (min_angle + max_angle) / 2
+        self._base_min_angle = min_angle
+        self._base_max_angle = max_angle
+        self._hardware_min_angle = hardware_min_angle
+        self._hardware_max_angle = hardware_max_angle
+        self.home_offset_degrees = home_offset_degrees
+        self._min_angle, self._max_angle = self._windowed_range(home_offset_degrees)
+
+        self.current_heading_degrees = (self._min_angle + self._max_angle) / 2
         self._smoothed_target = self.current_heading_degrees
         self._large_change_streak = 0
         self._last_move_time = time.monotonic()
@@ -74,9 +92,29 @@ class ServoTurntableAdapter:
             max_pulse_width=max_pulse_width,
         )
         logger.info(
-            "[Servo] GPIO%s bereit, sicherer Bereich %.0f-%.0f Grad (Hardware %.0f-%.0f Grad).",
-            pin, min_angle, max_angle, hardware_min_angle, hardware_max_angle,
+            "[Servo] GPIO%s bereit, sicherer Bereich %.0f-%.0f Grad (Offset %.1f, Hardware %.0f-%.0f Grad).",
+            pin, self._min_angle, self._max_angle, home_offset_degrees, hardware_min_angle, hardware_max_angle,
         )
+
+    def _windowed_range(self, offset_degrees: float) -> tuple[float, float]:
+        lo = self._base_min_angle + offset_degrees
+        hi = self._base_max_angle + offset_degrees
+        if lo < self._hardware_min_angle or hi > self._hardware_max_angle:
+            logger.warning(
+                "[Servo] Home-Offset %.1f wuerde den sicheren Bereich (%.1f-%.1f) ausserhalb "
+                "des Hardware-Bereichs (%.0f-%.0f) schieben - wird geklemmt.",
+                offset_degrees, lo, hi, self._hardware_min_angle, self._hardware_max_angle,
+            )
+            lo = max(lo, self._hardware_min_angle)
+            hi = min(hi, self._hardware_max_angle)
+        return lo, hi
+
+    def set_home_offset(self, offset_degrees: float) -> None:
+        """Live-adjusts the home offset (e.g. from a calibration script/web
+        endpoint's nudge-then-save flow). Does not move the servo itself -
+        call home() afterward to actually drive there."""
+        self.home_offset_degrees = offset_degrees
+        self._min_angle, self._max_angle = self._windowed_range(offset_degrees)
 
     def rotate_towards(self, target_angle_degrees: float) -> None:
         # target_angle_degrees is DOA-style (90 degrees = straight ahead), independent

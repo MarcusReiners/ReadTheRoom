@@ -17,16 +17,9 @@ def main() -> None:
         print("USE_SERVO ist False - kein Servo zum Testen.")
         return
 
-    from adapters.hardware.turntable import ServoTurntableAdapter
+    from adapters.factory import build_turntable
 
-    turntable = ServoTurntableAdapter(
-        pin=config.SERVO_GPIO_PIN,
-        min_angle=config.SERVO_MIN_ANGLE,
-        max_angle=config.SERVO_MAX_ANGLE,
-        hardware_min_angle=config.SERVO_HARDWARE_MIN_ANGLE,
-        hardware_max_angle=config.SERVO_HARDWARE_MAX_ANGLE,
-        use_pigpio=config.SERVO_USE_PIGPIO,
-    )
+    turntable = build_turntable(config)
 
     print(f"Voller Schwenk zwischen {config.SERVO_MIN_ANGLE:.0f} und {config.SERVO_MAX_ANGLE:.0f} Grad.")
     print("Strg+C zum Beenden.")

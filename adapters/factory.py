@@ -50,6 +50,25 @@ def build_tts(cfg, bus: EventBus):
     raise ValueError(f"Unbekannter TTS_PROVIDER: {cfg.TTS_PROVIDER!r}")
 
 
+def build_turntable(cfg):
+    if not cfg.USE_SERVO:
+        from adapters.hardware.turntable import DummyTurntableAdapter
+        return DummyTurntableAdapter()
+
+    from adapters.hardware.turntable import ServoTurntableAdapter
+    from adapters.hardware.servo_calibration import load_home_offset
+
+    return ServoTurntableAdapter(
+        pin=cfg.SERVO_GPIO_PIN,
+        min_angle=cfg.SERVO_MIN_ANGLE,
+        max_angle=cfg.SERVO_MAX_ANGLE,
+        hardware_min_angle=cfg.SERVO_HARDWARE_MIN_ANGLE,
+        hardware_max_angle=cfg.SERVO_HARDWARE_MAX_ANGLE,
+        use_pigpio=cfg.SERVO_USE_PIGPIO,
+        home_offset_degrees=load_home_offset(cfg.SERVO_CALIBRATION_PATH),
+    )
+
+
 def build_radar(cfg, bus: EventBus):
     if cfg.RADAR_PROVIDER == "ld2450":
         from adapters.hardware.radar_ld2450 import RadarLD2450Adapter
