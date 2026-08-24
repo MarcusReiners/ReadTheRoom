@@ -33,9 +33,17 @@ class ServoTurntableAdapter:
         pin: int,
         min_angle: float,
         max_angle: float,
+        hardware_min_angle: float = 0.0,
+        hardware_max_angle: float = 360.0,
         min_pulse_width: float = 0.0005,
         max_pulse_width: float = 0.0025,
     ) -> None:
+        """min_angle/max_angle is the safe clamp every commanded move is restricted
+        to (cable-safety window); hardware_min_angle/hardware_max_angle is the
+        servo's true mechanical range, used only to calibrate pulse-width-to-angle.
+        Conflating the two stretches the full pulse range across just the safe
+        window, turning every in-window move into a near-full physical rotation.
+        """
         from gpiozero import AngularServo
 
         self._min_angle = min_angle
@@ -47,12 +55,15 @@ class ServoTurntableAdapter:
         self._servo = AngularServo(
             pin,
             initial_angle=self.current_heading_degrees,
-            min_angle=min_angle,
-            max_angle=max_angle,
+            min_angle=hardware_min_angle,
+            max_angle=hardware_max_angle,
             min_pulse_width=min_pulse_width,
             max_pulse_width=max_pulse_width,
         )
-        logger.info("[Servo] GPIO%s bereit, Bereich %.0f-%.0f Grad.", pin, min_angle, max_angle)
+        logger.info(
+            "[Servo] GPIO%s bereit, sicherer Bereich %.0f-%.0f Grad (Hardware %.0f-%.0f Grad).",
+            pin, min_angle, max_angle, hardware_min_angle, hardware_max_angle,
+        )
 
     def rotate_towards(self, target_angle_degrees: float) -> None:
         # target_angle_degrees is DOA-style (90 degrees = straight ahead), independent

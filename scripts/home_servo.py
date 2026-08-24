@@ -20,6 +20,8 @@ def main() -> None:
         pin=config.SERVO_GPIO_PIN,
         min_angle=config.SERVO_MIN_ANGLE,
         max_angle=config.SERVO_MAX_ANGLE,
+        hardware_min_angle=config.SERVO_HARDWARE_MIN_ANGLE,
+        hardware_max_angle=config.SERVO_HARDWARE_MAX_ANGLE,
     )
     turntable.home()
     center = (config.SERVO_MIN_ANGLE + config.SERVO_MAX_ANGLE) / 2
