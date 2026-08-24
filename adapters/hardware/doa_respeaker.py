@@ -19,15 +19,8 @@ def raw_to_target_degrees(raw: float, front_reference_degrees: float) -> float:
     """Converts a raw array reading into a DOA-convention angle (90 = straight
     ahead, matching ServoTurntableAdapter's rotate_towards()/track_relative_angle()).
     Module-level and shared with scripts/simulate_doa.py so the two can't drift
-    out of sync with each other the way an inline-duplicated copy would.
-
-    The delta from front_reference_degrees is SUBTRACTED, not added -
-    confirmed empirically on the bench: with the addition sign, the head
-    turned away from the sound source instead of toward it (inverted
-    left/right). This is a property of how the array's raw angle convention
-    relates to real-world direction for this specific unit/mount, not
-    something derivable from the datasheet alone."""
-    return (90.0 - (raw - front_reference_degrees)) % 360.0
+    out of sync with each other the way an inline-duplicated copy would."""
+    return (90.0 + (raw - front_reference_degrees)) % 360.0
 
 
 class RespeakerDOAAdapter:
