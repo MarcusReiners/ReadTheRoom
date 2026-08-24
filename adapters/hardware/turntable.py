@@ -20,6 +20,9 @@ class DummyTurntableAdapter:
     def set_doa_angle_immediate(self, target_angle_degrees: float) -> None:
         self.set_angle_immediate(target_angle_degrees)
 
+    def track_relative_angle(self, target_angle_degrees: float) -> None:
+        self.current_heading_degrees = self.current_heading_degrees + (target_angle_degrees - 90.0)
+
     def set_home_offset(self, offset_degrees: float) -> None:
         self.home_offset_degrees = offset_degrees
 
@@ -178,8 +181,12 @@ class ServoTurntableAdapter:
         smoothing/deadband/cooldown. Noise rejection is the caller's job:
         start_doa_tracking() only calls this while the ReSpeaker's onboard
         VAD reports actual voice activity, so a still room simply never
-        calls this rather than being filtered out here after the fact."""
-        self.set_doa_angle_immediate(target_angle_degrees)
+        calls this rather than being filtered out here after the fact.
+
+        Uses track_relative_angle(), not set_doa_angle_immediate() - the mic
+        array is mounted on the moving head, so every live reading has to be
+        interpreted relative to the head's current position, not home."""
+        self.track_relative_angle(target_angle_degrees)
 
     def home(self) -> None:
         """Return to the front-facing center position - a deliberate command,
@@ -208,16 +215,25 @@ class ServoTurntableAdapter:
     def set_doa_angle_immediate(self, target_angle_degrees: float) -> None:
         """Like set_angle_immediate(), but target_angle_degrees is in the DOA
         convention (90 = home/straight ahead) instead of the safe window's own
-        coordinates, and treated as a full circular value (a mic array can
-        hear all 360 degrees around it, not just the servo's reachable arc).
-        Out-of-window directions clamp to whichever safe-window edge is
-        actually closer by true circular distance - a plain linear clamp has
-        a hidden discontinuity exactly opposite the window's center, where
-        two nearly-identical real-world directions (either side of "directly
-        behind") would otherwise snap to opposite ends of the window instead
-        of both landing on the edge that's really closer."""
+        coordinates, applied relative to HOME - for one-off test/calibration
+        moves (e.g. home_servo.py --angle), not live tracking. See
+        track_relative_angle() for why live DOA tracking can't use this."""
         center = (self._min_angle + self._max_angle) / 2
         raw_target = center + (target_angle_degrees - 90.0)
+        self.set_angle_immediate(self._nearest_reachable_angle(raw_target))
+
+    def track_relative_angle(self, target_angle_degrees: float) -> None:
+        """Like set_doa_angle_immediate(), but applied relative to wherever
+        the head is CURRENTLY pointing instead of home. The mic array is
+        mounted rigidly on the moving head, so its own DOA reading (90 =
+        aligned with the array's own nose) is always relative to the head's
+        current orientation, not a fixed room direction - after the head has
+        already turned once, "home" and "wherever the nose is now" are two
+        different things, and anchoring to home would compound errors on
+        every subsequent reading. This is what live DOA tracking must use;
+        set_doa_angle_immediate() is for one-off moves where "relative to
+        home" is what's actually wanted (e.g. explicit angle tests)."""
+        raw_target = self.current_heading_degrees + (target_angle_degrees - 90.0)
         self.set_angle_immediate(self._nearest_reachable_angle(raw_target))
 
     def _nearest_reachable_angle(self, angle_degrees: float) -> float:

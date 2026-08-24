@@ -218,7 +218,7 @@ def handle_turn(
     bus.publish(SpeechTranscribed(text=text, conversation_id=conversation_id))
 
     face.set_eye_direction(angle_degrees=90.0)
-    turntable.rotate_towards(target_angle_degrees=90.0)
+    turntable.home()
 
     def mirrored_deltas():
         for delta in llm.ask_stream(text, history):
