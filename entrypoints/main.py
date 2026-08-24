@@ -18,7 +18,7 @@ from domain.events import (
     SpeechTranscribed,
 )
 from service_layer.bus import EventBus
-from service_layer.handlers import register_doa_tracking_handlers, register_handlers, register_tie_led_handlers
+from service_layer.handlers import register_handlers, register_tie_led_handlers, start_doa_tracking
 
 from adapters.factory import build_stt, build_tts, build_radar, build_turntable
 from adapters.chat_bridge import ChatBridgeAdapter
@@ -181,7 +181,12 @@ def main() -> None:
         from adapters.hardware.led_matrix import LedMatrix
         from adapters.hardware.led_eyes import LedEyesAdapter
 
-        matrix = LedMatrix(rows=48, cols=96, chain=1, gpio_slowdown=config.GPIO_SLOWDOWN)
+        matrix = LedMatrix(
+            rows=48, cols=96, chain=1,
+            gpio_slowdown=config.GPIO_SLOWDOWN,
+            brightness=config.LED_MATRIX_BRIGHTNESS,
+            pwm_bits=config.LED_MATRIX_PWM_BITS,
+        )
         face = LedEyesAdapter(bus=bus, x_offset=0, width=96, height=48)
         matrix.add_renderer(face)
         matrix.start()
@@ -206,7 +211,7 @@ def main() -> None:
         from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
 
         doa = RespeakerDOAAdapter()
-        register_doa_tracking_handlers(bus, doa, turntable, face)
+        start_doa_tracking(doa, turntable, face)
 
     threading.Thread(target=console_input_loop, args=(bus, turn_queue, stt), daemon=True).start()
 

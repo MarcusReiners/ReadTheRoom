@@ -72,7 +72,11 @@ MAX_RECORD_SECONDS = int(_env("MAX_RECORD_SECONDS", "30"))
 USE_LED_MATRIX = _env_bool("USE_LED_MATRIX", True)
 # Raise if the panel shows ghosting/stray static pixels - gives the Pi more
 # settling time per GPIO toggle, at the cost of max refresh rate.
-GPIO_SLOWDOWN = int(_env("GPIO_SLOWDOWN", "4"))
+GPIO_SLOWDOWN = int(_env("GPIO_SLOWDOWN", "5"))
+LED_MATRIX_BRIGHTNESS = int(_env("LED_MATRIX_BRIGHTNESS", "90"))
+# Lower trades color depth for a higher hardware refresh rate (less visible
+# flicker) - 5 bits is still 32 levels/channel, plenty for solid dots/text.
+LED_MATRIX_PWM_BITS = int(_env("LED_MATRIX_PWM_BITS", "5"))
 
 # --- Servo turntable (360-degree positional servo on hardware PWM) --------
 USE_SERVO = _env_bool("USE_SERVO", True)
