@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import threading
 import time
@@ -77,23 +78,29 @@ def register_tie_led_handlers(bus: EventBus, radar) -> None:
     radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_PERIOD_MS))
 
 
-def start_doa_tracking(doa, turntable, face, poll_interval_s: float = 0.3) -> None:
+def start_doa_tracking(doa, turntable, face, poll_interval_s: float = 0.3, lock=None) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
     detected speech - same logic as scripts/test_hardware.py's
     live_doa_tracking(). Runs unconditionally rather than being gated to the
     recording window, so note it will also react to the assistant's own
     voice being picked back up by the mic during TTS playback.
+
+    lock serializes USB control-transfer access to the ReSpeaker with any
+    other thread reading the same device concurrently (see main.py's
+    vad_input_loop) - pass None if this is the only consumer.
     """
+    lock = lock or contextlib.nullcontext()
 
     def _tracking_loop() -> None:
         logger.info("[DOA] Tracking gestartet.")
         while True:
             try:
-                active = doa.get_voice_active()
+                with lock:
+                    active = doa.get_voice_active()
+                    angle = doa.get_direction_degrees() if active else None
                 logger.debug("[DOA] voice_active=%s", active)
                 if active:
-                    angle = doa.get_direction_degrees()
                     logger.info("[DOA] Stimme erkannt bei %.0f Grad.", angle)
                     turntable.rotate_towards(target_angle_degrees=angle)
                     face.set_eye_direction(angle_degrees=angle)
