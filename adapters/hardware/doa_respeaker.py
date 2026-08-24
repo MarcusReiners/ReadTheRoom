@@ -23,7 +23,15 @@ class RespeakerDOAAdapter:
     usb_4_mic_array/tuning.py, independent of the audio stream.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, front_reference_degrees: float = 0.0) -> None:
+        """front_reference_degrees is whatever raw DOA value the array reports
+        when a speaker is actually standing straight ahead of the physical
+        mount - the array's own 0 has no relation to how it happens to be
+        oriented once installed, same idea as the servo's home_offset_degrees.
+        Tune by watching logged raw angles ("[DOA] Stimme erkannt bei X Grad")
+        while standing dead ahead and setting DOA_FRONT_REFERENCE_DEGREES to
+        that value; default 0 is just an unconfigured starting guess."""
+        self._front_reference_degrees = front_reference_degrees
         self._dev = usb.core.find(idVendor=_VENDOR_ID, idProduct=_PRODUCT_ID)
         if self._dev is None:
             raise RuntimeError(
@@ -56,7 +64,18 @@ class RespeakerDOAAdapter:
         return value
 
     def get_direction_degrees(self) -> float:
-        return float(self._read_param(*_DOAANGLE_PARAM))
+        """Returns a DOA-convention angle (90 = straight ahead, matching
+        ServoTurntableAdapter's rotate_towards()), as a plain circular shift
+        of the array's raw 0-360 reading by front_reference_degrees - modulo
+        360, deliberately with NO attempt to resolve it to a "shortest path"
+        signed value here. That resolution has to happen against the servo's
+        actual reachable window (see ServoTurntableAdapter._nearest_reachable_angle),
+        not against an arbitrary +/-180 cut from the front reference - doing
+        it here caused two nearly-identical real-world directions, just
+        either side of "directly behind", to snap to opposite ends of the
+        safe window instead of both landing on whichever edge is truly closer."""
+        raw = float(self._read_param(*_DOAANGLE_PARAM))
+        return (90.0 + (raw - self._front_reference_degrees)) % 360.0
 
     def get_voice_active(self) -> bool:
         """Onboard VAD flag - use this to gate on "loud enough"/speech-like sound

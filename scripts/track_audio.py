@@ -22,7 +22,7 @@ def main() -> None:
 
     bus = EventBus()
     turntable = build_turntable(config)
-    doa = RespeakerDOAAdapter()
+    doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
     # No LED matrix here - only the servo needs to move, so the "face" is a
     # no-op sink rather than pulling in matrix hardware/permissions.
     face = DummyFaceDisplayAdapter(bus=bus)

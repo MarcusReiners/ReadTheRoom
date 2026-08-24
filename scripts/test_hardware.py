@@ -89,7 +89,7 @@ def live_doa_tracking(turntable, face, poll_interval_s: float = 0.3) -> None:
 
     from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
 
-    doa = RespeakerDOAAdapter()
+    doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
     print(
         f"Live-DOA-Tracking gestartet (Servo-Bereich {config.SERVO_MIN_ANGLE}-"
         f"{config.SERVO_MAX_ANGLE} Grad geklemmt). Strg+C zum Beenden.\n"
