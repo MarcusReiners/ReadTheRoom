@@ -56,11 +56,6 @@ class ListeningStateChanged(Event):
 
 
 @dataclass(frozen=True)
-class DisplayTakeoverRequested(Event):
-    pass
-
-
-@dataclass(frozen=True)
 class ModalitySwitched(Event):
     to_modality: str
     reason: str

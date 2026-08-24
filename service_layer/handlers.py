@@ -2,7 +2,6 @@ import logging
 
 from domain.conversation import ConversationState
 from domain.events import (
-    DisplayTakeoverRequested,
     ListeningStateChanged,
     ModalitySwitched,
     PersonCountChanged,
@@ -24,10 +23,7 @@ def register_handlers(
     bus: EventBus,
     conversation: ConversationState,
     tts: StreamingTTSAdapter,
-    status_display,
 ) -> None:
-    tts.takeover_sink = status_display.set_text
-
     def on_person_count_changed(event: PersonCountChanged) -> None:
         if event.count > 1 and conversation.confidential and conversation.modality == "voice":
             conversation.switch_modality("web")
@@ -40,17 +36,7 @@ def register_handlers(
             bus.publish(ModalitySwitched(to_modality="voice", reason="alone_again"))
             logger.info("Modalitätswechsel zurück zu 'voice' (wieder allein)")
 
-    def on_display_takeover(event: DisplayTakeoverRequested) -> None:
-        if status_display.text_active:
-            status_display.stop_text()
-            logger.info("Display-Textmodus beendet.")
-        elif tts.request_takeover():
-            logger.info("Sprachausgabe unterbrochen, Antwort läuft auf dem Display weiter.")
-        else:
-            logger.info("Keine laufende Antwort zum Umleiten.")
-
     bus.subscribe(PersonCountChanged, on_person_count_changed)
-    bus.subscribe(DisplayTakeoverRequested, on_display_takeover)
 
 
 def _tie_led_command(mode: str, color: tuple[int, int, int]) -> dict:
