@@ -14,20 +14,16 @@ from domain.events import ListeningStateChanged, SpeechPlaybackStarted, SpeechPl
 def build_display(bus: EventBus):
     if not config.USE_LED_MATRIX:
         print("USE_LED_MATRIX ist False - kein Display zum Testen.")
-        return None, None, None
+        return None, None
 
     from adapters.hardware.led_matrix import LedMatrix
-    from adapters.hardware.status_display import StatusDisplayAdapter
     from adapters.hardware.led_eyes import LedEyesAdapter
 
-    matrix = LedMatrix(rows=48, cols=96, chain=2, gpio_slowdown=config.GPIO_SLOWDOWN)
-    status_offset, eyes_offset = (96, 0) if config.SWAP_LED_PANELS else (0, 96)
-    status = StatusDisplayAdapter(bus=bus, x_offset=status_offset, width=96)
-    face = LedEyesAdapter(bus=bus, x_offset=eyes_offset, width=96, height=48)
-    matrix.add_renderer(status)
+    matrix = LedMatrix(rows=48, cols=96, chain=1, gpio_slowdown=config.GPIO_SLOWDOWN)
+    face = LedEyesAdapter(bus=bus, x_offset=0, width=96, height=48)
     matrix.add_renderer(face)
     matrix.start()
-    return matrix, status, face
+    return matrix, face
 
 
 def build_turntable():
@@ -44,8 +40,8 @@ def build_turntable():
     )
 
 
-def demo_display(bus: EventBus, status, face) -> None:
-    if status is None:
+def demo_display(bus: EventBus, face) -> None:
+    if face is None:
         return
 
     print("Display: idle...")
@@ -61,16 +57,10 @@ def demo_display(bus: EventBus, status, face) -> None:
     time.sleep(3)
     bus.publish(SpeechPlaybackEnded(completed=True))
 
-    print("Display: scrolling text takeover...")
-    status.set_text("Hallo, ich bin ReadTheRoom! Das ist ein Test des Displays.")
-    time.sleep(6)
-    status.stop_text()
-
-    if face is not None:
-        print("Display: eyes tracking sweep...")
-        for angle in (90.0, 45.0, 90.0, 135.0, 90.0):
-            face.set_eye_direction(angle_degrees=angle)
-            time.sleep(1)
+    print("Display: eyes tracking sweep...")
+    for angle in (90.0, 45.0, 90.0, 135.0, 90.0):
+        face.set_eye_direction(angle_degrees=angle)
+        time.sleep(1)
 
 
 def demo_servo(turntable) -> None:
@@ -132,10 +122,10 @@ def main() -> None:
     logging_setup.configure_logging(config)
 
     bus = EventBus()
-    matrix, status, face = build_display(bus)
+    matrix, face = build_display(bus)
     turntable = build_turntable()
 
-    if status is None and turntable is None:
+    if face is None and turntable is None:
         print("Weder Display noch Servo aktiviert (USE_LED_MATRIX/USE_SERVO) - nichts zu testen.")
         return
 
@@ -143,12 +133,12 @@ def main() -> None:
         if args.doa:
             live_doa_tracking(turntable, face)
         else:
-            demo_display(bus, status, face)
+            demo_display(bus, face)
             demo_servo(turntable)
             print("Fertig. Strg+C zum Beenden, oder Enter fuer eine weitere Runde.")
             while True:
                 input()
-                demo_display(bus, status, face)
+                demo_display(bus, face)
                 demo_servo(turntable)
     except KeyboardInterrupt:
         print("\nCiao!")

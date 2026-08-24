@@ -23,6 +23,9 @@ class DummyTurntableAdapter:
     def home(self) -> None:
         self.current_heading_degrees = 90.0
 
+    def set_angle_immediate(self, angle_degrees: float) -> None:
+        self.current_heading_degrees = angle_degrees
+
 
 class ServoTurntableAdapter:
     def __init__(
@@ -88,6 +91,15 @@ class ServoTurntableAdapter:
         self._last_move_time = time.monotonic()
         self._servo.angle = center
         logger.info("[Servo] Home-Position (%.0f Grad).", center)
+
+    def set_angle_immediate(self, angle_degrees: float) -> None:
+        """Directly drives the servo to an exact angle, bypassing the DOA
+        smoothing/deadband/cooldown gating - for deliberate test/calibration
+        movements only, same idea as home()."""
+        angle_degrees = max(self._min_angle, min(self._max_angle, angle_degrees))
+        self.current_heading_degrees = angle_degrees
+        self._smoothed_target = angle_degrees
+        self._servo.angle = angle_degrees
 
     def stop(self) -> None:
         self._servo.detach()

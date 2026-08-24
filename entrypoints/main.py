@@ -14,7 +14,6 @@ from domain.conversation import ConversationState
 from domain.events import (
     AssistantDeltaReceived,
     AssistantMessageCompleted,
-    DisplayTakeoverRequested,
     ListeningStateChanged,
     SpeechTranscribed,
 )
@@ -26,7 +25,6 @@ from adapters.chat_bridge import ChatBridgeAdapter
 from adapters.conversation_store import ConversationStore
 from adapters.llm import LLMGatewayAdapter
 from adapters.hardware.face_display import DummyFaceDisplayAdapter
-from adapters.hardware.status_display import DummyStatusDisplayAdapter
 from adapters.hardware.turntable import DummyTurntableAdapter
 
 logger = logging.getLogger(__name__)
@@ -94,24 +92,14 @@ def _record_audio_alsa(output_file: str) -> bool:
 
 
 def console_input_loop(bus: EventBus, turn_queue: "queue.Queue[str]", stt) -> None:
-    """Reads stdin on its own thread: bare ENTER starts/stops a voice
-    recording (result is pushed onto turn_queue like any other turn), 't'
-    requests a display/chat takeover of the current answer. This is the
-    single stdin reader for the process - it also covers what used to be
-    DummyButtonsAdapter's separate 't'-listening thread, which raced with
-    the old inline ENTER loop over the same stdin.
-    """
-    print("\nENTER startet die Aufnahme, ENTER stoppt sie. "
-          "'t' + Enter = Antwort auf Display/Chat umleiten.\n")
+    """Reads stdin on its own thread: bare ENTER starts/stops a voice recording,
+    whose result is pushed onto turn_queue like any other turn."""
+    print("\nENTER startet die Aufnahme, ENTER stoppt sie.\n")
     while True:
         try:
             line = input()
         except EOFError:
             break
-
-        if line.strip().lower() == "t":
-            bus.publish(DisplayTakeoverRequested())
-            continue
 
         temp_in = "temp_in.wav"
         print("Aufnahme läuft... sprechen und mit ENTER beenden.")
@@ -202,21 +190,16 @@ def main() -> None:
 
     if config.USE_LED_MATRIX:
         from adapters.hardware.led_matrix import LedMatrix
-        from adapters.hardware.status_display import StatusDisplayAdapter
         from adapters.hardware.led_eyes import LedEyesAdapter
 
-        matrix = LedMatrix(rows=48, cols=96, chain=2, gpio_slowdown=config.GPIO_SLOWDOWN)
-        status_offset, eyes_offset = (96, 0) if config.SWAP_LED_PANELS else (0, 96)
-        status = StatusDisplayAdapter(bus=bus, x_offset=status_offset, width=96)
-        face = LedEyesAdapter(bus=bus, x_offset=eyes_offset, width=96, height=48)
-        matrix.add_renderer(status)
+        matrix = LedMatrix(rows=48, cols=96, chain=1, gpio_slowdown=config.GPIO_SLOWDOWN)
+        face = LedEyesAdapter(bus=bus, x_offset=0, width=96, height=48)
         matrix.add_renderer(face)
         matrix.start()
     else:
-        status = DummyStatusDisplayAdapter(bus=bus)
         face = DummyFaceDisplayAdapter(bus=bus)
 
-    register_handlers(bus, conversation, tts, status)
+    register_handlers(bus, conversation, tts)
 
     chat_bridge = ChatBridgeAdapter(
         bus, conversation, store, turn_queue,

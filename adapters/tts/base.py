@@ -34,7 +34,6 @@ class StreamingTTSAdapter:
     def __init__(self, bus: EventBus, speaker_device: str = "default") -> None:
         self.bus = bus
         self.speaker_device = speaker_device
-        self.takeover_sink = None
         self._aplay_process: subprocess.Popen | None = None
         self._lock = threading.Lock()
         self._takeover = threading.Event()
@@ -71,8 +70,6 @@ class StreamingTTSAdapter:
             if self._aplay_process is not None:
                 self._aplay_process.terminate()
                 self._aplay_process = None
-        if self.takeover_sink is not None:
-            self.takeover_sink(self._full_text)
         return True
 
     def _notify_started(self) -> None:
@@ -111,8 +108,6 @@ class StreamingTTSAdapter:
                 full_text += delta
                 self._full_text = full_text
                 if self._takeover.is_set():
-                    if self.takeover_sink is not None:
-                        self.takeover_sink(full_text)
                     continue
                 buffer += delta
                 sentences, buffer = _split_sentences(buffer, first=not self._started_published)

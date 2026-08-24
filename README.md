@@ -27,7 +27,7 @@ service_layer/   EventBus and event handlers (wires domain and adapters together
 adapters/
   stt/           Speech-to-text adapters (elevenlabs.py, local.py, remote.py)
   tts/           Text-to-speech adapters (base.py, elevenlabs.py, local.py, remote.py)
-  hardware/      Physical I/O: LED matrix, eyes, servo turntable, radar, buttons
+  hardware/      Physical I/O: LED matrix eyes, servo turntable, radar
   llm.py         LLM access via LiteLLM
   chat_bridge.py Web chat app (FastAPI/WebSocket): mirrors the conversation, accepts typed turns
   factory.py     Builds the configured STT/TTS/radar adapter from config.py
@@ -35,7 +35,7 @@ web/static/      Chat app frontend (single static index.html, no build step)
 config.py        All settings, read from environment variables
 ```
 
-Adapters communicate through events (`PersonCountChanged`, `SpeechPlaybackStarted`, `ListeningStateChanged`, `DisplayTakeoverRequested`, …) instead of knowing each other directly. Every hardware component has a dummy adapter, so the system also runs without any hardware attached.
+Adapters communicate through events (`PersonCountChanged`, `SpeechPlaybackStarted`, `ListeningStateChanged`, …) instead of knowing each other directly. Every hardware component has a dummy adapter, so the system also runs without any hardware attached.
 
 STT and TTS each have three interchangeable adapters, selected via `STT_PROVIDER`/`TTS_PROVIDER` in config (`elevenlabs | local | remote`) — swapping in a better model later means adding a new file next to the existing ones and flipping the config value, not changing any calling code:
 
@@ -48,22 +48,21 @@ STT and TTS each have three interchangeable adapters, selected via `STT_PROVIDER
 | TTS | `remote` | `adapters/tts/remote.py` | Mac pipeline server (LAN fallback) |
 | TTS | `local` | `adapters/tts/local.py` | Piper, in-process |
 
-All TTS adapters share sentence-buffering, `aplay` piping, and takeover handling via `adapters/tts/base.py::StreamingTTSAdapter` — a new TTS provider only has to implement `_synthesize_chunks()` and `sample_rate`.
+All TTS adapters share sentence-buffering, `aplay` piping, and takeover handling (muting mid-stream when someone enters the room) via `adapters/tts/base.py::StreamingTTSAdapter` — a new TTS provider only has to implement `_synthesize_chunks()` and `sample_rate`.
 
 The LLM stays on [LiteLLM](https://github.com/BerriAI/litellm): change `LLM_MODEL` (e.g. `openai/gpt-4o-mini`, `anthropic/claude-sonnet-4-5`, `ollama_chat/qwen3.5:9b`) to swap providers. `LLM_FALLBACK_MODEL`/`LLM_FALLBACK_API_BASE` let it fail over automatically to a local Ollama server if the cloud API is unreachable.
 
 | Adapter | Purpose | Status |
 |---|---|---|
 | `adapters/stt/*` | Speech recognition | active |
-| `adapters/tts/*` | Speech synthesis with streaming and display takeover | active |
+| `adapters/tts/*` | Speech synthesis with streaming, muted on takeover | active |
 | `adapters/llm.py` | LLM access via LiteLLM, with local-Ollama fallback | active |
-| `adapters/hardware/led_matrix.py` / `status_display.py` | Daisy-chained RGB LED matrix, panel 1: status animations and scrolling text | active (switchable) |
-| `adapters/hardware/led_eyes.py` | Panel 2 of the same matrix: blinking eyes that track the last known direction | active (switchable) |
+| `adapters/hardware/led_matrix.py` | Single RGB LED matrix, eyes only | active (switchable) |
+| `adapters/hardware/led_eyes.py` | Blinking eyes rendered on the matrix, tracking the last known direction | active (switchable) |
 | `adapters/hardware/face_display.py` | No-hardware fallback for the eyes (`DummyFaceDisplayAdapter`) | dummy |
 | `adapters/hardware/turntable.py` | MG996R servo (GPIO19, hardware PWM) panning the head towards the person/audio | active (switchable) |
 | `adapters/hardware/radar_ld2450.py` | Person detection: reads XIAO ESP32S3/LD2450 data relayed over ESP-NOW + USB serial (see `../mmWave/`, `../mmWaveBridge/`) | active (switchable via `RADAR_PROVIDER`) |
-| `adapters/chat_bridge.py` | Web chat app: mirrors the conversation, accepts typed turns, takeover target when someone enters | active |
-| `adapters/hardware/buttons.py` | Button input (currently: `t` for display takeover, handled inline by `console_input_loop` in `entrypoints/main.py`) | dummy, unused (no physical buttons yet) |
+| `adapters/chat_bridge.py` | Web chat app: mirrors the conversation, accepts typed turns, and is the destination when a spoken answer switches modality on someone entering | active |
 
 ## Local fallback: running the pipeline on your Mac
 
@@ -95,7 +94,7 @@ You can also run the whole pipeline directly on the Mac (e.g. for development wi
 
 - Raspberry Pi (Linux, ALSA) or macOS (for local/dev runs)
 - ReSpeaker USB Mic Array v2.0 (`ArrayUAC10`, 6 channels) as microphone and speaker (Pi) — also provides onboard direction-of-arrival (DOA) over USB HID, independent of the audio stream
-- 2x Waveshare RGB LED matrix 96x48, daisy-chained (rpi-rgb-led-matrix / `rgbmatrix`) — panel 1 status, panel 2 eyes
+- 1x Waveshare RGB LED matrix 96x48 (rpi-rgb-led-matrix / `rgbmatrix`) — eyes only; status is shown on a separate tie LED strip driven by the bridge ESP32
 - MG996R servo on GPIO19 (hardware PWM) for head panning — GPIO18 is taken by the LED matrix's OE- signal
 - HLK-LD2450 radar sensor on a Seeed XIAO ESP32S3 (`../mmWave/`), relayed to the Pi via ESP-NOW + a plain ESP32 DevKit USB bridge (`../mmWaveBridge/`)
 
