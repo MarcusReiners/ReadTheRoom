@@ -166,7 +166,7 @@ def console_input_loop(
 def vad_input_loop(
     bus: EventBus, turn_queue: "queue.Queue[str]", stt, doa, doa_lock: threading.Lock,
     mic_lock: threading.Lock, assistant_speaking: threading.Event,
-    poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8,
+    poll_interval_s: float = 0.2, trailing_silence_s: float = 1.5, trigger_confirm_polls: int = 2,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
     onboard VAD and starts recording automatically once it detects speech,
@@ -181,6 +181,14 @@ def vad_input_loop(
     while TTS is playing - the mic picks up the assistant's own voice same as
     any other sound, and without this guard that reliably self-triggers a
     "recording" of the assistant talking to itself.
+
+    trigger_confirm_polls: after voice_active first flips true, recording
+    starts immediately (so no audio is lost) but is discarded unless
+    voice_active stays true for this many more consecutive polls - rejects a
+    single brief noise blip (a knock, click, a moment of servo/motor noise)
+    without needing to delay the start of a real utterance to find out.
+    trailing_silence_s deliberately isn't too short either: cutting off after
+    a shorter gap clips natural mid-sentence pauses (thinking, a breath).
     """
     while True:
         if assistant_speaking.is_set():
@@ -199,40 +207,58 @@ def vad_input_loop(
             time.sleep(poll_interval_s)
             continue
 
-        aborted = False
+        abort_reason = None
         try:
             temp_in = "temp_in_vad.wav"
             bus.publish(ListeningStateChanged(listening=True))
             proc, raw_file = _spawn_recorder(temp_in)
 
-            start_time = time.monotonic()
-            last_active_time = start_time
-            while True:
+            # Confirmation phase: recording's already running (so no audio is
+            # lost), but require voice_active to stay true a few more polls
+            # before treating this as real speech rather than a brief blip.
+            confirmed_polls = 0
+            while confirmed_polls < trigger_confirm_polls:
                 time.sleep(poll_interval_s)
                 if assistant_speaking.is_set():
-                    # TTS started mid-recording - almost certainly means this
-                    # recording has picked up (or is about to pick up) the
-                    # assistant's own voice. Discard rather than transcribe it.
-                    aborted = True
+                    abort_reason = "Assistent hat zu sprechen begonnen"
                     break
                 with doa_lock:
                     still_active = doa.get_voice_active()
                 if still_active:
-                    last_active_time = time.monotonic()
-                if time.monotonic() - last_active_time >= trailing_silence_s:
+                    confirmed_polls += 1
+                else:
+                    abort_reason = "nur kurzer Ausschlag, keine echte Sprache"
                     break
-                if time.monotonic() - start_time >= config.MAX_RECORD_SECONDS:
-                    break
+
+            if abort_reason is None:
+                start_time = time.monotonic()
+                last_active_time = start_time
+                while True:
+                    time.sleep(poll_interval_s)
+                    if assistant_speaking.is_set():
+                        # TTS started mid-recording - almost certainly means this
+                        # recording has picked up (or is about to pick up) the
+                        # assistant's own voice. Discard rather than transcribe it.
+                        abort_reason = "Assistent hat zu sprechen begonnen"
+                        break
+                    with doa_lock:
+                        still_active = doa.get_voice_active()
+                    if still_active:
+                        last_active_time = time.monotonic()
+                    if time.monotonic() - last_active_time >= trailing_silence_s:
+                        break
+                    if time.monotonic() - start_time >= config.MAX_RECORD_SECONDS:
+                        break
 
             bus.publish(ListeningStateChanged(listening=False))
             success = _finish_recording(proc, raw_file, temp_in)
         finally:
             mic_lock.release()
 
-        if aborted:
+        if abort_reason is not None:
             if os.path.exists(temp_in):
                 os.remove(temp_in)
-            logger.info("[VAD] Aufnahme verworfen (Assistent hat zu sprechen begonnen).")
+            logger.info("[VAD] Aufnahme verworfen (%s).", abort_reason)
             continue
 
         if not success:
