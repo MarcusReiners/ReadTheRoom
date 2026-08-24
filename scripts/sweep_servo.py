@@ -25,6 +25,7 @@ def main() -> None:
         max_angle=config.SERVO_MAX_ANGLE,
         hardware_min_angle=config.SERVO_HARDWARE_MIN_ANGLE,
         hardware_max_angle=config.SERVO_HARDWARE_MAX_ANGLE,
+        use_pigpio=config.SERVO_USE_PIGPIO,
     )
 
     print(f"Voller Schwenk zwischen {config.SERVO_MIN_ANGLE:.0f} und {config.SERVO_MAX_ANGLE:.0f} Grad.")
