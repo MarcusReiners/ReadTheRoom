@@ -90,6 +90,10 @@ SERVO_HARDWARE_MAX_ANGLE = float(_env("SERVO_HARDWARE_MAX_ANGLE", "360"))
 # Use pigpio's DMA-timed PWM instead of gpiozero's default software-timed thread -
 # fixes chatter while holding a fixed position. Needs `sudo pigpiod` running.
 SERVO_USE_PIGPIO = _env_bool("SERVO_USE_PIGPIO", False)
+# Where the calibrated home-offset (see adapters/hardware/servo_calibration.py)
+# is persisted - survives restarts, editable via scripts/calibrate_servo_home.py
+# or the web app's settings page.
+SERVO_CALIBRATION_PATH = _env("SERVO_CALIBRATION_PATH", "servo_calibration.json")
 
 # --- Radar (HLK-LD2450 on a Seeed XIAO ESP32S3 -> ESP-NOW -> bridge ESP32 --
 # --- -> USB serial into the Pi; see mmWave/ and mmWaveBridge/) -------------

@@ -26,21 +26,14 @@ def build_display(bus: EventBus):
     return matrix, face
 
 
-def build_turntable():
+def build_test_turntable():
     if not config.USE_SERVO:
         print("USE_SERVO ist False - kein Servo zum Testen.")
         return None
 
-    from adapters.hardware.turntable import ServoTurntableAdapter
+    from adapters.factory import build_turntable
 
-    return ServoTurntableAdapter(
-        pin=config.SERVO_GPIO_PIN,
-        min_angle=config.SERVO_MIN_ANGLE,
-        max_angle=config.SERVO_MAX_ANGLE,
-        hardware_min_angle=config.SERVO_HARDWARE_MIN_ANGLE,
-        hardware_max_angle=config.SERVO_HARDWARE_MAX_ANGLE,
-        use_pigpio=config.SERVO_USE_PIGPIO,
-    )
+    return build_turntable(config)
 
 
 def demo_display(bus: EventBus, face) -> None:
@@ -126,7 +119,7 @@ def main() -> None:
 
     bus = EventBus()
     matrix, face = build_display(bus)
-    turntable = build_turntable()
+    turntable = build_test_turntable()
 
     if face is None and turntable is None:
         print("Weder Display noch Servo aktiviert (USE_LED_MATRIX/USE_SERVO) - nichts zu testen.")

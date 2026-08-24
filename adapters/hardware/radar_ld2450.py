@@ -66,6 +66,7 @@ class RadarLD2450Adapter:
         self._thread: threading.Thread | None = None
         self._write_lock = threading.Lock()
         self._serial: serial.Serial | None = None
+        self._pending_commands: list[dict] = []
 
         self._latest_zone: dict = {"valid": False}
         self._latest_calibration: dict = {"calibrating": False}
@@ -89,19 +90,30 @@ class RadarLD2450Adapter:
         return dict(self._latest_calibration)
 
     def send_command(self, command: dict) -> None:
-        line = json.dumps(command) + "\n"
         with self._write_lock:
             if self._serial is not None and self._serial.is_open:
-                try:
-                    self._serial.write(line.encode("utf-8"))
-                except serial.SerialException as e:
-                    logger.warning("[Radar] Befehl konnte nicht gesendet werden: %s", e)
+                self._write(command)
+            else:
+                # Connection isn't up yet (e.g. commands sent right after start()) -
+                # queue it rather than silently dropping, flushed once connected.
+                self._pending_commands.append(command)
+
+    def _write(self, command: dict) -> None:
+        line = json.dumps(command) + "\n"
+        try:
+            self._serial.write(line.encode("utf-8"))
+        except serial.SerialException as e:
+            logger.warning("[Radar] Befehl konnte nicht gesendet werden: %s", e)
 
     def _read_loop(self) -> None:
         while not self._stop.is_set():
             try:
                 self._serial = serial.Serial(self._serial_port, self._baud_rate, timeout=1)
                 logger.info("[Radar] Verbunden mit Bridge auf %s", self._serial_port)
+                with self._write_lock:
+                    for command in self._pending_commands:
+                        self._write(command)
+                    self._pending_commands.clear()
                 self._consume(self._serial)
             except serial.SerialException as e:
                 logger.warning("[Radar] Bridge auf %s nicht erreichbar: %s", self._serial_port, e)

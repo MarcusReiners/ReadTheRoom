@@ -22,16 +22,9 @@ def main() -> None:
         print("USE_SERVO ist False - kein Servo zum Homen.")
         return
 
-    from adapters.hardware.turntable import ServoTurntableAdapter
+    from adapters.factory import build_turntable
 
-    turntable = ServoTurntableAdapter(
-        pin=config.SERVO_GPIO_PIN,
-        min_angle=config.SERVO_MIN_ANGLE,
-        max_angle=config.SERVO_MAX_ANGLE,
-        hardware_min_angle=config.SERVO_HARDWARE_MIN_ANGLE,
-        hardware_max_angle=config.SERVO_HARDWARE_MAX_ANGLE,
-        use_pigpio=config.SERVO_USE_PIGPIO,
-    )
+    turntable = build_turntable(config)
     center = (config.SERVO_MIN_ANGLE + config.SERVO_MAX_ANGLE) / 2
     target = args.angle if args.angle is not None else center
     turntable.set_angle_immediate(target)
