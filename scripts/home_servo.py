@@ -12,7 +12,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Servo auf eine feste Position fahren und dort halten.")
     parser.add_argument(
         "--angle", type=float, default=None,
-        help="Zielwinkel in Grad (Standard: Mitte von SERVO_MIN_ANGLE/SERVO_MAX_ANGLE).",
+        help="Zielwinkel in DOA-Konvention (90=Home, Standard: Home-Position).",
     )
     args = parser.parse_args()
 
@@ -25,10 +25,12 @@ def main() -> None:
     from adapters.factory import build_turntable
 
     turntable = build_turntable(config)
-    center = (config.SERVO_MIN_ANGLE + config.SERVO_MAX_ANGLE) / 2
-    target = args.angle if args.angle is not None else center
-    turntable.set_angle_immediate(target)
-    print(f"Servo haelt bei {target:.0f} Grad.")
+    if args.angle is not None:
+        turntable.set_doa_angle_immediate(args.angle)
+        print(f"Servo haelt bei DOA-Winkel {args.angle:.0f} Grad (90=Home).")
+    else:
+        turntable.home()
+        print("Servo in Home-Position.")
     print("Strg+C zum Beenden (Servo wird danach freigegeben).")
 
     try:

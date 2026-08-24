@@ -1,4 +1,5 @@
 import struct
+import time
 
 import usb.core
 import usb.util
@@ -6,6 +7,8 @@ import usb.util
 _VENDOR_ID = 0x2886
 _PRODUCT_ID = 0x0018
 _TIMEOUT_MS = 100000
+_RETRY_ATTEMPTS = 3
+_RETRY_DELAY_S = 0.05
 
 # (param_id, cmd_base) pairs, from Seeed's usb_4_mic_array/tuning.py PARAMETERS table.
 _DOAANGLE_PARAM = (21, 0x00)
@@ -30,10 +33,25 @@ class RespeakerDOAAdapter:
 
     def _read_param(self, param_id: int, cmd_base: int) -> int:
         cmd = 0x80 | cmd_base | 0x40  # read + int type, per Seeed protocol
-        response = self._dev.ctrl_transfer(
-            usb.util.CTRL_IN | usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_RECIPIENT_DEVICE,
-            0, cmd, param_id, 8, _TIMEOUT_MS,
-        )
+        # Back-to-back control transfers from two polling loops (DOA tracking
+        # and VAD-triggered recording) occasionally stall this endpoint with a
+        # transient USBError (Pipe error) - usually clears itself on the very
+        # next attempt, so a short retry is cheaper than treating it as fatal.
+        last_error: usb.core.USBError | None = None
+        for attempt in range(_RETRY_ATTEMPTS):
+            try:
+                response = self._dev.ctrl_transfer(
+                    usb.util.CTRL_IN | usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_RECIPIENT_DEVICE,
+                    0, cmd, param_id, 8, _TIMEOUT_MS,
+                )
+                break
+            except usb.core.USBError as e:
+                last_error = e
+                if attempt < _RETRY_ATTEMPTS - 1:
+                    time.sleep(_RETRY_DELAY_S)
+        else:
+            raise last_error
+
         value, _ = struct.unpack("ii", response.tobytes())
         return value
 
