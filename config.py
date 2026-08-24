@@ -74,11 +74,19 @@ USE_LED_MATRIX = _env_bool("USE_LED_MATRIX", True)
 # settling time per GPIO toggle, at the cost of max refresh rate.
 GPIO_SLOWDOWN = int(_env("GPIO_SLOWDOWN", "4"))
 
-# --- Servo turntable (MG996R on hardware PWM) ------------------------------
+# --- Servo turntable (360-degree positional servo on hardware PWM) --------
 USE_SERVO = _env_bool("USE_SERVO", True)
 SERVO_GPIO_PIN = int(_env("SERVO_GPIO_PIN", "19"))
+# Safe operating clamp - every commanded angle is restricted to this window so the
+# head can never wind the cables running into it. NOT the servo's physical range.
 SERVO_MIN_ANGLE = float(_env("SERVO_MIN_ANGLE", "20"))
 SERVO_MAX_ANGLE = float(_env("SERVO_MAX_ANGLE", "160"))
+# The servo's true mechanical range, used only to calibrate pulse-width-to-angle.
+# Passing SERVO_MIN_ANGLE/MAX_ANGLE here instead would stretch the full pulse
+# range across just the safe window, turning every commanded move within that
+# window into a near-full physical rotation - confirmed on the bench.
+SERVO_HARDWARE_MIN_ANGLE = float(_env("SERVO_HARDWARE_MIN_ANGLE", "0"))
+SERVO_HARDWARE_MAX_ANGLE = float(_env("SERVO_HARDWARE_MAX_ANGLE", "360"))
 
 # --- Radar (HLK-LD2450 on a Seeed XIAO ESP32S3 -> ESP-NOW -> bridge ESP32 --
 # --- -> USB serial into the Pi; see mmWave/ and mmWaveBridge/) -------------
