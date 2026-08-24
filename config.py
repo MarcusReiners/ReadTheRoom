@@ -87,8 +87,8 @@ USE_SERVO = _env_bool("USE_SERVO", True)
 SERVO_GPIO_PIN = int(_env("SERVO_GPIO_PIN", "19"))
 # Safe operating clamp - every commanded angle is restricted to this window so the
 # head can never wind the cables running into it. NOT the servo's physical range.
-SERVO_MIN_ANGLE = float(_env("SERVO_MIN_ANGLE", "20"))
-SERVO_MAX_ANGLE = float(_env("SERVO_MAX_ANGLE", "160"))
+SERVO_MIN_ANGLE = float(_env("SERVO_MIN_ANGLE", "0"))
+SERVO_MAX_ANGLE = float(_env("SERVO_MAX_ANGLE", "180"))
 # The servo's true mechanical range, used only to calibrate pulse-width-to-angle.
 # Passing SERVO_MIN_ANGLE/MAX_ANGLE here instead would stretch the full pulse
 # range across just the safe window, turning every commanded move within that
