@@ -30,8 +30,12 @@ class DummyTurntableAdapter:
     def set_home_offset(self, offset_degrees: float) -> None:
         self.home_offset_degrees = offset_degrees
 
-    def set_raw_angle(self, angle_degrees: float) -> None:
+    def set_raw_angle(self, angle_degrees: float) -> float:
         self.current_heading_degrees = angle_degrees
+        return angle_degrees
+
+    def clamp_raw_angle(self, angle_degrees: float) -> float:
+        return angle_degrees
 
     def offset_for_raw_angle(self, angle_degrees: float) -> float:
         return angle_degrees - 90.0
@@ -52,6 +56,7 @@ class ServoTurntableAdapter:
         max_pulse_width: float = 0.0025,
         use_pigpio: bool = False,
         home_offset_degrees: float = 0.0,
+        move_to_home_on_start: bool = True,
     ) -> None:
         """min_angle/max_angle is the safe clamp every commanded move is restricted
         to (cable-safety window); hardware_min_angle/hardware_max_angle is the
@@ -72,6 +77,13 @@ class ServoTurntableAdapter:
         changes, only where it sits on the servo's true 0-360 range - cable
         safety holds regardless of the offset. Adjustable later via
         set_home_offset() without remounting the horn.
+
+        move_to_home_on_start=False skips driving the servo to that computed
+        position at construction time - for calibrate_servo_home.py, which
+        should sit exactly where it physically already is on launch instead of
+        jumping to a stale computed home before the operator has even started
+        adjusting it by hand. Normal/production use (main.py, test scripts)
+        wants the default True - moving to a known position on startup.
         """
         if use_pigpio:
             from gpiozero import Device
@@ -94,7 +106,7 @@ class ServoTurntableAdapter:
         self._last_move_time = time.monotonic()
         self._servo = AngularServo(
             pin,
-            initial_angle=self.current_heading_degrees,
+            initial_angle=self.current_heading_degrees if move_to_home_on_start else None,
             min_angle=hardware_min_angle,
             max_angle=hardware_max_angle,
             min_pulse_width=min_pulse_width,
@@ -142,7 +154,7 @@ class ServoTurntableAdapter:
         self.home_offset_degrees = offset_degrees
         self._min_angle, self._max_angle = self._windowed_range(offset_degrees)
 
-    def set_raw_angle(self, angle_degrees: float) -> None:
+    def set_raw_angle(self, angle_degrees: float) -> float:
         """Drives the servo to an exact angle on its true hardware range,
         clamped only to hardware_min_angle/hardware_max_angle - NOT the
         cable-safety window. For interactive home calibration only, while a
@@ -152,9 +164,20 @@ class ServoTurntableAdapter:
         find where "forward" actually is. Use offset_for_raw_angle() afterward
         to convert the angle you land on into a home offset, then
         set_home_offset() to actually apply the (still cable-safe) window for
-        normal operation - this method never touches that window itself."""
-        angle_degrees = max(self._hardware_min_angle, min(self._hardware_max_angle, angle_degrees))
+        normal operation - this method never touches that window itself.
+
+        Returns the actually-applied (hardware-clamped) angle - callers MUST
+        track this return value rather than their own running total, or their
+        tracked position silently drifts away from where the servo really is
+        once a requested angle goes out of hardware range."""
+        angle_degrees = self.clamp_raw_angle(angle_degrees)
         self._servo.angle = angle_degrees
+        return angle_degrees
+
+    def clamp_raw_angle(self, angle_degrees: float) -> float:
+        """Same clamp set_raw_angle() applies, without moving the servo -
+        for bookkeeping that needs to match what a real call would resolve to."""
+        return max(self._hardware_min_angle, min(self._hardware_max_angle, angle_degrees))
 
     def offset_for_raw_angle(self, angle_degrees: float) -> float:
         """The home_offset_degrees that makes angle_degrees the center of the
@@ -163,10 +186,17 @@ class ServoTurntableAdapter:
         return angle_degrees - self._default_center_angle
 
     def raw_angle_for_offset(self, offset_degrees: float) -> float:
-        """Inverse of offset_for_raw_angle() - the real hardware angle a given
-        home offset currently points to, e.g. to resume calibration from
-        wherever the last saved offset actually sits."""
-        return self._default_center_angle + offset_degrees
+        """The real hardware angle a given home offset currently resolves to -
+        e.g. to resume calibration from wherever the last saved offset
+        actually sits. Must go through _windowed_range() rather than just
+        _default_center_angle + offset_degrees: for an offset extreme enough
+        to saturate against the hardware edge (like the window already does
+        in __init__/set_home_offset), the effective center isn't the naive
+        sum - using the naive formula here would visibly jerk the servo a
+        second time on startup, disagreeing with where __init__ already
+        parked it."""
+        lo, hi = self._windowed_range(offset_degrees)
+        return (lo + hi) / 2
 
     @property
     def _default_center_angle(self) -> float:
