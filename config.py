@@ -87,6 +87,9 @@ SERVO_MAX_ANGLE = float(_env("SERVO_MAX_ANGLE", "160"))
 # window into a near-full physical rotation - confirmed on the bench.
 SERVO_HARDWARE_MIN_ANGLE = float(_env("SERVO_HARDWARE_MIN_ANGLE", "0"))
 SERVO_HARDWARE_MAX_ANGLE = float(_env("SERVO_HARDWARE_MAX_ANGLE", "360"))
+# Use pigpio's DMA-timed PWM instead of gpiozero's default software-timed thread -
+# fixes chatter while holding a fixed position. Needs `sudo pigpiod` running.
+SERVO_USE_PIGPIO = _env_bool("SERVO_USE_PIGPIO", False)
 
 # --- Radar (HLK-LD2450 on a Seeed XIAO ESP32S3 -> ESP-NOW -> bridge ESP32 --
 # --- -> USB serial into the Pi; see mmWave/ and mmWaveBridge/) -------------

@@ -37,13 +37,26 @@ class ServoTurntableAdapter:
         hardware_max_angle: float = 360.0,
         min_pulse_width: float = 0.0005,
         max_pulse_width: float = 0.0025,
+        use_pigpio: bool = False,
     ) -> None:
         """min_angle/max_angle is the safe clamp every commanded move is restricted
         to (cable-safety window); hardware_min_angle/hardware_max_angle is the
         servo's true mechanical range, used only to calibrate pulse-width-to-angle.
         Conflating the two stretches the full pulse range across just the safe
         window, turning every in-window move into a near-full physical rotation.
+
+        use_pigpio switches gpiozero's global pin factory to pigpio's DMA-timed
+        PWM instead of its default software-timed PWM thread - fixes a digital
+        servo chattering while holding a fixed position (still while tracking a
+        moving target) by removing the OS-scheduling jitter it was chasing.
+        Requires `sudo pigpiod` running and the `pigpio` package installed.
         """
+        if use_pigpio:
+            from gpiozero import Device
+            from gpiozero.pins.pigpio import PiGPIOFactory
+
+            Device.pin_factory = PiGPIOFactory()
+
         from gpiozero import AngularServo
 
         self._min_angle = min_angle
