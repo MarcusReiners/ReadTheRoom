@@ -36,7 +36,7 @@ OPENAI_API_KEY = _env_opt("OPENAI_API_KEY")
 GEMINI_API_KEY = _env_opt("GEMINI_API_KEY")
 
 # --- ElevenLabs settings ------------------------------------------------
-ELEVENLABS_VOICE_ID = _env("ELEVENLABS_VOICE_ID", "17emZEdpFxzVxRKIMpMN")
+ELEVENLABS_VOICE_ID = _env("ELEVENLABS_VOICE_ID", "wDsJlOXPqcvIUKdLXjDs")
 ELEVENLABS_TTS_MODEL = _env("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
 ELEVENLABS_STT_MODEL = _env("ELEVENLABS_STT_MODEL", "scribe_v1")
 ELEVENLABS_LANGUAGE_CODE = _env("ELEVENLABS_LANGUAGE_CODE", "deu")
