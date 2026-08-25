@@ -2,6 +2,7 @@ import asyncio
 import logging
 import queue
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -16,12 +17,19 @@ from domain.conversation import ConversationState
 from domain.events import (
     AssistantDeltaReceived,
     AssistantMessageCompleted,
+    AssistantTurnCancelled,
     ListeningStateChanged,
     ModalitySwitched,
     RadarTargetsUpdated,
     SpeechTranscribed,
 )
 from service_layer.bus import EventBus
+
+# Must match entrypoints/main.py's PRIORITY_CHAT - lower priority number is
+# served first out of turn_queue (a queue.PriorityQueue of (priority,
+# monotonic_ns, text)), so a chat-typed message always jumps ahead of
+# anything still waiting from voice/console input.
+_PRIORITY_CHAT = 0
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +48,7 @@ class ChatBridgeAdapter:
         bus: EventBus,
         conversation: ConversationState,
         store: ConversationStore,
-        turn_queue: "queue.Queue[str]",
+        turn_queue: "queue.PriorityQueue",
         radar,
         turntable,
         servo_calibration_path: str,
@@ -51,6 +59,7 @@ class ChatBridgeAdapter:
         active_voice_id: str | None = None,
         calibration_mode: threading.Event | None = None,
         composing_mode: threading.Event | None = None,
+        cancel_current_turn: threading.Event | None = None,
         host: str = "0.0.0.0",
         port: int = 8765,
     ) -> None:
@@ -85,6 +94,11 @@ class ChatBridgeAdapter:
         # vad_input_loop pauses on this too (composing_mode param), so typing
         # a message doesn't also get picked up as a separate spoken turn.
         self.composing_mode = composing_mode if composing_mode is not None else threading.Event()
+        # Set the instant a chat message is sent (user_text handler below) -
+        # main.py's turn loop clears it before each handle_turn() call and
+        # handle_turn() checks it while streaming, so a still-in-progress
+        # voice-triggered reply gets cut short rather than finishing first.
+        self.cancel_current_turn = cancel_current_turn if cancel_current_turn is not None else threading.Event()
         self.host = host
         self.port = port
 
@@ -107,12 +121,15 @@ class ChatBridgeAdapter:
         self._register_routes()
 
         bus.subscribe(SpeechTranscribed, lambda e: self._broadcast({
-            "type": "user_message", "text": e.text, "conversation_id": e.conversation_id,
+            "type": "user_message", "text": e.text, "conversation_id": e.conversation_id, "replaced": e.replaced,
         }))
         bus.subscribe(AssistantDeltaReceived, lambda e: self._broadcast({
             "type": "assistant_delta", "text": e.delta, "conversation_id": e.conversation_id,
         }))
         bus.subscribe(AssistantMessageCompleted, lambda e: self._on_assistant_message_completed(e))
+        bus.subscribe(AssistantTurnCancelled, lambda e: self._broadcast({
+            "type": "assistant_cancelled", "conversation_id": e.conversation_id,
+        }))
         bus.subscribe(ListeningStateChanged,
                        lambda e: self._broadcast({"type": "listening", "value": e.listening}))
         bus.subscribe(ModalitySwitched,
@@ -247,7 +264,14 @@ class ChatBridgeAdapter:
         if msg_type == "user_text":
             text = (data.get("text") or "").strip()
             if text:
-                self.turn_queue.put(text)
+                # Chat always has priority: interrupt whatever's currently
+                # playing/generating (a harmless no-op if nothing is) and
+                # jump this ahead of anything still waiting from voice/
+                # console input - see main.py's PRIORITY_CHAT/handle_turn().
+                self.cancel_current_turn.set()
+                if self.tts is not None:
+                    self.tts.request_takeover()
+                self.turn_queue.put((_PRIORITY_CHAT, time.monotonic_ns(), text))
         elif msg_type == "set_voice_enabled":
             self.conversation.voice_enabled = bool(data.get("value"))
             if not self.conversation.voice_enabled and self.tts is not None:

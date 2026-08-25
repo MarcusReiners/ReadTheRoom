@@ -32,6 +32,10 @@ class PersonCountChanged(Event):
 class SpeechTranscribed(Event):
     text: str
     conversation_id: str
+    # True when this overwrote the conversation's last (still-unanswered)
+    # user message in place rather than adding a new one - see
+    # ConversationStore.replace_or_add_user_message().
+    replaced: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,14 @@ class AssistantDeltaReceived(Event):
 @dataclass(frozen=True)
 class AssistantMessageCompleted(Event):
     text: str
+    conversation_id: str
+
+
+@dataclass(frozen=True)
+class AssistantTurnCancelled(Event):
+    """Published instead of AssistantMessageCompleted when a reply was cut
+    short mid-generation - a chat-typed message taking priority over a
+    still-in-progress voice-triggered reply (see main.py's handle_turn())."""
     conversation_id: str
 
 
