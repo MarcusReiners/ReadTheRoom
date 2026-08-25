@@ -46,9 +46,10 @@ class LedEyesAdapter:
         self.height = height
         # Set for as long as the web app's settings tab (servo home
         # calibration) is open - see start_doa_tracking()'s calibration_mode
-        # param, which pauses on the same Event. Checked directly here rather
-        # than through set_eye_direction()/DOA angle plumbing, since a wrench
-        # replaces the eyes entirely rather than being a pose of them.
+        # param, which pauses on the same Event. Checked directly here (in
+        # render(), driving the openness animation below) rather than
+        # through set_eye_direction()/DOA angle plumbing, since "closed eyes"
+        # replaces the normal open-eye rendering entirely.
         self._calibration_mode = calibration_mode
         # DOA readings can report angles well outside the servo's safe
         # window (the head can't physically turn that far) - clamping here
@@ -67,6 +68,19 @@ class LedEyesAdapter:
         self._anim_target_angle = 90.0
         self._anim_start_time = 0.0
         self._anim_duration_s = 0.0
+
+        # Openness animation for calibration_mode: 1.0 = normal open eyes,
+        # 0.0 = fully closed (a flat line) - same wall-clock-driven pattern
+        # as _current_angle() above, just for a different property. Detected
+        # and (re)started from render() itself by diffing calibration_mode
+        # against _was_calibrating each frame, since that's the only place
+        # polling the Event anyway.
+        self._openness = 1.0
+        self._openness_anim_start = 1.0
+        self._openness_anim_target = 1.0
+        self._openness_anim_start_time = 0.0
+        self._openness_anim_duration_s = 0.0
+        self._was_calibrating = False
 
         self._eye_r = max(4, min(self.height // 6, self.width // 10))
         self._dot_r = max(2, self._eye_r // 2)
@@ -101,9 +115,34 @@ class LedEyesAdapter:
         progress = elapsed / self._anim_duration_s
         return self._anim_start_angle + (self._anim_target_angle - self._anim_start_angle) * progress
 
+    _CLOSE_ANIM_DURATION_S = 0.35
+
+    def _start_openness_animation(self, target: float, duration_s: float) -> None:
+        self._openness_anim_start = self._current_openness()
+        self._openness_anim_target = target
+        self._openness_anim_start_time = time.monotonic()
+        self._openness_anim_duration_s = max(duration_s, 0.001)
+
+    def _current_openness(self) -> float:
+        if self._openness_anim_duration_s <= 0:
+            return self._openness
+        elapsed = time.monotonic() - self._openness_anim_start_time
+        if elapsed >= self._openness_anim_duration_s:
+            self._openness = self._openness_anim_target
+            self._openness_anim_duration_s = 0.0
+            return self._openness
+        progress = elapsed / self._openness_anim_duration_s
+        return self._openness_anim_start + (self._openness_anim_target - self._openness_anim_start) * progress
+
     def render(self, canvas, t: float) -> None:
-        if self._calibration_mode is not None and self._calibration_mode.is_set():
-            self._draw_gear(canvas)
+        calibrating = self._calibration_mode is not None and self._calibration_mode.is_set()
+        if calibrating != self._was_calibrating:
+            self._start_openness_animation(0.0 if calibrating else 1.0, self._CLOSE_ANIM_DURATION_S)
+            self._was_calibrating = calibrating
+
+        openness = self._current_openness()
+        if openness < 0.999:
+            self._draw_closing_eyes(canvas, openness)
             return
 
         blinking = (t % self.BLINK_INTERVAL) < self.BLINK_DURATION
@@ -126,37 +165,19 @@ class LedEyesAdapter:
                 continue
             _fill_circle(canvas, cx + px, self._cy, self._dot_r, _WHITE)
 
-    def _draw_gear(self, canvas) -> None:
-        """A gear glyph shown in place of the eyes while calibration_mode is
-        set - same idea as the web app's settings-tab icon (a ring with
-        teeth stamped around it), sized to roughly match a single eye
-        (_eye_r) rather than spanning the whole matrix."""
-        cx = self.x_offset + self.width // 2
-        cy = self.height // 2 - self.height // 6  # shifted up from dead center
-
-        body_outer_r = max(2, round(self._eye_r * 0.28))
-        body_inner_r = max(1, round(body_outer_r * 0.45))
-        # Scaled off the (now much smaller) body, not the fixed _dot_r-based
-        # size the eyes use - otherwise the teeth stay eye-pupil-sized while
-        # the body shrinks around them and end up looking oversized.
-        tooth_r = max(1, round(body_outer_r * 0.6))
-        tooth_offset = body_outer_r + tooth_r - 1
-        n_teeth = 8
-
-        _draw_ring(canvas, cx, cy, body_outer_r, body_inner_r, _WHITE)
-        for i in range(n_teeth):
-            # i*45 degrees: right, bottom-right, bottom, bottom-left, left,
-            # top-left, top, top-right - all 8 canonical gear-tooth spots,
-            # corners included.
-            angle = 2 * math.pi * i / n_teeth
-            tx = cx + tooth_offset * math.cos(angle)
-            ty = cy + tooth_offset * math.sin(angle)
-            # A square (not a circle) with a corner pointing straight outward
-            # along this tooth's own radial angle - e.g. the left/right teeth
-            # show a corner facing directly left/right, the diagonal teeth
-            # (top-left/top-right/bottom-left/bottom-right) show a corner
-            # facing straight into that corner direction, not a flat edge.
-            _fill_diamond(canvas, int(round(tx)), int(round(ty)), tooth_r, angle, _WHITE)
+    def _draw_closing_eyes(self, canvas, openness: float) -> None:
+        """Both eyes shown mid-blink-close (or opening back up), driven by
+        the openness animation rather than the normal periodic blink timer -
+        used while calibration_mode is set, and during the brief transition
+        in/out of it. At openness=1 this would be identical to a normal open
+        pupil (_dot_r circle); at openness=0 it's a flat line spanning each
+        eye's full width (_eye_r) - width grows and height shrinks together
+        as it closes, so the pupil visibly morphs into a shut eyelid instead
+        of just vanishing."""
+        width_r = max(1, round(self._dot_r + (self._eye_r - self._dot_r) * (1 - openness)))
+        height_r = max(1, round(self._dot_r * openness))
+        for cx in (self._left_cx, self._right_cx):
+            _fill_ellipse(canvas, cx, self._cy, width_r, height_r, _WHITE)
 
 
 def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
@@ -166,23 +187,8 @@ def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
                 canvas.SetPixel(cx + dx, cy + dy, *color)
 
 
-def _draw_ring(canvas, cx: int, cy: int, outer_r: int, inner_r: int, color: tuple) -> None:
-    for dy in range(-outer_r, outer_r + 1):
-        for dx in range(-outer_r, outer_r + 1):
-            dist_sq = dx * dx + dy * dy
-            if inner_r * inner_r <= dist_sq <= outer_r * outer_r:
-                canvas.SetPixel(cx + dx, cy + dy, *color)
-
-
-def _fill_diamond(canvas, cx: int, cy: int, r: int, angle: float, color: tuple) -> None:
-    """A square (L1 ball) rotated so one corner points along `angle` from
-    its center - unlike an axis-aligned square, a plain |x|+|y|<=r diamond's
-    corners sit at 0/90/180/270 degrees, so rotating the whole thing by
-    `angle` puts a corner exactly there instead of a flat edge."""
-    cos_a, sin_a = math.cos(-angle), math.sin(-angle)
-    for dy in range(-r, r + 1):
-        for dx in range(-r, r + 1):
-            rx = dx * cos_a - dy * sin_a
-            ry = dx * sin_a + dy * cos_a
-            if abs(rx) + abs(ry) <= r:
+def _fill_ellipse(canvas, cx: int, cy: int, rx: int, ry: int, color: tuple) -> None:
+    for dy in range(-ry, ry + 1):
+        for dx in range(-rx, rx + 1):
+            if (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1.0:
                 canvas.SetPixel(cx + dx, cy + dy, *color)
