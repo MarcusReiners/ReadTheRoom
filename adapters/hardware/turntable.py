@@ -288,7 +288,11 @@ class ServoTurntableAdapter:
         clamped = max(self._min_angle, min(self._max_angle, raw_target))
         return abs(clamped - self.current_heading_degrees)
 
-    def _ramp_to(self, target_angle_degrees: float, duration_s: float, steps_per_s: float = 50.0) -> None:
+    def _ramp_to(self, target_angle_degrees: float, duration_s: float, steps_per_s: float = 20.0) -> None:
+        # 50 steps/s (previous default) sent PWM updates faster than this
+        # servo/PWM setup settles between them, producing visible jitter
+        # instead of a smooth glide - 20/s is still fluid to the eye for head
+        # motion while giving each step room to actually land.
         start_angle = self.current_heading_degrees
         n_steps = max(1, int(duration_s * steps_per_s))
         interval = duration_s / n_steps
