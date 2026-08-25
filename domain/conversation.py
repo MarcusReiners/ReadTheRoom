@@ -18,5 +18,13 @@ class ConversationState:
     def mark_confidential(self) -> None:
         self.confidential = True
 
+    def set_private_mode(self, enabled: bool) -> None:
+        """User-facing toggle (web app settings) for the same `confidential`
+        flag handlers.py's on_person_count_changed() already gates the
+        auto-switch-to-text-on-second-person behavior on - off means the
+        assistant keeps talking aloud regardless of how many people are in
+        the room."""
+        self.confidential = enabled
+
     def switch_modality(self, modality: str) -> None:
         self.modality = modality
