@@ -168,7 +168,7 @@ def vad_input_loop(
     bus: EventBus, turn_queue: "queue.Queue[str]", stt, doa, doa_lock: threading.Lock,
     mic_lock: threading.Lock, assistant_speaking: threading.Event,
     poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8, trigger_confirm_polls: int = 2,
-    calibration_mode: threading.Event | None = None,
+    calibration_mode: threading.Event | None = None, composing_mode: threading.Event | None = None,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
     onboard VAD and starts recording automatically once it detects speech,
@@ -189,6 +189,12 @@ def vad_input_loop(
     doesn't pick up and later answer whatever gets said while someone's
     fiddling with servo calibration.
 
+    composing_mode: set while a client has the chat text box focused (see
+    ChatBridgeAdapter's set_composing) - skipped here too, so typing a
+    message (possibly while talking, to someone else in the room or reading
+    the draft aloud) doesn't also get picked up and queued as a second,
+    separate voice turn.
+
     trigger_confirm_polls: after voice_active first flips true, recording
     starts immediately (so no audio is lost) but is discarded unless
     voice_active stays true for this many more consecutive polls - rejects a
@@ -198,7 +204,11 @@ def vad_input_loop(
     a shorter gap clips natural mid-sentence pauses (thinking, a breath).
     """
     while True:
-        if assistant_speaking.is_set() or (calibration_mode is not None and calibration_mode.is_set()):
+        if (
+            assistant_speaking.is_set()
+            or (calibration_mode is not None and calibration_mode.is_set())
+            or (composing_mode is not None and composing_mode.is_set())
+        ):
             time.sleep(poll_interval_s)
             continue
 
@@ -232,6 +242,9 @@ def vad_input_loop(
                 if calibration_mode is not None and calibration_mode.is_set():
                     abort_reason = "Kalibrierungsmodus aktiv"
                     break
+                if composing_mode is not None and composing_mode.is_set():
+                    abort_reason = "Nutzer tippt im Chat"
+                    break
                 with doa_lock:
                     still_active = doa.get_voice_active()
                 if still_active:
@@ -253,6 +266,9 @@ def vad_input_loop(
                         break
                     if calibration_mode is not None and calibration_mode.is_set():
                         abort_reason = "Kalibrierungsmodus aktiv"
+                        break
+                    if composing_mode is not None and composing_mode.is_set():
+                        abort_reason = "Nutzer tippt im Chat"
                         break
                     with doa_lock:
                         still_active = doa.get_voice_active()
@@ -364,6 +380,12 @@ def main() -> None:
     # USE_LED_MATRIX off) so ChatBridgeAdapter always has one to set/clear.
     calibration_mode = threading.Event()
 
+    # Set for as long as a client has the chat text box focused - vad_input_loop
+    # pauses on this too (see its composing_mode param), so typing a message
+    # doesn't also get picked up as a separate spoken turn. Created unconditionally
+    # for the same reason as calibration_mode above.
+    composing_mode = threading.Event()
+
     if config.USE_LED_MATRIX:
         from adapters.hardware.led_matrix import LedMatrix
         from adapters.hardware.led_eyes import LedEyesAdapter
@@ -398,6 +420,7 @@ def main() -> None:
         voices=app_settings["voices"],
         active_voice_id=app_settings["active_voice_id"],
         calibration_mode=calibration_mode,
+        composing_mode=composing_mode,
         host=config.CHAT_BRIDGE_HOST, port=config.CHAT_BRIDGE_PORT,
     )
     chat_bridge.start()
@@ -424,7 +447,7 @@ def main() -> None:
         threading.Thread(
             target=vad_input_loop,
             args=(bus, turn_queue, stt, doa, doa_lock, mic_lock, assistant_speaking),
-            kwargs={"calibration_mode": calibration_mode},
+            kwargs={"calibration_mode": calibration_mode, "composing_mode": composing_mode},
             daemon=True,
         ).start()
 

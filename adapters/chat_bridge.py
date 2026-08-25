@@ -50,6 +50,7 @@ class ChatBridgeAdapter:
         voices: list | None = None,
         active_voice_id: str | None = None,
         calibration_mode: threading.Event | None = None,
+        composing_mode: threading.Event | None = None,
         host: str = "0.0.0.0",
         port: int = 8765,
     ) -> None:
@@ -80,6 +81,10 @@ class ChatBridgeAdapter:
         # main.py didn't pass one (USE_SERVO/USE_LED_MATRIX both off) so this class
         # always has something to .set()/.clear() without needing to know why not.
         self.calibration_mode = calibration_mode if calibration_mode is not None else threading.Event()
+        # Set for as long as a client has the chat text box focused -
+        # vad_input_loop pauses on this too (composing_mode param), so typing
+        # a message doesn't also get picked up as a separate spoken turn.
+        self.composing_mode = composing_mode if composing_mode is not None else threading.Event()
         self.host = host
         self.port = port
 
@@ -224,6 +229,13 @@ class ChatBridgeAdapter:
             finally:
                 with self._clients_lock:
                     self._clients.discard(websocket)
+                # A dropped connection (tab closed mid-typing, network blip)
+                # shouldn't leave voice input silently disabled forever with
+                # no on-device indicator that anything's wrong - unlike
+                # calibration_mode (which shows a wrench), there's no visual
+                # cue that composing_mode is stuck.
+                if not self._clients:
+                    self.composing_mode.clear()
 
     def _on_assistant_message_completed(self, event: AssistantMessageCompleted) -> None:
         self._broadcast({"type": "assistant_done", "text": event.text, "conversation_id": event.conversation_id})
@@ -251,6 +263,11 @@ class ChatBridgeAdapter:
                     self.tts.request_takeover()  # settings tab shouldn't have to wait out an in-progress reply
             else:
                 self.calibration_mode.clear()
+        elif msg_type == "set_composing":
+            if bool(data.get("value")):
+                self.composing_mode.set()
+            else:
+                self.composing_mode.clear()
         elif msg_type == "set_volume":
             value = data.get("value")
             if value is not None and self.tts is not None and hasattr(self.tts, "set_volume"):
