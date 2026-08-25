@@ -4,17 +4,14 @@ A desk voice assistant that "reads the room": a radar sensor detects how many pe
 
 ## How it works
 
-1. Recording is started and stopped with ENTER, using a microphone array (arecord + sox, channel downmix to mono; `sox -d` on macOS)
+1. Recording starts automatically when the mic array's onboard VAD hears speech, and stops after a short trailing silence (`vad_input_loop`). Pressing ENTER still works as a manual override. Audio via arecord + sox with a channel downmix to mono; `sox -d` on macOS
 2. Transcription via a swappable STT provider (default: ElevenLabs Scribe; local `faster-whisper` fallback)
 3. Response from a swappable LLM provider via [LiteLLM](https://github.com/BerriAI/litellm) (default: OpenAI; any LiteLLM-supported provider works by changing one config value, incl. local Ollama)
 4. Speech synthesis via a swappable TTS provider (default: ElevenLabs; local Piper fallback), streamed sentence by sentence while the LLM is still generating
-5. Two daisy-chained LED matrix panels show the current state and eyes: panel 1 (status animations, can take over the answer as scrolling text), panel 2 (eyes that blink and track the last known speaker direction)
-6. An MG996R servo pans the head towards that same direction, for gesturing or turning to face incoming speech
-
-While the assistant is speaking, the answer can be redirected from speech to the display with `t` + ENTER — for example when a second person enters the room.
-
-7. A [Seeed XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/) running the LD2450 firmware (`../mmWave/`) reads the sensor over UART and broadcasts target data over **ESP-NOW** (no WiFi AP/router involved — sidesteps the association/isolation issues plain WiFi ran into). A second, plain ESP32 DevKit running a small bridge firmware (`../mmWaveBridge/`) receives those ESP-NOW packets and relays them to the Pi as newline-delimited JSON over a USB-serial connection. The Pi reads that (`adapters/hardware/radar_ld2450.py::RadarLD2450Adapter`) and publishes `PersonCountChanged`/`RadarTargetsUpdated`.
-8. A small web chat app (`adapters/chat_bridge.py`, served at `http://<pi-address>:8765`) always mirrors the conversation as text and accepts typed messages as an alternative to speaking. When the radar detects a second person, the current/next answer is automatically redirected from speech to that chat instead of the LED matrix — reverting back to speech once alone again. A voice on/off toggle in the chat overrides this manually regardless of who's in the room.
+5. A single LED matrix panel shows eyes that blink and track the last known speaker direction. Status (idle/listening/speaking) is shown separately on a 7-LED "tie" strip driven by the bridge ESP32
+6. A DS3225 digital servo pans the head towards that same direction, for gesturing or turning to face incoming speech
+7. A [Seeed XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/) running the LD2450 firmware (`../mmWave/`) reads the sensor over UART and sends target data over **ESP-NOW** (no WiFi AP/router involved — sidesteps the association/isolation issues plain WiFi ran into). A second XIAO ESP32S3 running the bridge firmware (`../mmWaveBridge/`) receives those packets and relays them to the Pi as newline-delimited JSON over USB serial. The Pi reads that (`adapters/hardware/radar_ld2450.py::RadarLD2450Adapter`) and publishes `PersonCountChanged`/`RadarTargetsUpdated`.
+8. A small web app (`adapters/chat_bridge.py`, served at `http://<pi-address>:8765`) mirrors the conversation as text, accepts typed messages, and has a settings tab for the radar zone, servo calibration and turning range, voices, volume, system prompt and LLM model. When the radar detects a second person, the current/next answer is automatically redirected from speech to that chat — reverting back to speech once alone again. A voice on/off toggle overrides this manually regardless of who's in the room.
 
 ## Architecture
 
@@ -22,15 +19,17 @@ The project follows a ports-and-adapters structure with a central event bus:
 
 ```
 entrypoints/     Entry points: main.py (Pi/Mac loop), mac_server.py (local fallback server)
-domain/          Events, conversation state, policies (no hardware code)
+domain/          Events and conversation state (no hardware code)
 service_layer/   EventBus and event handlers (wires domain and adapters together)
 adapters/
   stt/           Speech-to-text adapters (elevenlabs.py, local.py, remote.py)
   tts/           Text-to-speech adapters (base.py, elevenlabs.py, local.py, remote.py)
   hardware/      Physical I/O: LED matrix eyes, servo turntable, radar
   llm.py         LLM access via LiteLLM
-  chat_bridge.py Web chat app (FastAPI/WebSocket): mirrors the conversation, accepts typed turns
-  factory.py     Builds the configured STT/TTS/radar adapter from config.py
+  chat_bridge.py Web app (FastAPI/WebSocket): mirrors the conversation, accepts typed turns, serves the settings tab
+  conversation_store.py  SQLite store for chat history
+  app_settings.py        Settings editable from the web app, persisted to app_settings.json
+  factory.py     Builds the configured STT/TTS/radar/turntable adapter from config.py
 web/static/      Chat app frontend (single static index.html, no build step)
 config.py        All settings, read from environment variables
 ```
@@ -60,7 +59,7 @@ The LLM stays on [LiteLLM](https://github.com/BerriAI/litellm): change `LLM_MODE
 | `adapters/hardware/led_matrix.py` | Single RGB LED matrix, eyes only | active (switchable) |
 | `adapters/hardware/led_eyes.py` | Blinking eyes rendered on the matrix, tracking the last known direction | active (switchable) |
 | `adapters/hardware/face_display.py` | No-hardware fallback for the eyes (`DummyFaceDisplayAdapter`) | dummy |
-| `adapters/hardware/turntable.py` | MG996R servo (GPIO19, hardware PWM) panning the head towards the person/audio | active (switchable) |
+| `adapters/hardware/turntable.py` | DS3225 servo (GPIO19, hardware PWM) panning the head towards the person/audio | active (switchable) |
 | `adapters/hardware/radar_ld2450.py` | Person detection: reads XIAO ESP32S3/LD2450 data relayed over ESP-NOW + USB serial (see `../mmWave/`, `../mmWaveBridge/`) | active (switchable via `RADAR_PROVIDER`) |
 | `adapters/chat_bridge.py` | Web chat app: mirrors the conversation, accepts typed turns, and is the destination when a spoken answer switches modality on someone entering | active |
 
@@ -95,14 +94,14 @@ You can also run the whole pipeline directly on the Mac (e.g. for development wi
 - Raspberry Pi (Linux, ALSA) or macOS (for local/dev runs)
 - ReSpeaker USB Mic Array v2.0 (`ArrayUAC10`, 6 channels) as microphone and speaker (Pi) — also provides onboard direction-of-arrival (DOA) over USB HID, independent of the audio stream
 - 1x Waveshare RGB LED matrix 96x48 (rpi-rgb-led-matrix / `rgbmatrix`) — eyes only; status is shown on a separate tie LED strip driven by the bridge ESP32
-- MG996R servo on GPIO19 (hardware PWM) for head panning — GPIO18 is taken by the LED matrix's OE- signal
-- HLK-LD2450 radar sensor on a Seeed XIAO ESP32S3 (`../mmWave/`), relayed to the Pi via ESP-NOW + a plain ESP32 DevKit USB bridge (`../mmWaveBridge/`)
+- DS3225 digital servo on GPIO19 (hardware PWM) for head panning — GPIO18 is taken by the LED matrix's OE- signal. Note the DS3225 ships in 180° and 270° variants using the same 500–2500µs pulse range, so `SERVO_HARDWARE_MIN_ANGLE`/`SERVO_HARDWARE_MAX_ANGLE` must match the sweep *your* unit actually performs (see below)
+- HLK-LD2450 radar sensor on a Seeed XIAO ESP32S3 (`../mmWave/`), relayed to the Pi via ESP-NOW + a second XIAO ESP32S3 acting as a USB bridge (`../mmWaveBridge/`)
 
 ## Requirements
 
 - Python 3.10+
 - System tools: `arecord`, `aplay` (ALSA, Pi) or `sox` (macOS)
-- Python packages: `litellm`, `requests`, `elevenlabs` (for the default cloud providers); `fastapi`, `uvicorn` (chat bridge, always required now; `python-multipart` additionally for the Mac server); `pyserial` (radar bridge link); optionally `faster-whisper`, `piper-tts` (for local fallback), `python-dotenv`, `rgbmatrix`, `gpiozero` (servo; `pigpio` is an optional smoother PWM backend for it), `pyusb` (ReSpeaker DOA)
+- Python packages: `litellm`, `requests`, `elevenlabs` (for the default cloud providers); `fastapi`, `uvicorn` (chat bridge, always required now; `python-multipart` additionally for the Mac server); `pyserial` (radar bridge link); optionally `faster-whisper`, `piper-tts` (for local fallback), `python-dotenv`, `numpy` (TTS volume scaling — without it the volume slider is a no-op), `rgbmatrix`, `gpiozero` (servo; `pigpio` strongly recommended as the PWM backend, see below), `pyusb` (ReSpeaker DOA)
 - A reachable LLM API (OpenAI/Anthropic/etc., or a local/LAN Ollama server)
 
 ## Configuration
@@ -112,8 +111,8 @@ All settings live in [config.py](config.py) and are read from environment variab
 | Variable | Meaning |
 |---|---|
 | `STT_PROVIDER`, `TTS_PROVIDER` | `elevenlabs` \| `local` \| `remote` |
-| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_TTS_MODEL`, `ELEVENLABS_STT_MODEL`, `ELEVENLABS_LANGUAGE_CODE` | ElevenLabs settings |
-| `OPENAI_API_KEY` | Read by LiteLLM when `LLM_MODEL` starts with `openai/` |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_TTS_MODEL`, `ELEVENLABS_STT_MODEL`, `ELEVENLABS_LANGUAGE_CODE`, `ELEVENLABS_TTS_LANGUAGE_CODE` | ElevenLabs settings (STT uses ISO 639-3, TTS uses ISO 639-1) |
+| `OPENAI_API_KEY`, `GEMINI_API_KEY` | Read by LiteLLM when `LLM_MODEL` starts with `openai/` / `gemini/` |
 | `LLM_MODEL`, `LLM_API_BASE` | Primary LLM (LiteLLM model string + optional server address) |
 | `LLM_FALLBACK_MODEL`, `LLM_FALLBACK_API_BASE` | Local/LAN Ollama fallback if the primary LLM is unreachable |
 | `MAC_SERVER_URL`, `MAC_SERVER_TTS_SAMPLE_RATE` | Address of the Mac pipeline server, and its Piper voice's sample rate |
@@ -121,10 +120,18 @@ All settings live in [config.py](config.py) and are read from environment variab
 | `PIPER_MODEL` | Local TTS fallback: path to the Piper voice (.onnx) |
 | `MIC_DEVICE`, `MIC_CHANNELS`, `MIC_RATE` | ALSA capture device (Pi only) |
 | `SPEAKER_DEVICE` | ALSA playback device (Pi only) |
-| `USE_LED_MATRIX` | Enable/disable the LED matrix (status panel + eyes panel) |
-| `USE_SERVO`, `SERVO_GPIO_PIN`, `SERVO_MIN_ANGLE`, `SERVO_MAX_ANGLE` | Enable/disable the servo turntable, its GPIO pin, and its clamped safe sweep range |
+| `USE_LED_MATRIX`, `GPIO_SLOWDOWN`, `LED_MATRIX_BRIGHTNESS`, `LED_MATRIX_PWM_BITS` | Enable/disable the LED matrix (eyes) and its signal/refresh tuning |
+| `USE_SERVO`, `SERVO_GPIO_PIN` | Enable/disable the servo turntable and its GPIO pin |
+| `SERVO_MIN_ANGLE`, `SERVO_MAX_ANGLE` | The safe sweep window every commanded angle is clamped to, so the head can't wind its own cabling. Keep it centered inside the hardware range below. Also editable live from the web app's settings tab |
+| `SERVO_HARDWARE_MIN_ANGLE`, `SERVO_HARDWARE_MAX_ANGLE` | The servo's **real** physical sweep. These are labels on a linear map onto the pulse widths below, not limits — if they don't match what the servo actually does, every commanded "degree" silently stops being a degree (see *Testing hardware*) |
+| `SERVO_MIN_PULSE_WIDTH`, `SERVO_MAX_PULSE_WIDTH` | Pulse widths (seconds) the two hardware angles map to. `0.0005`–`0.0025` is the DS3225's documented range |
+| `SERVO_USE_PIGPIO` | Use pigpio's DMA-timed PWM instead of gpiozero's software-timed default. Strongly recommended — software PWM visibly jitters while holding position |
+| `SERVO_CALIBRATION_PATH` | Where the calibrated home offset is persisted (default `servo_calibration.json`) |
+| `DOA_FRONT_REFERENCE_DEGREES` | The raw angle the ReSpeaker reports for a speaker standing straight ahead of the mount — calibrate with `scripts/print_doa.py` |
 | `RADAR_PROVIDER`, `RADAR_SERIAL_PORT`, `RADAR_SERIAL_BAUD` | `ld2450` (read radar data relayed by the bridge ESP32 over USB serial) \| `dummy`; the bridge's serial device (default `/dev/ttyUSB0`); baud rate (default `115200`) |
-| `CHAT_BRIDGE_HOST`, `CHAT_BRIDGE_PORT` | Address the chat web app binds to (default `0.0.0.0:8765`) — open `http://<pi-address>:8765` in a browser |
+| `CHAT_BRIDGE_HOST`, `CHAT_BRIDGE_PORT` | Address the web app binds to (default `0.0.0.0:8765`) — open `http://<pi-address>:8765` in a browser |
+| `CONVERSATIONS_DB_PATH` | SQLite file holding chat history (default `conversations.db`) |
+| `APP_SETTINGS_PATH` | Settings written by the web app's settings tab — system prompt, LLM model, voice library, volume, servo range (default `app_settings.json`). Values here take precedence over the `config.py` defaults |
 | `MAX_RECORD_SECONDS` | Watchdog against endless recordings |
 | `LOG_DIR`, `LOG_FILE`, `LOG_LEVEL`, `LOG_MAX_BYTES`, `LOG_BACKUP_COUNT` | Logging (see below) |
 
@@ -138,25 +145,41 @@ Every domain event (`PersonCountChanged`, `SpeechPlaybackStarted`, …) and all 
 python entrypoints/main.py
 ```
 
-Controls:
+Speaking is hands-free: the mic array's onboard VAD starts and stops recording on its own. The console controls are a manual override:
 
 - **ENTER** — start recording, **ENTER** again — stop recording
-- **t + ENTER** — redirect the current answer from the speaker to the display (or end display text mode)
 - **Ctrl+C** — quit
+
+Typed messages from the web app take priority over speech: sending one interrupts an in-progress spoken reply rather than queueing behind it. Voice input also pauses while the chat box is focused, and entirely while the settings tab is open.
 
 ## Testing hardware
 
 [scripts/test_hardware.py](scripts/test_hardware.py) exercises the LED matrix and servo without needing any STT/LLM/TTS API keys configured:
 
 ```bash
-python scripts/test_hardware.py         # canned demo: display states, scrolling text, servo sweep
+python scripts/test_hardware.py         # canned demo: eye states + servo sweep
 python scripts/test_hardware.py --doa   # live: servo + eyes follow the ReSpeaker's direction-of-arrival
 ```
+
+Other scripts, roughly in the order you'd reach for them:
+
+| Script | What it's for |
+|---|---|
+| `track_audio.py` | Live DOA tracking on the servo alone, using the same production code path as `main.py` but without STT/LLM/TTS/radar/matrix |
+| `print_doa.py` | Prints only the tracked DOA angle — used to find `DOA_FRONT_REFERENCE_DEGREES` by standing dead ahead |
+| `sweep_servo.py` | Sweeps the full safe window end to end; the quickest way to check the range is what you think it is |
+| `probe_servo_range.py` | Finds the servo's **real** mechanical limits one small step at a time, waiting for you between each. Stops at the first sign of resistance |
+| `calibrate_servo_home.py` | Nudge-then-save flow for the home offset, unclamped by the safe window |
+| `home_servo.py` | Drives to home (or `--angle N`) and holds there — handy while assembling the head |
+| `print_radar.py` | Radar/ESP-NOW link only: prints incoming targets and person counts |
+| `check_stale_targets.py` | Reports how long radar targets sit frozen, to check whether the firmware's ghost filter is erasing real, motionless people |
+| `raw_serial_monitor.py` | Raw bytes off the bridge's serial port, bypassing JSON parsing — for diagnosing a link that "connects" but yields nothing usable |
+| `test_tie_led.py` | Exercises the 7-LED tie strip on the bridge ESP32 |
 
 [scripts/home_servo.py](scripts/home_servo.py) moves the servo to its front-facing center position and holds it there (doesn't detach) until you Ctrl+C — handy while physically assembling the head, so you can attach the horn/mount at a known reference angle instead of wherever it happened to power on at:
 
 ```bash
-sudo venv/bin/python scripts/home_servo.py
+venv/bin/python scripts/home_servo.py
 ```
 
 The `--doa` mode needs `pyusb` and, once per Pi, a udev rule so the ReSpeaker's USB HID interface is readable without root:
@@ -178,6 +201,16 @@ sudo systemctl enable --now pigpiod
 
 A one-off `sudo pigpiod` also works but doesn't persist across a reboot, so prefer the `systemctl` form. `ServoTurntableAdapter` logs which PWM backend actually ended up active at startup (`[Servo] PWM-Backend: ...`) — check that line if twitching shows up again: `PiGPIOFactory` is the jitter-free DMA-timed one, anything else means `SERVO_USE_PIGPIO` isn't taking effect and it's still on software-timed PWM.
 
-If the LED matrix flickers, `LedMatrix`'s `pwm_bits` (default 5, down from the library's default 11) trades unneeded color depth for a higher refresh rate, and `limit_refresh_rate_hz` (default 0 = uncapped) no longer artificially caps how fast it can refresh — lower `pwm_bits` further if it still flickers, or raise it if you want smoother color gradients/fades (e.g. the idle border-chase trail) and can spare the refresh rate. The library's own startup hint about adding `isolcpus=3` to `/boot/cmdline.txt` (dedicating a CPU core to the matrix refresh thread, reboot required) is a further, bigger lever if `pwm_bits` alone isn't enough — worth it now that STT/LLM/TTS run in the cloud rather than competing for CPU on the Pi.
+### Servo angles are a scale, not just a limit
 
-If the chained (2nd) panel shows ghosting or stray static pixels while otherwise rendering correctly, that's a signal-timing symptom, not a dead panel/cable — try raising `GPIO_SLOWDOWN` (default 4) a step or two at a time; it trades max refresh rate for cleaner signal integrity across the chain.
+`SERVO_HARDWARE_MIN_ANGLE`/`SERVO_HARDWARE_MAX_ANGLE` map linearly onto `SERVO_MIN_PULSE_WIDTH`/`SERVO_MAX_PULSE_WIDTH`. They are **not** a safety clamp (that's `SERVO_MIN_ANGLE`/`SERVO_MAX_ANGLE`) — they define what a "degree" means. If they claim a wider sweep than the servo really performs, every commanded degree moves proportionally less, silently and with no error:
+
+> This bit us: `SERVO_HARDWARE_MAX_ANGLE` was `360` on a servo that sweeps 180°, so every commanded degree moved *half* a real degree and the head only ever had 90° of usable travel. Tracking looked inaccurate because each move under-turned by 2×.
+
+To verify: run `scripts/sweep_servo.py` and measure the actual sweep. If commanding the full window doesn't produce that many physical degrees, set `SERVO_HARDWARE_MAX_ANGLE` to what you measured. Use `scripts/probe_servo_range.py` to find the true mechanical limits first if you don't know them.
+
+### LED matrix
+
+If the matrix flickers, `LedMatrix`'s `pwm_bits` (default 5, down from the library's default 11) trades unneeded color depth for a higher refresh rate, and `limit_refresh_rate_hz` (default 0 = uncapped) no longer artificially caps how fast it can refresh — lower `pwm_bits` further if it still flickers, or raise it for smoother gradients if you can spare the refresh rate. The library's own startup hint about adding `isolcpus=3` to `/boot/cmdline.txt` (dedicating a CPU core to the matrix refresh thread, reboot required) is a bigger lever if `pwm_bits` alone isn't enough — worth it now that STT/LLM/TTS run in the cloud rather than competing for CPU on the Pi.
+
+If the panel shows ghosting or stray static pixels while otherwise rendering correctly, that's a signal-timing symptom, not a dead panel/cable — try raising `GPIO_SLOWDOWN` (default 5) a step or two at a time; it trades max refresh rate for cleaner signal integrity.
