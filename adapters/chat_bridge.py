@@ -213,6 +213,7 @@ class ChatBridgeAdapter:
                 "system_prompt": self._get_system_prompt(),
                 "voices": self.voices,
                 "active_voice_id": self.active_voice_id,
+                "volume": self._get_volume(),
             })
             try:
                 while True:
@@ -237,6 +238,8 @@ class ChatBridgeAdapter:
                 self.turn_queue.put(text)
         elif msg_type == "set_voice_enabled":
             self.conversation.voice_enabled = bool(data.get("value"))
+            if not self.conversation.voice_enabled and self.tts is not None:
+                self.tts.request_takeover()  # cuts off whatever's playing right now, not just future turns
             self._broadcast({"type": "voice_enabled", "value": self.conversation.voice_enabled})
         elif msg_type == "set_private_mode":
             self.conversation.set_private_mode(bool(data.get("value")))
@@ -244,13 +247,26 @@ class ChatBridgeAdapter:
         elif msg_type == "set_calibration_mode":
             if bool(data.get("value")):
                 self.calibration_mode.set()
+                if self.tts is not None:
+                    self.tts.request_takeover()  # settings tab shouldn't have to wait out an in-progress reply
             else:
                 self.calibration_mode.clear()
+        elif msg_type == "set_volume":
+            value = data.get("value")
+            if value is not None and self.tts is not None and hasattr(self.tts, "set_volume"):
+                self.tts.set_volume(float(value))
+                save_app_settings(
+                    self.app_settings_path, self._get_system_prompt(), self.voices, self.active_voice_id,
+                    self._get_volume(),
+                )
+                self._broadcast({"type": "volume", "value": self._get_volume()})
         elif msg_type == "set_system_prompt":
             text = (data.get("value") or "").strip()
             if text and self.llm is not None:
                 self.llm.system_prompt = text
-                save_app_settings(self.app_settings_path, text, self.voices, self.active_voice_id)
+                save_app_settings(
+                    self.app_settings_path, text, self.voices, self.active_voice_id, self._get_volume(),
+                )
                 self._broadcast({"type": "system_prompt", "value": text})
         elif msg_type == "add_voice":
             name = (data.get("name") or "").strip()
@@ -304,10 +320,14 @@ class ChatBridgeAdapter:
             "system_prompt": self._get_system_prompt(),
             "voices": self.voices,
             "active_voice_id": self.active_voice_id,
+            "volume": self._get_volume(),
         })
 
     def _get_system_prompt(self) -> str:
         return getattr(self.llm, "system_prompt", "") or ""
+
+    def _get_volume(self) -> float:
+        return getattr(self.tts, "volume", 1.0)
 
     def _select_voice(self, voice_id: str) -> None:
         entry = next((v for v in self.voices if v["id"] == voice_id), None)
@@ -332,7 +352,10 @@ class ChatBridgeAdapter:
             self._broadcast_voices()
 
     def _save_voices(self) -> None:
-        save_app_settings(self.app_settings_path, self._get_system_prompt(), self.voices, self.active_voice_id)
+        save_app_settings(
+            self.app_settings_path, self._get_system_prompt(), self.voices, self.active_voice_id,
+            self._get_volume(),
+        )
 
     def _broadcast_voices(self) -> None:
         self._broadcast({"type": "voices", "voices": self.voices, "active_voice_id": self.active_voice_id})

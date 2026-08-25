@@ -436,6 +436,10 @@
     outline-offset: -1px;
   }
   .assistant-wrap .servo-save-btn { align-self: flex-start; }
+  .assistant-wrap input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
   .voice-list {
     display: flex;
     flex-direction: column;
@@ -666,6 +670,9 @@
         <div class="assistant-section">
           <h2>Assistant</h2>
           <div class="assistant-wrap">
+            <label class="field-label" for="volumeInput">Voice volume: <span id="volumeValue">100%</span></label>
+            <input id="volumeInput" type="range" min="0" max="2" step="0.05" value="1">
+
             <label class="field-label" for="systemPromptInput">System prompt</label>
             <textarea id="systemPromptInput" rows="4" placeholder="You are a desk office assistant…"></textarea>
             <button id="systemPromptSaveBtn" class="servo-save-btn" type="button">Save prompt</button>
@@ -772,6 +779,8 @@
   const voiceListEl = document.getElementById("voiceList");
   const voiceNameInputEl = document.getElementById("voiceNameInput");
   const voiceIdInputEl = document.getElementById("voiceIdInput");
+  const volumeInputEl = document.getElementById("volumeInput");
+  const volumeValueEl = document.getElementById("volumeValue");
 
   const ICON_TRASH =
     '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/>';
@@ -825,6 +834,13 @@
   function setSystemPromptField(value) {
     if (document.activeElement === systemPromptInputEl) return;
     systemPromptInputEl.value = value || "";
+  }
+
+  function setVolumeField(value) {
+    if (document.activeElement === volumeInputEl) return;
+    const v = value == null ? 1 : value;
+    volumeInputEl.value = v;
+    volumeValueEl.textContent = Math.round(v * 100) + "%";
   }
 
   function renderVoiceList(items, selectedId) {
@@ -923,6 +939,7 @@
         setPrivateModeToggle(data.private_mode !== false);
         setSystemPromptField(data.system_prompt);
         renderVoiceList(data.voices, data.active_voice_id);
+        setVolumeField(data.volume);
         renderConversationList();
         break;
       case "user_message":
@@ -954,6 +971,9 @@
         break;
       case "voices":
         renderVoiceList(data.voices, data.active_voice_id);
+        break;
+      case "volume":
+        setVolumeField(data.value);
         break;
       case "radar_targets":
         renderTargets(data.targets || []);
@@ -1364,6 +1384,16 @@
     ws.send(JSON.stringify({ type: "add_voice", name, voice_id }));
     voiceNameInputEl.value = "";
     voiceIdInputEl.value = "";
+  });
+
+  // Live label while dragging; only send to the server (and persist) once
+  // the drag ends, so it doesn't flood the websocket with a message per pixel.
+  volumeInputEl.addEventListener("input", () => {
+    volumeValueEl.textContent = Math.round(volumeInputEl.value * 100) + "%";
+  });
+  volumeInputEl.addEventListener("change", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_volume", value: parseFloat(volumeInputEl.value) }));
   });
 })();
 </script>
