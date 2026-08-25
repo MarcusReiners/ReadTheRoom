@@ -1018,7 +1018,10 @@
       if (activeTab) {
         ws.send(JSON.stringify({ type: "set_calibration_mode", value: activeTab.dataset.tab === "settings" }));
       }
-      ws.send(JSON.stringify({ type: "set_composing", value: document.activeElement === textInputEl }));
+      // Not focus-based (see below) - nothing to resync here beyond the
+      // server's own default of false, since a stale "still composing" from
+      // before a reconnect would otherwise have no way to ever clear.
+      ws.send(JSON.stringify({ type: "set_composing", value: false }));
     };
     ws.onclose = () => { connDotEl.classList.remove("connected"); connDotEl.classList.add("disconnected"); setTimeout(connect, 2000); };
     ws.onerror = () => ws.close();
@@ -1033,20 +1036,33 @@
     if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "user_text", text }));
     textInputEl.value = "";
+    stopComposing();  // sending ends the "composing" state even though the field stays focused
   });
 
-  // Pauses hands-free voice listening for as long as this field is focused -
-  // otherwise typing a message (possibly while talking, e.g. to someone else
-  // in the room or reading the draft aloud) can also get picked up as a
-  // separate spoken turn.
-  textInputEl.addEventListener("focus", () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "set_composing", value: true }));
-  });
-  textInputEl.addEventListener("blur", () => {
+  // Pauses hands-free voice listening while actively typing - otherwise
+  // typing a message (possibly while talking, e.g. to someone else in the
+  // room or reading the draft aloud) can also get picked up as a separate
+  // spoken turn. Deliberately NOT focus-based: a browser leaves the field
+  // focused after Enter/submit, which would leave composing_mode stuck set
+  // (and voice input silently dead) until the person happened to click
+  // somewhere else - typing activity + a short idle timeout instead, so it
+  // clears on its own a couple seconds after the last keystroke.
+  let composingTimeout = null;
+  function stopComposing() {
+    if (composingTimeout) {
+      clearTimeout(composingTimeout);
+      composingTimeout = null;
+    }
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "set_composing", value: false }));
+  }
+  textInputEl.addEventListener("input", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!composingTimeout) ws.send(JSON.stringify({ type: "set_composing", value: true }));
+    clearTimeout(composingTimeout);
+    composingTimeout = setTimeout(stopComposing, 2000);
   });
+  textInputEl.addEventListener("blur", stopComposing);
 
   voiceToggleEl.addEventListener("click", () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
