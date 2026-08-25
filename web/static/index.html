@@ -440,6 +440,32 @@
     width: 100%;
     accent-color: var(--accent);
   }
+  .zone-mode-row {
+    width: 100%;
+    max-width: 620px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .zone-mode-row select {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 13.5px;
+    font-family: inherit;
+    background: var(--panel-2);
+    color: var(--text);
+    width: 100%;
+  }
+  .zone-mode-row select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .zone-mode-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--muted);
+  }
+  .zone-mode-hint.error { color: var(--danger); }
   .voice-list {
     display: flex;
     flex-direction: column;
@@ -650,6 +676,15 @@
             </svg>
           </div>
           <div id="radarStatus" class="radar-status">Loading…</div>
+          <div class="zone-mode-row">
+            <label class="field-label" for="zoneModeSelect">Enforced by</label>
+            <select id="zoneModeSelect">
+              <option value="0">Software – sensor reports everything, zone only marks who counts</option>
+              <option value="1">Sensor (detect) – sensor reports only targets inside the zone</option>
+              <option value="2">Sensor (exclude) – sensor ignores the zone, reports everything else</option>
+            </select>
+            <p id="zoneModeHint" class="zone-mode-hint"></p>
+          </div>
         </div>
 
         <div class="servo-section">
@@ -1330,8 +1365,46 @@
       radarStatusEl.textContent = "No zone saved – drag the rectangle to set one.";
     }
     bounds = { ...(savedBounds || DEFAULT_BOUNDS) };
+    setZoneMode(result.data.mode);
     renderZone();
   }
+
+  // ---- who enforces the zone: the XIAO in software, or the sensor itself ----
+  const zoneModeSelectEl = document.getElementById("zoneModeSelect");
+  const zoneModeHintEl = document.getElementById("zoneModeHint");
+
+  const ZONE_MODE_HINTS = {
+    0: "The sensor tracks the whole room and every target stays visible below, " +
+       "which is what you want while checking whether it can see everyone at all.",
+    1: "The sensor itself drops targets outside the zone, so they no longer appear " +
+       "below either – the radar view will look emptier than the room is.",
+    2: "The sensor ignores anything inside the box entirely. Draw it around a " +
+       "persistent noise source (a doorway, a fan, a reflective window), not around people.",
+  };
+
+  function setZoneMode(mode) {
+    const value = String(mode == null ? 0 : mode);
+    if (document.activeElement !== zoneModeSelectEl) zoneModeSelectEl.value = value;
+    zoneModeHintEl.textContent = ZONE_MODE_HINTS[value] || "";
+    zoneModeHintEl.classList.remove("error");
+  }
+
+  zoneModeSelectEl.addEventListener("change", async () => {
+    const mode = parseInt(zoneModeSelectEl.value, 10);
+    zoneModeHintEl.classList.remove("error");
+    zoneModeHintEl.textContent = "Applying…";
+    const result = await radarFetch("/api/radar/zone/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    if (!result.ok) {
+      zoneModeHintEl.textContent = "Could not change mode: " + result.error;
+      zoneModeHintEl.classList.add("error");
+      return;
+    }
+    setZoneMode(mode);
+  });
 
   // Auto-saves whatever shape the rectangle is in as soon as you let go of it.
   async function saveZone() {

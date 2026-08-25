@@ -32,7 +32,7 @@ class DummyRadarAdapter:
         self.bus.publish(PersonCountChanged(count=self._person_count))
 
     def get_zone(self) -> dict:
-        return {"valid": False}
+        return {"valid": False, "mode": 0}
 
     def get_calibration_status(self) -> dict:
         return {"calibrating": False}
@@ -57,11 +57,29 @@ class RadarLD2450Adapter:
         bus: EventBus,
         serial_port: str,
         baud_rate: int = 115200,
+        drop_hold_s: float = 3.0,
     ) -> None:
+        """drop_hold_s: how long a *decrease* in person count has to hold
+        steady before it's believed. Increases are published immediately.
+
+        This asymmetry is deliberate and load-bearing for privacy. The
+        LD2450 routinely merges two nearby people into one target, or loses
+        a stationary one for a frame or two - and every one of those glitches
+        reads as "the second person left". Believed instantly, that flips the
+        assistant straight back out of text-only mode and starts it speaking
+        a confidential answer out loud with both people still standing there,
+        which is the exact failure the privacy switch exists to prevent.
+        Erring toward "someone might still be here" costs a few seconds of
+        unnecessary discretion; erring the other way leaks the conversation.
+        """
         self.bus = bus
         self._serial_port = serial_port
         self._baud_rate = baud_rate
+        self._drop_hold_s = drop_hold_s
         self._person_count = 1
+        # Candidate lower count waiting out drop_hold_s before being believed.
+        self._pending_lower_count: int | None = None
+        self._pending_since = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._write_lock = threading.Lock()
@@ -138,14 +156,38 @@ class RadarLD2450Adapter:
                 continue
             self._handle_status(data)
 
+    def _update_person_count(self, count: int) -> None:
+        if count == self._person_count:
+            self._pending_lower_count = None
+            return
+
+        if count > self._person_count:
+            # Someone arrived - act on it now, no waiting. A false positive
+            # here only costs unnecessary discretion (see drop_hold_s).
+            self._pending_lower_count = None
+            self._person_count = count
+            self.bus.publish(PersonCountChanged(count=count))
+            return
+
+        now = time.monotonic()
+        if self._pending_lower_count != count:
+            # A different lower count than we were already waiting on -
+            # restart the clock rather than inheriting the old deadline.
+            self._pending_lower_count = count
+            self._pending_since = now
+            logger.debug("[Radar] Rueckgang auf %d beobachtet, warte %.1fs ab.", count, self._drop_hold_s)
+            return
+
+        if now - self._pending_since >= self._drop_hold_s:
+            self._pending_lower_count = None
+            self._person_count = count
+            self.bus.publish(PersonCountChanged(count=count))
+
     def _handle_status(self, data: dict) -> None:
         targets = data.get("targets", [])
         self.bus.publish(RadarTargetsUpdated(targets=targets))
 
-        count = sum(1 for t in targets if t.get("in_zone", True))
-        if count != self._person_count:
-            self._person_count = count
-            self.bus.publish(PersonCountChanged(count=count))
+        self._update_person_count(sum(1 for t in targets if t.get("in_zone", True)))
 
         zone = data.get("zone")
         if zone is not None:

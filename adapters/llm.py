@@ -30,9 +30,23 @@ class LLMGatewayAdapter:
         self.system_prompt = system_prompt or SYSTEM_PROMPT
 
     def ask_stream(self, user_text: str, history: Optional[list[dict]] = None) -> Iterator[str]:
+        # Tracks whether the primary model already emitted anything before
+        # failing. A timeout can fire mid-stream, not just while connecting,
+        # and restarting from the fallback model then replays a whole fresh
+        # answer on top of the half-sentence already streamed into the chat
+        # and spoken aloud ("Sure. The weather- Got it, it's sunny today").
+        # Once the primary has committed text to the turn, its failure has to
+        # end the turn rather than silently double it.
+        emitted_any = False
         try:
-            yield from self._ask_stream(self.model, self.api_base, user_text, history)
+            for delta in self._ask_stream(self.model, self.api_base, user_text, history):
+                emitted_any = True
+                yield delta
         except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout):
+            if emitted_any:
+                logger.warning("'%s' brach mitten im Stream ab - kein Fallback, Antwort bleibt unvollstaendig.",
+                                self.model)
+                return
             if self.fallback_model:
                 logger.warning("'%s' nicht erreichbar/zu langsam, weiche aus auf Fallback '%s'.",
                                 self.model, self.fallback_model)
@@ -44,6 +58,9 @@ class LLMGatewayAdapter:
             yield ("Fehler: Kann das LLM-Backend nicht erreichen. "
                    "Läuft der Server und ist die URL korrekt?")
         except Exception as e:
+            if emitted_any:
+                logger.exception("LLM-Stream nach Teilantwort abgebrochen: %s", e)
+                return
             yield f"Fehler bei LLM: {e}"
 
     def _ask_stream(

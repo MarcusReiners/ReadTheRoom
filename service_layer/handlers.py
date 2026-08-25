@@ -81,7 +81,7 @@ def register_tie_led_handlers(bus: EventBus, radar) -> None:
 def start_doa_tracking(
     doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
-    silence_timeout_s: float = 5.0, calibration_mode=None,
+    silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -140,6 +140,11 @@ def start_doa_tracking(
     resumes. LedEyesAdapter checks the same Event directly to show a wrench
     instead of the eyes - this loop doesn't need to touch the face for that.
     """
+    # Imported here rather than at module scope: doa_respeaker pulls in
+    # usb.core, and handlers.py is imported unconditionally by main.py even
+    # when USE_SERVO is off (or on a dev machine with no pyusb at all).
+    from adapters.hardware.doa_respeaker import median_angle
+
     lock = lock or contextlib.nullcontext()
     moving_until = 0.0
 
@@ -183,11 +188,33 @@ def start_doa_tracking(
                     if active:
                         last_active_time = time.monotonic()
                         at_home = False
-                        logger.info("[DOA] Stimme erkannt bei %.0f Grad.", angle)
+                        logger.debug("[DOA] Erste Messung %.0f Grad.", angle)
                         # Eyes dart to the sound first, human-like, before the
                         # head starts physically catching up.
                         face.set_eye_direction(angle_degrees=angle)
-                        time.sleep(eye_lead_s)
+
+                        # That eye-lead pause used to be a plain sleep. It's
+                        # now spent collecting more DOA samples instead, which
+                        # costs no extra latency and is a large accuracy win:
+                        # the single reading taken the instant VAD trips is
+                        # the worst one of the whole utterance - it lands on
+                        # the speech onset (a plosive/breath, often a poor
+                        # bearing estimate) and gets no chance to be checked
+                        # against a second opinion. A median over the window
+                        # both averages down per-sample noise and discards the
+                        # occasional wall-reflection outlier.
+                        samples = [angle]
+                        for _ in range(max(0, doa_samples - 1)):
+                            time.sleep(eye_lead_s / max(1, doa_samples - 1))
+                            with lock:
+                                if not doa.get_voice_active():
+                                    break
+                                samples.append(doa.get_direction_degrees())
+                        angle = median_angle(samples)
+                        logger.info(
+                            "[DOA] Stimme erkannt bei %.0f Grad (Median aus %d Messungen).",
+                            angle, len(samples),
+                        )
 
                         moved = turntable.predict_relative_move(angle)
                         if moved > 0.5:
