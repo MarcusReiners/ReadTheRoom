@@ -134,7 +134,7 @@ class LedEyesAdapter:
         cx = self.x_offset + self.width // 2
         cy = self.height // 2 - self.height // 6  # shifted up from dead center
 
-        body_outer_r = max(3, round(self._eye_r * 0.65))
+        body_outer_r = max(2, round(self._eye_r * 0.45))
         body_inner_r = max(1, round(body_outer_r * 0.45))
         tooth_r = max(1, self._dot_r - 2)
         tooth_offset = body_outer_r + tooth_r - 1
@@ -145,7 +145,10 @@ class LedEyesAdapter:
             angle = 2 * math.pi * i / n_teeth
             tx = cx + tooth_offset * math.cos(angle)
             ty = cy + tooth_offset * math.sin(angle)
-            _fill_circle(canvas, int(round(tx)), int(round(ty)), tooth_r, _WHITE)
+            # A square (not a circle) with a corner pointing straight outward
+            # along this tooth's own radial angle - e.g. the left/right teeth
+            # each show a corner facing directly left/right, not a flat edge.
+            _fill_diamond(canvas, int(round(tx)), int(round(ty)), tooth_r, angle, _WHITE)
 
 
 def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
@@ -160,4 +163,18 @@ def _draw_ring(canvas, cx: int, cy: int, outer_r: int, inner_r: int, color: tupl
         for dx in range(-outer_r, outer_r + 1):
             dist_sq = dx * dx + dy * dy
             if inner_r * inner_r <= dist_sq <= outer_r * outer_r:
+                canvas.SetPixel(cx + dx, cy + dy, *color)
+
+
+def _fill_diamond(canvas, cx: int, cy: int, r: int, angle: float, color: tuple) -> None:
+    """A square (L1 ball) rotated so one corner points along `angle` from
+    its center - unlike an axis-aligned square, a plain |x|+|y|<=r diamond's
+    corners sit at 0/90/180/270 degrees, so rotating the whole thing by
+    `angle` puts a corner exactly there instead of a flat edge."""
+    cos_a, sin_a = math.cos(-angle), math.sin(-angle)
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            rx = dx * cos_a - dy * sin_a
+            ry = dx * sin_a + dy * cos_a
+            if abs(rx) + abs(ry) <= r:
                 canvas.SetPixel(cx + dx, cy + dy, *color)
