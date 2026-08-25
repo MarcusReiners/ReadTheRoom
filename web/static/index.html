@@ -395,6 +395,47 @@
     align-items: center;
     margin-top: 28px;
   }
+  .assistant-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-top: 28px;
+  }
+  .assistant-wrap {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px 20px;
+    width: 100%;
+    max-width: 620px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .field-label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--muted);
+    margin-top: 10px;
+  }
+  .field-label:first-child { margin-top: 0; }
+  .assistant-wrap textarea,
+  .assistant-wrap input[type="text"] {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    background: var(--panel-2);
+    color: var(--text);
+    resize: vertical;
+  }
+  .assistant-wrap textarea:focus,
+  .assistant-wrap input[type="text"]:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .assistant-wrap .servo-save-btn { align-self: flex-start; }
   .servo-wrap {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -556,6 +597,21 @@
             <div id="servoStatus" class="radar-status">Loading…</div>
           </div>
         </div>
+
+        <div class="assistant-section">
+          <h2>Assistant</h2>
+          <div class="assistant-wrap">
+            <label class="field-label" for="systemPromptInput">System prompt</label>
+            <textarea id="systemPromptInput" rows="4" placeholder="You are a desk office assistant…"></textarea>
+            <button id="systemPromptSaveBtn" class="servo-save-btn" type="button">Save prompt</button>
+            <div id="systemPromptStatus" class="radar-status">Loading…</div>
+
+            <label class="field-label" for="voiceIdInput">ElevenLabs voice ID</label>
+            <input id="voiceIdInput" type="text" placeholder="e.g. wDsJlOXPqcvIUKdLXjDs" autocomplete="off">
+            <button id="voiceIdSaveBtn" class="servo-save-btn" type="button">Save voice ID</button>
+            <div id="voiceIdStatus" class="radar-status">Loading…</div>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -592,6 +648,14 @@
     btn.addEventListener("click", () => {
       tabButtons.forEach((b) => b.classList.toggle("active", b === btn));
       Object.entries(views).forEach(([name, el]) => el.classList.toggle("active", name === btn.dataset.tab));
+      // The settings tab includes live servo calibration (nudge buttons) -
+      // the DOA tracking loop would otherwise keep fighting those nudges
+      // with its own live moves, which is why it silently didn't work
+      // before. Pausing it (and showing a wrench on the matrix instead of
+      // the eyes) for as long as this tab is open fixes that.
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "set_calibration_mode", value: btn.dataset.tab === "settings" }));
+      }
     });
   });
 
@@ -636,6 +700,8 @@
   const newChatBtn = document.getElementById("newChatBtn");
   const conversationListEl = document.getElementById("conversationList");
   const privateModeToggleEl = document.getElementById("privateModeToggle");
+  const systemPromptInputEl = document.getElementById("systemPromptInput");
+  const voiceIdInputEl = document.getElementById("voiceIdInput");
 
   const ICON_TRASH =
     '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/>';
@@ -679,6 +745,19 @@
 
   function setPrivateModeToggle(enabled) {
     privateModeToggleEl.checked = enabled;
+  }
+
+  // Only overwrite the field while it's not focused - an incoming broadcast
+  // (e.g. saved from another browser tab) shouldn't stomp on text the person
+  // is actively editing here.
+  function setSystemPromptField(value) {
+    if (document.activeElement === systemPromptInputEl) return;
+    systemPromptInputEl.value = value || "";
+  }
+
+  function setVoiceIdField(value) {
+    if (document.activeElement === voiceIdInputEl) return;
+    voiceIdInputEl.value = value || "";
   }
 
   function renderConversationList() {
@@ -726,6 +805,8 @@
         setModalityLabel(data.modality || "voice");
         setVoiceToggle(data.voice_enabled !== false);
         setPrivateModeToggle(data.private_mode !== false);
+        setSystemPromptField(data.system_prompt);
+        setVoiceIdField(data.voice_id);
         renderConversationList();
         break;
       case "user_message":
@@ -752,6 +833,12 @@
       case "private_mode":
         setPrivateModeToggle(data.value);
         break;
+      case "system_prompt":
+        setSystemPromptField(data.value);
+        break;
+      case "voice_id":
+        setVoiceIdField(data.value);
+        break;
       case "radar_targets":
         renderTargets(data.targets || []);
         break;
@@ -764,7 +851,17 @@
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     ws = new WebSocket(proto + "//" + location.host + "/ws");
 
-    ws.onopen = () => { connDotEl.classList.remove("disconnected"); connDotEl.classList.add("connected"); };
+    ws.onopen = () => {
+      connDotEl.classList.remove("disconnected");
+      connDotEl.classList.add("connected");
+      // Server-side calibration_mode is a fresh threading.Event() on every
+      // process start - resync it in case the connection dropped/reconnected
+      // while this tab was already open on settings.
+      const activeTab = document.querySelector(".tab-btn.active");
+      if (activeTab) {
+        ws.send(JSON.stringify({ type: "set_calibration_mode", value: activeTab.dataset.tab === "settings" }));
+      }
+    };
     ws.onclose = () => { connDotEl.classList.remove("connected"); connDotEl.classList.add("disconnected"); setTimeout(connect, 2000); };
     ws.onerror = () => ws.close();
     ws.onmessage = (event) => {
@@ -1129,6 +1226,29 @@
   });
 
   loadServoCalibration();
+
+  // ---------------------------------------------------------------- assistant settings
+  const systemPromptSaveBtn = document.getElementById("systemPromptSaveBtn");
+  const systemPromptStatusEl = document.getElementById("systemPromptStatus");
+  const voiceIdSaveBtn = document.getElementById("voiceIdSaveBtn");
+  const voiceIdStatusEl = document.getElementById("voiceIdStatus");
+
+  systemPromptStatusEl.textContent = "";
+  voiceIdStatusEl.textContent = "";
+
+  systemPromptSaveBtn.addEventListener("click", () => {
+    const value = systemPromptInputEl.value.trim();
+    if (!value || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_system_prompt", value }));
+    systemPromptStatusEl.textContent = "Saved.";
+  });
+
+  voiceIdSaveBtn.addEventListener("click", () => {
+    const value = voiceIdInputEl.value.trim();
+    if (!value || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_voice_id", value }));
+    voiceIdStatusEl.textContent = "Saved.";
+  });
 })();
 </script>
 </body>

@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 import logging_setup
-from domain.conversation import ConversationState
+from domain.conversation import SYSTEM_PROMPT, ConversationState
 from domain.events import (
     AssistantDeltaReceived,
     AssistantMessageCompleted,
@@ -24,6 +24,7 @@ from service_layer.bus import EventBus
 from service_layer.handlers import register_handlers, register_tie_led_handlers, start_doa_tracking
 
 from adapters.factory import build_stt, build_tts, build_radar, build_turntable
+from adapters.app_settings import load_app_settings
 from adapters.chat_bridge import ChatBridgeAdapter
 from adapters.conversation_store import ConversationStore
 from adapters.llm import LLMGatewayAdapter
@@ -167,6 +168,7 @@ def vad_input_loop(
     bus: EventBus, turn_queue: "queue.Queue[str]", stt, doa, doa_lock: threading.Lock,
     mic_lock: threading.Lock, assistant_speaking: threading.Event,
     poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8, trigger_confirm_polls: int = 2,
+    calibration_mode: threading.Event | None = None,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
     onboard VAD and starts recording automatically once it detects speech,
@@ -182,6 +184,11 @@ def vad_input_loop(
     any other sound, and without this guard that reliably self-triggers a
     "recording" of the assistant talking to itself.
 
+    calibration_mode: same Event start_doa_tracking() pauses on (set while
+    the web app's settings tab is open) - skipped here too, so the assistant
+    doesn't pick up and later answer whatever gets said while someone's
+    fiddling with servo calibration.
+
     trigger_confirm_polls: after voice_active first flips true, recording
     starts immediately (so no audio is lost) but is discarded unless
     voice_active stays true for this many more consecutive polls - rejects a
@@ -191,7 +198,7 @@ def vad_input_loop(
     a shorter gap clips natural mid-sentence pauses (thinking, a breath).
     """
     while True:
-        if assistant_speaking.is_set():
+        if assistant_speaking.is_set() or (calibration_mode is not None and calibration_mode.is_set()):
             time.sleep(poll_interval_s)
             continue
 
@@ -222,6 +229,9 @@ def vad_input_loop(
                 if assistant_speaking.is_set():
                     abort_reason = "Assistent hat zu sprechen begonnen"
                     break
+                if calibration_mode is not None and calibration_mode.is_set():
+                    abort_reason = "Kalibrierungsmodus aktiv"
+                    break
                 with doa_lock:
                     still_active = doa.get_voice_active()
                 if still_active:
@@ -240,6 +250,9 @@ def vad_input_loop(
                         # recording has picked up (or is about to pick up) the
                         # assistant's own voice. Discard rather than transcribe it.
                         abort_reason = "Assistent hat zu sprechen begonnen"
+                        break
+                    if calibration_mode is not None and calibration_mode.is_set():
+                        abort_reason = "Kalibrierungsmodus aktiv"
                         break
                     with doa_lock:
                         still_active = doa.get_voice_active()
@@ -312,17 +325,37 @@ def main() -> None:
         store.set_active_id(store.create_conversation())
     turn_queue: "queue.Queue[str]" = queue.Queue()
 
+    # System prompt / ElevenLabs voice ID are editable from the web app's
+    # settings tab (ChatBridgeAdapter's set_system_prompt/set_voice_id) -
+    # load whatever was last saved, falling back to the domain default /
+    # config env var on a fresh install with no settings file yet.
+    app_settings = load_app_settings(
+        config.APP_SETTINGS_PATH,
+        default_system_prompt=SYSTEM_PROMPT,
+        default_voice_id=config.ELEVENLABS_VOICE_ID,
+    )
+
     stt = build_stt(config)
     tts = build_tts(config, bus)
+    if hasattr(tts, "voice_id"):
+        tts.voice_id = app_settings["voice_id"]
     llm = LLMGatewayAdapter(
         model=config.LLM_MODEL,
         api_base=config.LLM_API_BASE,
         fallback_model=config.LLM_FALLBACK_MODEL,
         fallback_api_base=config.LLM_FALLBACK_API_BASE,
+        system_prompt=app_settings["system_prompt"],
     )
 
     radar = build_radar(config, bus)
     turntable = build_turntable(config)
+
+    # Set for as long as the web app's settings tab (servo home calibration)
+    # is open - see start_doa_tracking()'s calibration_mode param and
+    # LedEyesAdapter's wrench-instead-of-eyes rendering, both of which check
+    # this same Event. Created unconditionally (even with USE_SERVO/
+    # USE_LED_MATRIX off) so ChatBridgeAdapter always has one to set/clear.
+    calibration_mode = threading.Event()
 
     if config.USE_LED_MATRIX:
         from adapters.hardware.led_matrix import LedMatrix
@@ -338,6 +371,7 @@ def main() -> None:
             bus=bus, x_offset=0, width=96, height=48,
             min_angle_degrees=config.SERVO_MIN_ANGLE,
             max_angle_degrees=config.SERVO_MAX_ANGLE,
+            calibration_mode=calibration_mode,
         )
         matrix.add_renderer(face)
         matrix.start()
@@ -351,6 +385,10 @@ def main() -> None:
         radar=radar,
         turntable=turntable,
         servo_calibration_path=config.SERVO_CALIBRATION_PATH,
+        llm=llm,
+        tts=tts,
+        app_settings_path=config.APP_SETTINGS_PATH,
+        calibration_mode=calibration_mode,
         host=config.CHAT_BRIDGE_HOST, port=config.CHAT_BRIDGE_PORT,
     )
     chat_bridge.start()
@@ -370,10 +408,14 @@ def main() -> None:
         bus.subscribe(SpeechPlaybackStarted, lambda e: assistant_speaking.set())
         bus.subscribe(SpeechPlaybackEnded, lambda e: assistant_speaking.clear())
 
-        start_doa_tracking(doa, turntable, face, lock=doa_lock, assistant_speaking=assistant_speaking)
+        start_doa_tracking(
+            doa, turntable, face, lock=doa_lock,
+            assistant_speaking=assistant_speaking, calibration_mode=calibration_mode,
+        )
         threading.Thread(
             target=vad_input_loop,
             args=(bus, turn_queue, stt, doa, doa_lock, mic_lock, assistant_speaking),
+            kwargs={"calibration_mode": calibration_mode},
             daemon=True,
         ).start()
 
@@ -384,6 +426,12 @@ def main() -> None:
     while True:
         try:
             text = turn_queue.get()
+            # Holds a queued turn (typed while on the settings tab, or a
+            # console/VAD turn that slipped in right as calibration started)
+            # until calibration_mode clears, rather than answering mid-
+            # calibration or dropping it silently.
+            while calibration_mode.is_set():
+                time.sleep(0.2)
             handle_turn(text, bus, conversation, store, llm, tts)
         except KeyboardInterrupt:
             print("\nCiao!")

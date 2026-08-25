@@ -81,7 +81,7 @@ def register_tie_led_handlers(bus: EventBus, radar) -> None:
 def start_doa_tracking(
     doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
-    silence_timeout_s: float = 5.0,
+    silence_timeout_s: float = 5.0, calibration_mode=None,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -126,6 +126,19 @@ def start_doa_tracking(
     clearing (a reply just ended) - not while assistant_speaking is set,
     since that time is spent replying, not sitting in silence. Set to None or
     <=0 to disable.
+
+    calibration_mode: a threading.Event, set for as long as the web app's
+    settings tab is open (see ChatBridgeAdapter). The settings tab lets a
+    person nudge the servo's raw angle directly for home calibration - this
+    loop kept fighting those nudges with its own live DOA-driven moves
+    (confirmed: calibrating from the web app "didn't really work" because of
+    exactly this), so tracking fully pauses for as long as it's set. On
+    entering AND leaving, the head is driven home once - entering, so it's
+    out of the way and in a known position for calibration; leaving, because
+    set_raw_angle() (used by the calibration nudges) doesn't update
+    current_heading_degrees, so it would otherwise be stale once tracking
+    resumes. LedEyesAdapter checks the same Event directly to show a wrench
+    instead of the eyes - this loop doesn't need to touch the face for that.
     """
     lock = lock or contextlib.nullcontext()
     moving_until = 0.0
@@ -135,11 +148,26 @@ def start_doa_tracking(
         logger.info("[DOA] Tracking gestartet.")
         last_active_time = time.monotonic()
         was_speaking = False
+        was_calibrating = False
         at_home = True
         while True:
             try:
                 speaking = assistant_speaking is not None and assistant_speaking.is_set()
+                calibrating = calibration_mode is not None and calibration_mode.is_set()
+
+                if calibrating != was_calibrating:
+                    logger.info(
+                        "[DOA] Kalibrierungsmodus %s - Kopf faehrt zur Home-Position.",
+                        "aktiv" if calibrating else "beendet",
+                    )
+                    settle_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
+                    moving_until = time.monotonic() + settle_s
+                    turntable.home(ramp_duration_s=settle_s)
+                    at_home = True
+                    last_active_time = time.monotonic()
+                was_calibrating = calibrating
                 settling = time.monotonic() < moving_until
+
                 if was_speaking and not speaking:
                     # A reply just finished - start the silence clock fresh
                     # from here rather than from before the reply, so a long
@@ -147,7 +175,7 @@ def start_doa_tracking(
                     last_active_time = time.monotonic()
                 was_speaking = speaking
 
-                if not speaking and not settling:
+                if not speaking and not settling and not calibrating:
                     with lock:
                         active = doa.get_voice_active()
                         angle = doa.get_direction_degrees() if active else None

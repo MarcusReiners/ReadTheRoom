@@ -118,6 +118,10 @@ RADAR_SERIAL_BAUD = int(_env("RADAR_SERIAL_BAUD", "115200"))
 CHAT_BRIDGE_HOST = _env("CHAT_BRIDGE_HOST", "0.0.0.0")
 CHAT_BRIDGE_PORT = int(_env("CHAT_BRIDGE_PORT", "8765"))
 CONVERSATIONS_DB_PATH = _env("CONVERSATIONS_DB_PATH", "conversations.db")
+# Where the system prompt / ElevenLabs voice ID edited from the web app's
+# settings tab are persisted - survives restarts, same idea as
+# SERVO_CALIBRATION_PATH.
+APP_SETTINGS_PATH = _env("APP_SETTINGS_PATH", "app_settings.json")
 
 # --- Logging (local only, never uploaded) ---------------------------------
 LOG_DIR = _env("LOG_DIR", "logs")

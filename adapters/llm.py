@@ -18,11 +18,16 @@ class LLMGatewayAdapter:
         api_base: Optional[str] = None,
         fallback_model: Optional[str] = None,
         fallback_api_base: Optional[str] = None,
+        system_prompt: Optional[str] = None,
     ) -> None:
         self.model = model
         self.api_base = api_base
         self.fallback_model = fallback_model
         self.fallback_api_base = fallback_api_base
+        # Instance attribute (not the module-level SYSTEM_PROMPT) so the web
+        # app's settings tab can edit it live - see ChatBridgeAdapter's
+        # set_system_prompt handler.
+        self.system_prompt = system_prompt or SYSTEM_PROMPT
 
     def ask_stream(self, user_text: str, history: Optional[list[dict]] = None) -> Iterator[str]:
         try:
@@ -44,7 +49,7 @@ class LLMGatewayAdapter:
     def _ask_stream(
         self, model: str, api_base: Optional[str], user_text: str, history: Optional[list[dict]],
     ) -> Iterator[str]:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": self.system_prompt}]
         messages.extend(history or [])
         messages.append({"role": "user", "content": user_text})
 
