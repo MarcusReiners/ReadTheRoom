@@ -103,9 +103,36 @@ class ServoTurntableAdapter:
             from gpiozero import Device
             from gpiozero.pins.pigpio import PiGPIOFactory
 
-            Device.pin_factory = PiGPIOFactory()
+            try:
+                Device.pin_factory = PiGPIOFactory()
+            except OSError as e:
+                # PiGPIOFactory() connects to the pigpiod daemon's socket at
+                # construction time - if it's not running (a plain
+                # `sudo pigpiod` doesn't survive a reboot; needs
+                # `sudo systemctl enable --now pigpiod` to persist), this
+                # raises here immediately rather than silently falling back
+                # to software PWM. Re-raising with the fix inline rather than
+                # gpiozero's raw connection-refused error, which doesn't say
+                # what to do about it.
+                raise RuntimeError(
+                    "SERVO_USE_PIGPIO ist gesetzt, aber pigpiod ist nicht erreichbar. "
+                    "Starten mit: sudo systemctl enable --now pigpiod (persistiert "
+                    "einen Reboot, anders als ein einmaliges `sudo pigpiod`)."
+                ) from e
 
-        from gpiozero import AngularServo
+        from gpiozero import AngularServo, Device
+
+        # Logged unconditionally (not just when use_pigpio is set) so a
+        # twitching/chattering report can be checked against the actual PWM
+        # backend from the log, rather than assuming SERVO_USE_PIGPIO is
+        # doing what it's supposed to. "PiGPIOFactory" is DMA-timed and
+        # jitter-free; anything else (e.g. "LGPIOFactory", "RPiGPIOFactory")
+        # is software-timed PWM and will chatter while holding a fixed angle
+        # under load - see the SERVO_USE_PIGPIO comment in config.py.
+        logger.info(
+            "[Servo] PWM-Backend: %s (SERVO_USE_PIGPIO=%s)",
+            type(Device.pin_factory).__name__, use_pigpio,
+        )
 
         self._base_min_angle = min_angle
         self._base_max_angle = max_angle
