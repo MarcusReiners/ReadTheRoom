@@ -1,3 +1,4 @@
+import statistics
 import struct
 import time
 
@@ -35,6 +36,27 @@ def raw_to_target_degrees(raw: float, front_reference_degrees: float) -> float:
     direction, which is the only sensible reading for hardware with no wraparound."""
     diff = (raw - front_reference_degrees + 180.0) % 360.0 - 180.0
     return 90.0 + diff
+
+
+def median_angle(angles: list[float]) -> float:
+    """Median of several DOA-convention readings of the same source.
+
+    A plain median can't be taken on raw angles - they live on a circle, so
+    170 and -170 are 20 degrees apart but average to 0, pointing the exact
+    wrong way. Each sample is first unwrapped to the branch nearest the first
+    one, making them ordinary colinear numbers, then re-expressed on the same
+    branch afterward.
+
+    Median rather than mean deliberately: the array occasionally emits a
+    single wildly-off reading (a reflection off a wall or monitor, a chair
+    scrape landing mid-window), and one such outlier drags a mean of five
+    samples by tens of degrees while leaving the median untouched.
+    """
+    if not angles:
+        raise ValueError("median_angle() braucht mindestens einen Wert.")
+    base = angles[0]
+    unwrapped = [base + ((a - base + 180.0) % 360.0 - 180.0) for a in angles]
+    return statistics.median(unwrapped)
 
 
 class RespeakerDOAAdapter:

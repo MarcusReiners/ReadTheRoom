@@ -504,7 +504,15 @@ def main() -> None:
             while calibration_mode.is_set():
                 time.sleep(0.2)
             cancel_current_turn.clear()
-            handle_turn(text, bus, conversation, store, llm, tts, cancel_current_turn)
+            try:
+                handle_turn(text, bus, conversation, store, llm, tts, cancel_current_turn)
+            except Exception:
+                # One failed turn must not end the loop. Everything else
+                # (radar, DOA tracking, the web app) runs on daemon threads,
+                # so losing this thread used to take the whole process down
+                # with it - or, worse, leave the unit visibly alive and
+                # tracking while silently never answering again.
+                logger.exception("Turn fehlgeschlagen - Assistent laeuft weiter.")
         except KeyboardInterrupt:
             print("\nCiao!")
             stt.stop()

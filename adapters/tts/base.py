@@ -6,7 +6,10 @@ import threading
 import time
 from typing import Iterable
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # volume scaling degrades to a no-op, TTS still works
+    np = None
 
 from domain.events import SpeechPlaybackStarted, SpeechPlaybackEnded
 from service_layer.bus import EventBus
@@ -49,6 +52,11 @@ class StreamingTTSAdapter:
 
     def set_volume(self, volume: float) -> None:
         self.volume = max(0.0, min(2.0, volume))
+        if np is None and self.volume != 1.0:
+            logger.warning(
+                "[TTS] Lautstaerke %.2f ignoriert - numpy ist nicht installiert (pip install numpy).",
+                self.volume,
+            )
 
     @property
     def sample_rate(self) -> int:
@@ -94,7 +102,7 @@ class StreamingTTSAdapter:
             for i, chunk in enumerate(self._synthesize_chunks(sentence)):
                 if i == 0 and on_first_chunk is not None:
                     on_first_chunk()
-                if self.volume != 1.0:
+                if self.volume != 1.0 and np is not None:
                     chunk = _scale_volume(chunk, self.volume)
                 aplay_proc.stdin.write(chunk)
         except (BrokenPipeError, ValueError, OSError):
@@ -104,6 +112,7 @@ class StreamingTTSAdapter:
     def speak_stream(self, text_chunks: Iterable[str]) -> str:
         full_text = ""
         buffer = ""
+        completed = False
         self._full_text = ""
         self._started_published = False
         self._t_stream_start = time.monotonic()
@@ -136,25 +145,28 @@ class StreamingTTSAdapter:
                 aplay_proc.wait()
                 completed = aplay_proc.returncode == 0
 
-            with self._lock:
-                self._aplay_process = None
-
-            self.bus.publish(SpeechPlaybackEnded(completed=completed))
             logger.info("Antworte: %s", full_text)
             return full_text
 
         except BrokenPipeError:
-            with self._lock:
-                self._aplay_process = None
-            self.bus.publish(SpeechPlaybackEnded(completed=False))
             return full_text
         except Exception as e:
             logger.exception("TTS Fehler: %s: %s", type(e).__name__, e)
-            with self._lock:
-                self._aplay_process = None
             return full_text
         finally:
             self._streaming = False
+            with self._lock:
+                self._aplay_process = None
+            # MUST pair with every SpeechPlaybackStarted, on every exit path
+            # including an unexpected one. main.py holds an assistant_speaking
+            # Event open between these two events, and both the DOA tracking
+            # loop and the VAD recording loop refuse to do anything while it's
+            # set - so an exception escaping here without publishing Ended
+            # (an ElevenLabs network blip or quota error was enough) left that
+            # Event set forever and the assistant permanently deaf, with
+            # nothing in the logs pointing at the cause.
+            if self._started_published:
+                self.bus.publish(SpeechPlaybackEnded(completed=completed))
 
 
 def _scale_volume(chunk: bytes, volume: float) -> bytes:
@@ -163,7 +175,17 @@ def _scale_volume(chunk: bytes, volume: float) -> bytes:
     volume change takes effect immediately without a round-trip to the TTS
     API. Uses numpy (already a transitive dependency here) since Python's
     stdlib `audioop` was removed in 3.13 and a pure-Python per-sample loop
-    would be slow enough to matter on the Pi for a several-second chunk."""
+    would be slow enough to matter on the Pi for a several-second chunk.
+
+    Nothing guarantees a chunk from the TTS API lands on a 2-byte sample
+    boundary, and np.frombuffer() raises on a buffer that isn't a whole
+    number of int16s - so a trailing odd byte is passed through unscaled
+    rather than allowed to throw. One inaudible half-sample at the seam
+    beats an exception here, which _emit() re-raises and which would take
+    the whole playback down."""
+    tail = b""
+    if len(chunk) % 2:
+        chunk, tail = chunk[:-1], chunk[-1:]
     samples = np.frombuffer(chunk, dtype=np.int16)
     scaled = np.clip(samples.astype(np.float32) * volume, -32768, 32767).astype(np.int16)
-    return scaled.tobytes()
+    return scaled.tobytes() + tail

@@ -179,6 +179,20 @@ class ChatBridgeAdapter:
             self.radar.send_command({"cmd": "reset_zone"})
             return JSONResponse({"valid": False})
 
+        # Where the zone rectangle is enforced: 0 = in the XIAO's software
+        # (module reports everything, out-of-zone targets stay visible on the
+        # radar view), 1 = the module's own Detection zone (reports only
+        # what's inside), 2 = the module's Filter zone (reports everything
+        # except what's inside - for boxing off a noise source).
+        @self.app.post("/api/radar/zone/mode")
+        async def set_zone_mode(request: Request):
+            body = await request.json()
+            mode = int(body.get("mode", 0))
+            if mode not in (0, 1, 2):
+                return JSONResponse({"error": "mode muss 0, 1 oder 2 sein"}, status_code=400)
+            self.radar.send_command({"cmd": "set_zone_mode", "mode": mode})
+            return JSONResponse({"mode": mode})
+
         @self.app.post("/api/radar/calibrate/start")
         def start_calibration(seconds: int | None = None):
             self.radar.send_command({"cmd": "start_calibration", "seconds": seconds or 20})
