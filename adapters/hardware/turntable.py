@@ -134,10 +134,26 @@ class ServoTurntableAdapter:
             type(Device.pin_factory).__name__, use_pigpio,
         )
 
-        self._base_min_angle = min_angle
-        self._base_max_angle = max_angle
         self._hardware_min_angle = hardware_min_angle
         self._hardware_max_angle = hardware_max_angle
+        # Clamp the requested safe window into what the servo can actually
+        # reach. The window can arrive from a saved app_settings.json written
+        # before SERVO_HARDWARE_MIN/MAX_ANGLE was corrected (a 0-360 window
+        # persisted from when the hardware range was wrongly believed to be
+        # 360), which bypasses set_safe_range()'s validation entirely by
+        # coming in through the constructor. Without this, safe_min_angle/
+        # safe_max_angle keep reporting the impossible saved values - the web
+        # app and the startup log both showed "0-360" on 0-180 hardware.
+        self._base_min_angle = max(min_angle, hardware_min_angle)
+        self._base_max_angle = min(max_angle, hardware_max_angle)
+        if (self._base_min_angle, self._base_max_angle) != (min_angle, max_angle):
+            logger.warning(
+                "[Servo] Sicherer Bereich %.0f-%.0f liegt ausserhalb des Hardware-Bereichs "
+                "%.0f-%.0f - auf %.0f-%.0f begrenzt. In der Web-App neu setzen, um die "
+                "gespeicherte Einstellung zu korrigieren.",
+                min_angle, max_angle, hardware_min_angle, hardware_max_angle,
+                self._base_min_angle, self._base_max_angle,
+            )
         self.home_offset_degrees = home_offset_degrees
         self._min_angle, self._max_angle = self._windowed_range(home_offset_degrees)
 
@@ -167,6 +183,19 @@ class ServoTurntableAdapter:
         doesn't physically exist on this hardware.
         """
         width = self._base_max_angle - self._base_min_angle
+        hardware_width = self._hardware_max_angle - self._hardware_min_angle
+
+        # A window at least as wide as the servo's whole travel can't be
+        # shifted anywhere - it simply IS the full range, and there's no room
+        # left for an offset to move it into. Handled explicitly because the
+        # shift-to-fit below can't converge in that case: it used to push the
+        # window down to land hi on hardware_max without re-checking lo, and
+        # silently returned an out-of-bounds lower edge (a 360-wide window on
+        # 0-180 hardware came out as -180..180). gpiozero then rejected every
+        # negative angle and tracking died on each move.
+        if width >= hardware_width:
+            return self._hardware_min_angle, self._hardware_max_angle
+
         lo = self._base_min_angle + offset_degrees
         hi = lo + width
 
