@@ -134,15 +134,17 @@ class LedEyesAdapter:
         along a line rather than hand-authored pixel-by-pixel."""
         cx = self.x_offset + self.width // 2
         cy = self.height // 2
-        span = min(self.width, self.height * 2) * 0.32
-        bar_r = max(2, self._dot_r - 1)
+        scale = 1 / 3
+        span = min(self.width, self.height * 2) * 0.32 * scale
+        bar_r = max(1, round((self._dot_r - 1) * scale))
+        jaw_outer_r = max(bar_r + 1, round((self._eye_r + 2) * scale))
 
         grip_x, grip_y = cx - span, cy + span * 0.55
         jaw_x, jaw_y = cx + span, cy - span * 0.55
 
         _stamp_line(canvas, grip_x, grip_y, jaw_x, jaw_y, bar_r, _WHITE)
         _fill_circle(canvas, int(round(grip_x)), int(round(grip_y)), bar_r + 1, _WHITE)
-        _draw_ring(canvas, int(round(jaw_x)), int(round(jaw_y)), self._eye_r + 2, bar_r, _WHITE)
+        _draw_ring(canvas, int(round(jaw_x)), int(round(jaw_y)), jaw_outer_r, bar_r, _WHITE)
 
 
 def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
