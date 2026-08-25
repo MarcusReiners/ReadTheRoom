@@ -134,20 +134,28 @@ class LedEyesAdapter:
         cx = self.x_offset + self.width // 2
         cy = self.height // 2 - self.height // 6  # shifted up from dead center
 
-        body_outer_r = max(2, round(self._eye_r * 0.45))
+        body_outer_r = max(2, round(self._eye_r * 0.28))
         body_inner_r = max(1, round(body_outer_r * 0.45))
-        tooth_r = max(1, self._dot_r - 2)
+        # Scaled off the (now much smaller) body, not the fixed _dot_r-based
+        # size the eyes use - otherwise the teeth stay eye-pupil-sized while
+        # the body shrinks around them and end up looking oversized.
+        tooth_r = max(1, round(body_outer_r * 0.6))
         tooth_offset = body_outer_r + tooth_r - 1
         n_teeth = 8
 
         _draw_ring(canvas, cx, cy, body_outer_r, body_inner_r, _WHITE)
         for i in range(n_teeth):
+            # i*45 degrees: right, bottom-right, bottom, bottom-left, left,
+            # top-left, top, top-right - all 8 canonical gear-tooth spots,
+            # corners included.
             angle = 2 * math.pi * i / n_teeth
             tx = cx + tooth_offset * math.cos(angle)
             ty = cy + tooth_offset * math.sin(angle)
             # A square (not a circle) with a corner pointing straight outward
             # along this tooth's own radial angle - e.g. the left/right teeth
-            # each show a corner facing directly left/right, not a flat edge.
+            # show a corner facing directly left/right, the diagonal teeth
+            # (top-left/top-right/bottom-left/bottom-right) show a corner
+            # facing straight into that corner direction, not a flat edge.
             _fill_diamond(canvas, int(round(tx)), int(round(ty)), tooth_r, angle, _WHITE)
 
 
