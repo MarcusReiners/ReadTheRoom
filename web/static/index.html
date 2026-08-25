@@ -997,6 +997,7 @@
       if (activeTab) {
         ws.send(JSON.stringify({ type: "set_calibration_mode", value: activeTab.dataset.tab === "settings" }));
       }
+      ws.send(JSON.stringify({ type: "set_composing", value: document.activeElement === textInputEl }));
     };
     ws.onclose = () => { connDotEl.classList.remove("connected"); connDotEl.classList.add("disconnected"); setTimeout(connect, 2000); };
     ws.onerror = () => ws.close();
@@ -1011,6 +1012,19 @@
     if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "user_text", text }));
     textInputEl.value = "";
+  });
+
+  // Pauses hands-free voice listening for as long as this field is focused -
+  // otherwise typing a message (possibly while talking, e.g. to someone else
+  // in the room or reading the draft aloud) can also get picked up as a
+  // separate spoken turn.
+  textInputEl.addEventListener("focus", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_composing", value: true }));
+  });
+  textInputEl.addEventListener("blur", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_composing", value: false }));
   });
 
   voiceToggleEl.addEventListener("click", () => {
