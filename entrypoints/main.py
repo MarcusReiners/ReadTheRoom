@@ -325,20 +325,25 @@ def main() -> None:
         store.set_active_id(store.create_conversation())
     turn_queue: "queue.Queue[str]" = queue.Queue()
 
-    # System prompt / ElevenLabs voice ID are editable from the web app's
-    # settings tab (ChatBridgeAdapter's set_system_prompt/set_voice_id) -
-    # load whatever was last saved, falling back to the domain default /
-    # config env var on a fresh install with no settings file yet.
+    # System prompt / named ElevenLabs voice library are editable from the
+    # web app's settings tab (ChatBridgeAdapter's set_system_prompt/
+    # add_voice/delete_voice/select_voice) - load whatever was last saved,
+    # falling back to the domain default / config env var on a fresh install
+    # with no settings file yet.
     app_settings = load_app_settings(
         config.APP_SETTINGS_PATH,
         default_system_prompt=SYSTEM_PROMPT,
         default_voice_id=config.ELEVENLABS_VOICE_ID,
     )
+    active_voice = next(
+        (v for v in app_settings["voices"] if v["id"] == app_settings["active_voice_id"]),
+        app_settings["voices"][0],
+    )
 
     stt = build_stt(config)
     tts = build_tts(config, bus)
     if hasattr(tts, "voice_id"):
-        tts.voice_id = app_settings["voice_id"]
+        tts.voice_id = active_voice["voice_id"]
     llm = LLMGatewayAdapter(
         model=config.LLM_MODEL,
         api_base=config.LLM_API_BASE,
@@ -388,6 +393,8 @@ def main() -> None:
         llm=llm,
         tts=tts,
         app_settings_path=config.APP_SETTINGS_PATH,
+        voices=app_settings["voices"],
+        active_voice_id=app_settings["active_voice_id"],
         calibration_mode=calibration_mode,
         host=config.CHAT_BRIDGE_HOST, port=config.CHAT_BRIDGE_PORT,
     )

@@ -436,6 +436,71 @@
     outline-offset: -1px;
   }
   .assistant-wrap .servo-save-btn { align-self: flex-start; }
+  .voice-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .voice-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: var(--bg);
+  }
+  .voice-item.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg)); }
+  .voice-item .voice-select {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    cursor: pointer;
+    background: none;
+    padding: 0;
+  }
+  .voice-item.active .voice-select { border-color: var(--accent); background: var(--accent); }
+  .voice-item .voice-info { flex: 1; min-width: 0; cursor: pointer; }
+  .voice-item .voice-name { font-size: 13.5px; font-weight: 600; }
+  .voice-item .voice-id {
+    font-size: 11.5px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .voice-item .voice-delete-btn {
+    flex: none;
+    border: none;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+  }
+  .voice-item .voice-delete-btn:hover { color: var(--danger); background: var(--panel-2); }
+  .voice-item .voice-delete-btn:disabled { opacity: 0.3; cursor: default; }
+  .voice-add-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+  .voice-add-row input {
+    flex: 1;
+    min-width: 140px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    background: var(--panel-2);
+    color: var(--text);
+  }
+  .voice-add-row input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .voice-add-row .servo-save-btn { align-self: center; }
   .servo-wrap {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -606,10 +671,13 @@
             <button id="systemPromptSaveBtn" class="servo-save-btn" type="button">Save prompt</button>
             <div id="systemPromptStatus" class="radar-status">Loading…</div>
 
-            <label class="field-label" for="voiceIdInput">ElevenLabs voice ID</label>
-            <input id="voiceIdInput" type="text" placeholder="e.g. wDsJlOXPqcvIUKdLXjDs" autocomplete="off">
-            <button id="voiceIdSaveBtn" class="servo-save-btn" type="button">Save voice ID</button>
-            <div id="voiceIdStatus" class="radar-status">Loading…</div>
+            <label class="field-label">Voices</label>
+            <div id="voiceList" class="voice-list"></div>
+            <div class="voice-add-row">
+              <input id="voiceNameInput" type="text" placeholder="Name (e.g. Warm)" autocomplete="off">
+              <input id="voiceIdInput" type="text" placeholder="ElevenLabs voice ID" autocomplete="off">
+              <button id="voiceAddBtn" class="servo-save-btn" type="button">Add voice</button>
+            </div>
           </div>
         </div>
       </div>
@@ -701,6 +769,8 @@
   const conversationListEl = document.getElementById("conversationList");
   const privateModeToggleEl = document.getElementById("privateModeToggle");
   const systemPromptInputEl = document.getElementById("systemPromptInput");
+  const voiceListEl = document.getElementById("voiceList");
+  const voiceNameInputEl = document.getElementById("voiceNameInput");
   const voiceIdInputEl = document.getElementById("voiceIdInput");
 
   const ICON_TRASH =
@@ -711,6 +781,8 @@
   let voiceEnabled = true;
   let conversations = [];
   let activeConversationId = null;
+  let voices = [];
+  let activeVoiceId = null;
 
   function addBubble(role, text) {
     const row = document.createElement("div");
@@ -755,9 +827,53 @@
     systemPromptInputEl.value = value || "";
   }
 
-  function setVoiceIdField(value) {
-    if (document.activeElement === voiceIdInputEl) return;
-    voiceIdInputEl.value = value || "";
+  function renderVoiceList(items, selectedId) {
+    voices = items || [];
+    activeVoiceId = selectedId;
+    voiceListEl.innerHTML = "";
+    for (const v of voices) {
+      const item = document.createElement("div");
+      item.className = "voice-item" + (v.id === activeVoiceId ? " active" : "");
+
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "voice-select";
+      select.setAttribute("aria-label", `Select "${v.name}"`);
+      select.addEventListener("click", () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: "select_voice", id: v.id }));
+      });
+      item.appendChild(select);
+
+      const info = document.createElement("div");
+      info.className = "voice-info";
+      info.addEventListener("click", () => select.click());
+      const name = document.createElement("div");
+      name.className = "voice-name";
+      name.textContent = v.name;
+      const id = document.createElement("div");
+      id.className = "voice-id";
+      id.textContent = v.voice_id;
+      info.appendChild(name);
+      info.appendChild(id);
+      item.appendChild(info);
+
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "voice-delete-btn";
+      del.setAttribute("aria-label", `Delete "${v.name}"`);
+      del.disabled = voices.length <= 1;
+      del.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">' + ICON_TRASH + '</svg>';
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (confirm(`Delete voice "${v.name}"?`)) {
+          ws.send(JSON.stringify({ type: "delete_voice", id: v.id }));
+        }
+      });
+      item.appendChild(del);
+
+      voiceListEl.appendChild(item);
+    }
   }
 
   function renderConversationList() {
@@ -806,7 +922,7 @@
         setVoiceToggle(data.voice_enabled !== false);
         setPrivateModeToggle(data.private_mode !== false);
         setSystemPromptField(data.system_prompt);
-        setVoiceIdField(data.voice_id);
+        renderVoiceList(data.voices, data.active_voice_id);
         renderConversationList();
         break;
       case "user_message":
@@ -836,8 +952,8 @@
       case "system_prompt":
         setSystemPromptField(data.value);
         break;
-      case "voice_id":
-        setVoiceIdField(data.value);
+      case "voices":
+        renderVoiceList(data.voices, data.active_voice_id);
         break;
       case "radar_targets":
         renderTargets(data.targets || []);
@@ -1230,11 +1346,9 @@
   // ---------------------------------------------------------------- assistant settings
   const systemPromptSaveBtn = document.getElementById("systemPromptSaveBtn");
   const systemPromptStatusEl = document.getElementById("systemPromptStatus");
-  const voiceIdSaveBtn = document.getElementById("voiceIdSaveBtn");
-  const voiceIdStatusEl = document.getElementById("voiceIdStatus");
+  const voiceAddBtn = document.getElementById("voiceAddBtn");
 
   systemPromptStatusEl.textContent = "";
-  voiceIdStatusEl.textContent = "";
 
   systemPromptSaveBtn.addEventListener("click", () => {
     const value = systemPromptInputEl.value.trim();
@@ -1243,11 +1357,13 @@
     systemPromptStatusEl.textContent = "Saved.";
   });
 
-  voiceIdSaveBtn.addEventListener("click", () => {
-    const value = voiceIdInputEl.value.trim();
-    if (!value || !ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "set_voice_id", value }));
-    voiceIdStatusEl.textContent = "Saved.";
+  voiceAddBtn.addEventListener("click", () => {
+    const name = voiceNameInputEl.value.trim();
+    const voice_id = voiceIdInputEl.value.trim();
+    if (!name || !voice_id || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "add_voice", name, voice_id }));
+    voiceNameInputEl.value = "";
+    voiceIdInputEl.value = "";
   });
 })();
 </script>
