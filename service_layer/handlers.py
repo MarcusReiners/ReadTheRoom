@@ -81,6 +81,7 @@ def register_tie_led_handlers(bus: EventBus, radar) -> None:
 def start_doa_tracking(
     doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
+    silence_timeout_s: float = 5.0,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -117,6 +118,14 @@ def start_doa_tracking(
     face.animate_eye_direction() - by the time the head physically arrives,
     eyes and head are aligned again instead of the eyes staying cocked to the
     side.
+
+    silence_timeout_s: if no voice activity has been picked up for this long,
+    the head drifts back to home on its own - it shouldn't stay cocked toward
+    the last speaker indefinitely once the room's gone quiet. The clock
+    resets on every detected voice activity AND on assistant_speaking
+    clearing (a reply just ended) - not while assistant_speaking is set,
+    since that time is spent replying, not sitting in silence. Set to None or
+    <=0 to disable.
     """
     lock = lock or contextlib.nullcontext()
     moving_until = 0.0
@@ -124,16 +133,28 @@ def start_doa_tracking(
     def _tracking_loop() -> None:
         nonlocal moving_until
         logger.info("[DOA] Tracking gestartet.")
+        last_active_time = time.monotonic()
+        was_speaking = False
+        at_home = True
         while True:
             try:
                 speaking = assistant_speaking is not None and assistant_speaking.is_set()
                 settling = time.monotonic() < moving_until
+                if was_speaking and not speaking:
+                    # A reply just finished - start the silence clock fresh
+                    # from here rather than from before the reply, so a long
+                    # reply doesn't count against the user as silence.
+                    last_active_time = time.monotonic()
+                was_speaking = speaking
+
                 if not speaking and not settling:
                     with lock:
                         active = doa.get_voice_active()
                         angle = doa.get_direction_degrees() if active else None
                     logger.debug("[DOA] voice_active=%s", active)
                     if active:
+                        last_active_time = time.monotonic()
+                        at_home = False
                         logger.info("[DOA] Stimme erkannt bei %.0f Grad.", angle)
                         # Eyes dart to the sound first, human-like, before the
                         # head starts physically catching up.
@@ -158,6 +179,18 @@ def start_doa_tracking(
                         else:
                             turntable.rotate_towards(target_angle_degrees=angle)
                             face.set_eye_direction(angle_degrees=90.0)
+                    elif (
+                        not at_home
+                        and silence_timeout_s
+                        and silence_timeout_s > 0
+                        and time.monotonic() - last_active_time >= silence_timeout_s
+                    ):
+                        logger.info("[DOA] %.0fs Stille - Kopf kehrt zur Home-Position zurueck.", silence_timeout_s)
+                        settle_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
+                        moving_until = time.monotonic() + settle_s
+                        face.animate_eye_direction(90.0, duration_s=settle_s)
+                        turntable.home(ramp_duration_s=settle_s)
+                        at_home = True
             except Exception:
                 logger.exception("[DOA] Fehler beim Lesen/Ansteuern - Tracking-Thread beendet sich NICHT.")
             time.sleep(poll_interval_s)

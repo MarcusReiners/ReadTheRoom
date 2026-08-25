@@ -334,7 +334,11 @@ def main() -> None:
             brightness=config.LED_MATRIX_BRIGHTNESS,
             pwm_bits=config.LED_MATRIX_PWM_BITS,
         )
-        face = LedEyesAdapter(bus=bus, x_offset=0, width=96, height=48)
+        face = LedEyesAdapter(
+            bus=bus, x_offset=0, width=96, height=48,
+            min_angle_degrees=config.SERVO_MIN_ANGLE,
+            max_angle_degrees=config.SERVO_MAX_ANGLE,
+        )
         matrix.add_renderer(face)
         matrix.start()
     else:
