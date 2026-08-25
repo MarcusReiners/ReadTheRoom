@@ -82,6 +82,7 @@ def start_doa_tracking(
     doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
+    post_move_quiet_s: float = 0.6,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -102,15 +103,21 @@ def start_doa_tracking(
     hypothetical one. Pass None to disable the guard (not recommended for
     normal use).
 
-    settle_base_s/settle_deg_per_s: after actually commanding a move, DOA is
-    ignored entirely (not even polled) for settle_base_s + moved_degrees /
-    settle_deg_per_s - the servo has no position feedback, so a poll taken
-    while it's still physically mid-turn would compute the next target from a
-    current_heading_degrees that doesn't yet match reality, and the motor's
-    own noise while moving risks tripping the VAD the same way speech
-    playback does. settle_deg_per_s is a conservative estimate of this
-    servo's turning speed, not a measured spec - tune down if it still reacts
-    before finishing a large turn, or up if it feels sluggish on small ones.
+    settle_base_s/settle_deg_per_s: size the RAMP - how long the glide to the
+    target is spread over, as settle_base_s + moved_degrees /
+    settle_deg_per_s. settle_deg_per_s is a conservative estimate of this
+    servo's turning speed, not a measured spec - tune down if motion looks
+    rushed on large turns, or up if small ones feel sluggish.
+
+    post_move_quiet_s: how long DOA is ignored entirely (not even polled)
+    AFTER a move has physically finished. This is separate from the ramp on
+    purpose. rotate_towards()/home() block this thread for the whole ramp, so
+    a deadline set before calling them expires the instant the motion ends -
+    which is exactly when the servo is still audibly settling. The result was
+    a feedback loop on the silence recenter: the head returns home, its own
+    motor noise trips the VAD, the head turns toward its own noise, goes
+    quiet, recenters again, forever. Starting the window after the move gives
+    the motor noise time to decay before the mic is trusted again.
 
     eye_lead_s: on a detected direction, the eyes dart to it immediately and
     the head follows eye_lead_s later (a person's eyes move before their head
@@ -218,22 +225,22 @@ def start_doa_tracking(
 
                         moved = turntable.predict_relative_move(angle)
                         if moved > 0.5:
-                            settle_s = settle_base_s + moved / settle_deg_per_s
-                            moving_until = time.monotonic() + settle_s
+                            ramp_s = settle_base_s + moved / settle_deg_per_s
                             # Eyes drift back to center over the same span the
                             # head takes to physically arrive, so both land
                             # aligned together instead of the eyes staying
                             # cocked to the side after the head catches up.
-                            face.animate_eye_direction(90.0, duration_s=settle_s)
-                            # Glides there over settle_s instead of jumping in
+                            face.animate_eye_direction(90.0, duration_s=ramp_s)
+                            # Glides there over ramp_s instead of jumping in
                             # one PWM update - an instant snap looks abrupt,
-                            # this reads as natural head motion. Blocks this
-                            # thread for the ramp's duration, which is fine:
-                            # nothing else would happen during settling anyway.
-                            turntable.rotate_towards(target_angle_degrees=angle, ramp_duration_s=settle_s)
+                            # this reads as natural head motion. BLOCKS this
+                            # thread until the motion is done, which is why
+                            # the quiet window below is started afterwards.
+                            turntable.rotate_towards(target_angle_degrees=angle, ramp_duration_s=ramp_s)
                         else:
                             turntable.rotate_towards(target_angle_degrees=angle)
                             face.set_eye_direction(angle_degrees=90.0)
+                        moving_until = time.monotonic() + post_move_quiet_s
                     elif (
                         not at_home
                         and silence_timeout_s
@@ -241,11 +248,15 @@ def start_doa_tracking(
                         and time.monotonic() - last_active_time >= silence_timeout_s
                     ):
                         logger.info("[DOA] %.0fs Stille - Kopf kehrt zur Home-Position zurueck.", silence_timeout_s)
-                        settle_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
-                        moving_until = time.monotonic() + settle_s
-                        face.animate_eye_direction(90.0, duration_s=settle_s)
-                        turntable.home(ramp_duration_s=settle_s)
+                        ramp_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
+                        face.animate_eye_direction(90.0, duration_s=ramp_s)
+                        turntable.home(ramp_duration_s=ramp_s)
                         at_home = True
+                        moving_until = time.monotonic() + post_move_quiet_s
+                        # Not counted as voice activity: otherwise the servo's
+                        # own noise during this recenter would keep resetting
+                        # the silence clock and the head would never settle.
+                        last_active_time = time.monotonic()
             except Exception:
                 logger.exception("[DOA] Fehler beim Lesen/Ansteuern - Tracking-Thread beendet sich NICHT.")
             time.sleep(poll_interval_s)
