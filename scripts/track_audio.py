@@ -32,9 +32,11 @@ def main() -> None:
     # assistant's tracking, just standalone without STT/LLM/TTS/radar/matrix.
     start_doa_tracking(doa, turntable, face)
 
+    # Read off the turntable, not config - the safe range is editable from
+    # the web app, so the configured default isn't necessarily what's active.
     print(
         "Audio-Tracking laeuft - der Servo folgt jeder erkannten Stimme "
-        f"(sicherer Bereich {config.SERVO_MIN_ANGLE:.0f}-{config.SERVO_MAX_ANGLE:.0f} Grad).\n"
+        f"(sicherer Bereich {turntable.safe_min_angle:.0f}-{turntable.safe_max_angle:.0f} Grad).\n"
         "Strg+C zum Beenden."
     )
 

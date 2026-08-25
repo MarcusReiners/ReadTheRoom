@@ -21,17 +21,21 @@ def main() -> None:
 
     turntable = build_turntable(config)
 
-    print(f"Voller Schwenk zwischen {config.SERVO_MIN_ANGLE:.0f} und {config.SERVO_MAX_ANGLE:.0f} Grad.")
+    # Read off the turntable rather than config: the safe range is editable
+    # from the web app, and commanding the config value would sweep a
+    # narrower arc than the head is actually allowed to travel.
+    lo, hi = turntable.safe_min_angle, turntable.safe_max_angle
+    print(f"Voller Schwenk zwischen {lo:.0f} und {hi:.0f} Grad.")
     print("Strg+C zum Beenden.")
 
     try:
         while True:
-            print(f"-> {config.SERVO_MIN_ANGLE:.0f} Grad")
-            turntable.set_angle_immediate(config.SERVO_MIN_ANGLE)
+            print(f"-> {lo:.0f} Grad")
+            turntable.set_angle_immediate(lo)
             time.sleep(HOLD_SECONDS)
 
-            print(f"-> {config.SERVO_MAX_ANGLE:.0f} Grad")
-            turntable.set_angle_immediate(config.SERVO_MAX_ANGLE)
+            print(f"-> {hi:.0f} Grad")
+            turntable.set_angle_immediate(hi)
             time.sleep(HOLD_SECONDS)
     except KeyboardInterrupt:
         pass

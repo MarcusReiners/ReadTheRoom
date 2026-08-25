@@ -50,6 +50,25 @@ def load_app_settings(path: str, defaults: dict) -> dict:
     return settings
 
 
+def load_servo_range(path: str, default_min: float, default_max: float) -> tuple[float, float]:
+    """Just the servo's safe turning window, without needing defaults for
+    every unrelated setting. Used by adapters/factory.py so that every
+    consumer of build_turntable() - main.py and all the hardware scripts
+    alike - honours the range set in the web app, rather than the scripts
+    quietly falling back to the config.py value and moving through a
+    different window than the assistant does."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (FileNotFoundError, ValueError, OSError):
+        return default_min, default_max
+
+    min_angle = data.get("servo_min_angle")
+    max_angle = data.get("servo_max_angle")
+    if min_angle is None or max_angle is None or max_angle <= min_angle:
+        return default_min, default_max
+    return float(min_angle), float(max_angle)
+
+
 def save_app_settings(path: str, settings: dict) -> None:
     """Takes the whole settings dict rather than one parameter per field.
     The positional form this replaced meant every caller had to re-supply

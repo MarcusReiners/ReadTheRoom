@@ -58,11 +58,20 @@ def build_turntable(cfg, move_to_home_on_start: bool = True):
 
     from adapters.hardware.turntable import ServoTurntableAdapter
     from adapters.hardware.servo_calibration import load_home_offset
+    from adapters.app_settings import load_servo_range
+
+    # The safe window is loaded here rather than applied by main.py after
+    # construction, so the hardware scripts (track_audio, sweep_servo,
+    # home_servo, ...) move through the same window the assistant does
+    # instead of the config.py default.
+    min_angle, max_angle = load_servo_range(
+        cfg.APP_SETTINGS_PATH, cfg.SERVO_MIN_ANGLE, cfg.SERVO_MAX_ANGLE,
+    )
 
     return ServoTurntableAdapter(
         pin=cfg.SERVO_GPIO_PIN,
-        min_angle=cfg.SERVO_MIN_ANGLE,
-        max_angle=cfg.SERVO_MAX_ANGLE,
+        min_angle=min_angle,
+        max_angle=max_angle,
         hardware_min_angle=cfg.SERVO_HARDWARE_MIN_ANGLE,
         hardware_max_angle=cfg.SERVO_HARDWARE_MAX_ANGLE,
         use_pigpio=cfg.SERVO_USE_PIGPIO,

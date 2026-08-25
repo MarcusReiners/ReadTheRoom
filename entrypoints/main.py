@@ -405,11 +405,9 @@ def main() -> None:
     )
 
     radar = build_radar(config, bus)
+    # build_turntable() already applies the saved safe range (see
+    # adapters/factory.py) so the hardware scripts and the assistant agree.
     turntable = build_turntable(config)
-    try:
-        turntable.set_safe_range(app_settings["servo_min_angle"], app_settings["servo_max_angle"])
-    except ValueError:
-        logger.exception("Gespeicherter Servo-Bereich ist ungueltig - nutze den aus config.py.")
 
     # Set for as long as the web app's settings tab (servo home calibration)
     # is open - see start_doa_tracking()'s calibration_mode param and
@@ -441,8 +439,8 @@ def main() -> None:
         )
         face = LedEyesAdapter(
             bus=bus, x_offset=0, width=96, height=48,
-            min_angle_degrees=config.SERVO_MIN_ANGLE,
-            max_angle_degrees=config.SERVO_MAX_ANGLE,
+            min_angle_degrees=turntable.safe_min_angle,
+            max_angle_degrees=turntable.safe_max_angle,
             calibration_mode=calibration_mode,
         )
         matrix.add_renderer(face)
