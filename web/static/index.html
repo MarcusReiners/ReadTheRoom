@@ -945,6 +945,17 @@
       case "user_message":
         if (data.conversation_id !== activeConversationId) break;
         currentAssistantBubble = null;
+        // replaced: this overwrote the conversation's last (still-
+        // unanswered) message in place - e.g. a chat message interrupting a
+        // voice-triggered reply that hadn't finished yet - rather than
+        // adding a second bubble alongside it. messagesEl.lastElementChild
+        // is safe to assume is that same bubble: an "assistant_cancelled"
+        // (if any) always arrives first and already removed a dangling
+        // partial reply, per this same event's server-side ordering.
+        if (data.replaced && messagesEl.lastElementChild) {
+          const bubble = messagesEl.lastElementChild.querySelector(".bubble");
+          if (bubble) { bubble.textContent = data.text; break; }
+        }
         addBubble("user", data.text);
         break;
       case "assistant_delta":
@@ -956,6 +967,16 @@
       case "assistant_done":
         if (data.conversation_id !== activeConversationId) break;
         currentAssistantBubble = null;
+        break;
+      case "assistant_cancelled":
+        if (data.conversation_id !== activeConversationId) break;
+        // A higher-priority chat message cut this reply short - drop
+        // whatever partial bubble it had going rather than leave a
+        // truncated, never-finished answer sitting in the chat.
+        if (currentAssistantBubble) {
+          currentAssistantBubble.closest(".message-row")?.remove();
+          currentAssistantBubble = null;
+        }
         break;
       case "modality":
         setModalityLabel(data.value);

@@ -95,6 +95,41 @@ class ConversationStore:
                     (_truncate_title(text), conversation_id),
                 )
 
+    def replace_or_add_user_message(self, conversation_id: str, text: str) -> bool:
+        """If the conversation's last message is still an unanswered user
+        message - no assistant reply has followed it yet, e.g. a voice-
+        triggered turn a chat-typed message just interrupted, or simply two
+        user messages sent back to back before the assistant replied to the
+        first - overwrites it in place instead of appending a duplicate.
+        Returns True if it replaced, False if it added a new user message as
+        usual (the normal case: the last message was the assistant's)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, role FROM messages WHERE conversation_id = ? ORDER BY id DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+
+        if row is None or row["role"] != "user":
+            self.add_user_message(conversation_id, text)
+            return False
+
+        now = _now()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE messages SET content = ?, created_at = ? WHERE id = ?", (text, now, row["id"]),
+            )
+            conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conversation_id))
+            first_user = conn.execute(
+                "SELECT id FROM messages WHERE conversation_id = ? AND role = 'user' ORDER BY id ASC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+            if first_user is not None and first_user["id"] == row["id"]:
+                # The replaced message was also the title-setting first one.
+                conn.execute(
+                    "UPDATE conversations SET title = ? WHERE id = ?", (_truncate_title(text), conversation_id),
+                )
+        return True
+
     def add_assistant_message(self, conversation_id: str, text: str) -> None:
         self._add_message(conversation_id, "assistant", text)
 

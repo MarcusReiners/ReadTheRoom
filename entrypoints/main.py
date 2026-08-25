@@ -15,6 +15,7 @@ from domain.conversation import SYSTEM_PROMPT, ConversationState
 from domain.events import (
     AssistantDeltaReceived,
     AssistantMessageCompleted,
+    AssistantTurnCancelled,
     ListeningStateChanged,
     SpeechPlaybackEnded,
     SpeechPlaybackStarted,
@@ -109,13 +110,28 @@ def record_audio(output_file: str) -> bool:
 # or discarded wholesale.
 _NON_SPEECH_ANNOTATION_RE = re.compile(r"[\[(][^\])]*[\])]")
 
+# turn_queue is a PriorityQueue of (priority, monotonic_ns, text) - lower
+# priority number is served first. A typed chat message should always jump
+# ahead of anything still waiting from voice/console input (see
+# ChatBridgeAdapter's user_text handler, which also interrupts an
+# already-in-progress voice-triggered reply rather than just queuing behind
+# it - see handle_turn()'s cancel_event). The monotonic_ns timestamp is only
+# a tie-breaker preserving arrival order within the same priority; it's never
+# compared for its own sake.
+PRIORITY_CHAT = 0
+PRIORITY_VOICE = 1
+
+
+def _enqueue_turn(turn_queue: "queue.PriorityQueue", priority: int, text: str) -> None:
+    turn_queue.put((priority, time.monotonic_ns(), text))
+
 
 def _strip_non_speech_annotations(text: str) -> str:
     stripped = _NON_SPEECH_ANNOTATION_RE.sub("", text)
     return re.sub(r"\s+", " ", stripped).strip()
 
 
-def _transcribe_and_enqueue(stt, turn_queue: "queue.Queue[str]", temp_in: str, log_prefix: str) -> None:
+def _transcribe_and_enqueue(stt, turn_queue: "queue.PriorityQueue", temp_in: str, log_prefix: str) -> None:
     audio_s = max(0, os.path.getsize(temp_in) - 44) / (config.MIC_RATE * 2)
     t_stt = time.monotonic()
     user_text = stt.transcribe(temp_in)
@@ -134,11 +150,11 @@ def _transcribe_and_enqueue(stt, turn_queue: "queue.Queue[str]", temp_in: str, l
         return
 
     logger.info("[%s] Du hast gesagt: '%s'", log_prefix, user_text)
-    turn_queue.put(user_text)
+    _enqueue_turn(turn_queue, PRIORITY_VOICE, user_text)
 
 
 def console_input_loop(
-    bus: EventBus, turn_queue: "queue.Queue[str]", stt, mic_lock: threading.Lock,
+    bus: EventBus, turn_queue: "queue.PriorityQueue", stt, mic_lock: threading.Lock,
 ) -> None:
     """Reads stdin on its own thread: bare ENTER starts/stops a voice recording,
     whose result is pushed onto turn_queue like any other turn. Still works
@@ -165,7 +181,7 @@ def console_input_loop(
 
 
 def vad_input_loop(
-    bus: EventBus, turn_queue: "queue.Queue[str]", stt, doa, doa_lock: threading.Lock,
+    bus: EventBus, turn_queue: "queue.PriorityQueue", stt, doa, doa_lock: threading.Lock,
     mic_lock: threading.Lock, assistant_speaking: threading.Event,
     poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8, trigger_confirm_polls: int = 2,
     calibration_mode: threading.Event | None = None, composing_mode: threading.Event | None = None,
@@ -299,13 +315,20 @@ def vad_input_loop(
 
 def handle_turn(
     text: str, bus: EventBus, conversation: ConversationState, store: ConversationStore,
-    llm, tts,
+    llm, tts, cancel_event: threading.Event | None = None,
 ) -> None:
+    """cancel_event: set by ChatBridgeAdapter the instant a chat message is
+    typed and sent, so a still-in-progress voice-triggered reply gets cut off
+    rather than finishing first - chat always has priority (see
+    PRIORITY_CHAT/PRIORITY_VOICE above for the queued-but-not-yet-started
+    half of that same rule). Checked once per streamed LLM delta below;
+    cleared by main()'s turn loop just before each handle_turn() call, so a
+    stale set from an idle moment never affects the next turn."""
     conversation_id = store.get_active_id()
     history = store.get_history(conversation_id)
 
-    store.add_user_message(conversation_id, text)
-    bus.publish(SpeechTranscribed(text=text, conversation_id=conversation_id))
+    replaced = store.replace_or_add_user_message(conversation_id, text)
+    bus.publish(SpeechTranscribed(text=text, conversation_id=conversation_id, replaced=replaced))
 
     # No recentering here on purpose: the head should stay exactly where DOA
     # tracking last left it (facing whoever just spoke) all the way through
@@ -316,6 +339,8 @@ def handle_turn(
 
     def mirrored_deltas():
         for delta in llm.ask_stream(text, history):
+            if cancel_event is not None and cancel_event.is_set():
+                break
             bus.publish(AssistantDeltaReceived(delta=delta, conversation_id=conversation_id))
             yield delta
 
@@ -326,6 +351,14 @@ def handle_turn(
         full_text = tts.speak_stream(mirrored_deltas())
     else:
         full_text = "".join(mirrored_deltas())
+
+    if cancel_event is not None and cancel_event.is_set():
+        # Cut short by a higher-priority chat message - don't persist a
+        # truncated reply to a user message that's about to be overwritten
+        # anyway, and tell the frontend to drop whatever partial bubble it
+        # has instead of finalizing it as a real answer.
+        bus.publish(AssistantTurnCancelled(conversation_id=conversation_id))
+        return
 
     store.add_assistant_message(conversation_id, full_text)
     bus.publish(AssistantMessageCompleted(text=full_text, conversation_id=conversation_id))
@@ -339,7 +372,7 @@ def main() -> None:
     store = ConversationStore(config.CONVERSATIONS_DB_PATH)
     if store.get_active_id() is None:
         store.set_active_id(store.create_conversation())
-    turn_queue: "queue.Queue[str]" = queue.Queue()
+    turn_queue: "queue.PriorityQueue" = queue.PriorityQueue()
 
     # System prompt / named ElevenLabs voice library are editable from the
     # web app's settings tab (ChatBridgeAdapter's set_system_prompt/
@@ -386,6 +419,11 @@ def main() -> None:
     # for the same reason as calibration_mode above.
     composing_mode = threading.Event()
 
+    # Set by ChatBridgeAdapter the instant a chat message is typed and sent -
+    # see handle_turn()'s cancel_event param. Cleared by the turn loop below
+    # just before each handle_turn() call.
+    cancel_current_turn = threading.Event()
+
     if config.USE_LED_MATRIX:
         from adapters.hardware.led_matrix import LedMatrix
         from adapters.hardware.led_eyes import LedEyesAdapter
@@ -421,6 +459,7 @@ def main() -> None:
         active_voice_id=app_settings["active_voice_id"],
         calibration_mode=calibration_mode,
         composing_mode=composing_mode,
+        cancel_current_turn=cancel_current_turn,
         host=config.CHAT_BRIDGE_HOST, port=config.CHAT_BRIDGE_PORT,
     )
     chat_bridge.start()
@@ -457,14 +496,15 @@ def main() -> None:
 
     while True:
         try:
-            text = turn_queue.get()
+            _priority, _seq, text = turn_queue.get()
             # Holds a queued turn (typed while on the settings tab, or a
             # console/VAD turn that slipped in right as calibration started)
             # until calibration_mode clears, rather than answering mid-
             # calibration or dropping it silently.
             while calibration_mode.is_set():
                 time.sleep(0.2)
-            handle_turn(text, bus, conversation, store, llm, tts)
+            cancel_current_turn.clear()
+            handle_turn(text, bus, conversation, store, llm, tts, cancel_current_turn)
         except KeyboardInterrupt:
             print("\nCiao!")
             stt.stop()
