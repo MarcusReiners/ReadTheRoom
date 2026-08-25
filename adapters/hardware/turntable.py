@@ -12,7 +12,7 @@ class DummyTurntableAdapter:
     def rotate_towards(self, target_angle_degrees: float, ramp_duration_s: float | None = None) -> None:
         self.current_heading_degrees = target_angle_degrees
 
-    def home(self) -> None:
+    def home(self, ramp_duration_s: float | None = None) -> None:
         self.current_heading_degrees = 90.0
 
     def set_angle_immediate(self, angle_degrees: float) -> None:
@@ -26,6 +26,9 @@ class DummyTurntableAdapter:
 
     def predict_relative_move(self, target_angle_degrees: float) -> float:
         return abs(target_angle_degrees - 90.0)
+
+    def predict_home_move(self) -> float:
+        return abs(self.current_heading_degrees - 90.0)
 
     def set_home_offset(self, offset_degrees: float) -> None:
         self.home_offset_degrees = offset_degrees
@@ -212,12 +215,15 @@ class ServoTurntableAdapter:
         ramp_duration_s: see track_relative_angle()."""
         self.track_relative_angle(target_angle_degrees, ramp_duration_s=ramp_duration_s)
 
-    def home(self) -> None:
+    def home(self, ramp_duration_s: float | None = None) -> None:
         """Return to the front-facing center position - a deliberate command,
         not a DOA reading."""
         center = (self._min_angle + self._max_angle) / 2
-        self.current_heading_degrees = center
-        self._servo.angle = center
+        if ramp_duration_s and ramp_duration_s > 0:
+            self._ramp_to(center, ramp_duration_s)
+        else:
+            self.current_heading_degrees = center
+            self._servo.angle = center
         logger.info("[Servo] Home-Position (%.0f Grad).", center)
 
     def set_angle_immediate(self, angle_degrees: float) -> None:
@@ -287,6 +293,13 @@ class ServoTurntableAdapter:
         raw_target = self.current_heading_degrees + (target_angle_degrees - 90.0)
         clamped = max(self._min_angle, min(self._max_angle, raw_target))
         return abs(clamped - self.current_heading_degrees)
+
+    def predict_home_move(self) -> float:
+        """How far home() would actually move the servo, without moving it -
+        lets a caller size a ramp/settle duration before committing, same
+        idea as predict_relative_move()."""
+        center = (self._min_angle + self._max_angle) / 2
+        return abs(center - self.current_heading_degrees)
 
     def _ramp_to(self, target_angle_degrees: float, duration_s: float, steps_per_s: float = 20.0) -> None:
         # 50 steps/s (previous default) sent PWM updates faster than this

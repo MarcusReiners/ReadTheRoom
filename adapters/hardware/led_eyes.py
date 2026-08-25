@@ -20,16 +20,37 @@ class LedEyesAdapter:
     BLINK_INTERVAL = 4.5
     BLINK_DURATION = 0.15
 
+    # Normal in-window tracking uses 60% of the pupil's available travel,
+    # leaving a visible reserve. When the DOA target overshoots the servo's
+    # safe window (the head physically can't turn any further), that reserve
+    # is spent proportionally to how far past the edge the target is - the
+    # eyes "strain" further in that direction on top of the head's own
+    # maxed-out contribution, instead of jumping straight to a fixed pinned
+    # position regardless of overshoot size.
+    _BASE_OFFSET_FRACTION = 0.6
+    _MAX_OFFSET_FRACTION = 0.95
+    _COMPENSATION_RANGE_DEGREES = 45.0
+
     def __init__(
         self,
         bus: EventBus,
         x_offset: int = 0,
         width: int = 96,
         height: int = 48,
+        min_angle_degrees: float = 0.0,
+        max_angle_degrees: float = 180.0,
     ) -> None:
         self.x_offset = x_offset
         self.width = width
         self.height = height
+        # DOA readings can report angles well outside the servo's safe
+        # window (the head can't physically turn that far) - clamping here
+        # pins the eyes at the matrix edge in that direction instead of the
+        # raw sin() wrapping back through center past +-90 degrees off
+        # straight-ahead, which would show the eyes snapping back to
+        # dead-center while the sound is actually further off to one side.
+        self._min_angle_degrees = min_angle_degrees
+        self._max_angle_degrees = max_angle_degrees
         self._eye_angle = 90.0
 
         # animate_eye_direction()'s state - a separate wall-clock-driven
@@ -76,8 +97,16 @@ class LedEyesAdapter:
     def render(self, canvas, t: float) -> None:
         blinking = (t % self.BLINK_INTERVAL) < self.BLINK_DURATION
 
-        rad = math.radians(self._current_angle() - 90.0)
-        px = int((self._eye_r - self._dot_r) * 0.6 * math.sin(rad))
+        current_angle = self._current_angle()
+        clamped_angle = max(self._min_angle_degrees, min(self._max_angle_degrees, current_angle))
+        overshoot = max(0.0, current_angle - self._max_angle_degrees, self._min_angle_degrees - current_angle)
+        overshoot_fraction = min(overshoot / self._COMPENSATION_RANGE_DEGREES, 1.0)
+        offset_fraction = self._BASE_OFFSET_FRACTION + overshoot_fraction * (
+            self._MAX_OFFSET_FRACTION - self._BASE_OFFSET_FRACTION
+        )
+
+        rad = math.radians(clamped_angle - 90.0)
+        px = int((self._eye_r - self._dot_r) * offset_fraction * math.sin(rad))
 
         for cx in (self._left_cx, self._right_cx):
             if blinking:
