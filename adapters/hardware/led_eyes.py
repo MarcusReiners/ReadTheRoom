@@ -132,9 +132,9 @@ class LedEyesAdapter:
         teeth stamped around it), sized to roughly match a single eye
         (_eye_r) rather than spanning the whole matrix."""
         cx = self.x_offset + self.width // 2
-        cy = self.height // 2 + self.height // 10  # a little below dead center
+        cy = self.height // 2 - self.height // 6  # shifted up from dead center
 
-        body_outer_r = self._eye_r
+        body_outer_r = max(3, round(self._eye_r * 0.65))
         body_inner_r = max(1, round(body_outer_r * 0.45))
         tooth_r = max(1, self._dot_r - 2)
         tooth_offset = body_outer_r + tooth_r - 1
