@@ -18,6 +18,14 @@ def build_display(bus: EventBus):
 
     from adapters.hardware.led_matrix import LedMatrix
     from adapters.hardware.led_eyes import LedEyesAdapter
+    from adapters.app_settings import load_servo_range
+
+    # Same source adapters/factory.py reads, so the eyes' deflection limits
+    # match the window the servo is actually allowed to turn in - the range
+    # is editable from the web app, so config.py isn't authoritative.
+    servo_min, servo_max = load_servo_range(
+        config.APP_SETTINGS_PATH, config.SERVO_MIN_ANGLE, config.SERVO_MAX_ANGLE,
+    )
 
     matrix = LedMatrix(
         rows=48, cols=96, chain=1,
@@ -27,8 +35,8 @@ def build_display(bus: EventBus):
     )
     face = LedEyesAdapter(
         bus=bus, x_offset=0, width=96, height=48,
-        min_angle_degrees=config.SERVO_MIN_ANGLE,
-        max_angle_degrees=config.SERVO_MAX_ANGLE,
+        min_angle_degrees=servo_min,
+        max_angle_degrees=servo_max,
     )
     matrix.add_renderer(face)
     matrix.start()
@@ -76,12 +84,9 @@ def demo_servo(turntable) -> None:
     # fixed, repeatable sweep, unlike rotate_towards()/track_relative_angle()
     # which live DOA tracking uses and which would compound with each step
     # here instead of landing on the same three positions every time.
-    print(f"Servo: sweeping {config.SERVO_MIN_ANGLE}-{config.SERVO_MAX_ANGLE} Grad...")
-    for angle in (
-        config.SERVO_MIN_ANGLE,
-        config.SERVO_MAX_ANGLE,
-        (config.SERVO_MIN_ANGLE + config.SERVO_MAX_ANGLE) / 2,
-    ):
+    lo, hi = turntable.safe_min_angle, turntable.safe_max_angle
+    print(f"Servo: sweeping {lo:.0f}-{hi:.0f} Grad...")
+    for angle in (lo, hi, (lo + hi) / 2):
         print(f"  -> {angle} Grad")
         turntable.set_doa_angle_immediate(target_angle_degrees=angle)
         time.sleep(2)
@@ -96,8 +101,8 @@ def live_doa_tracking(turntable, face, poll_interval_s: float = 0.3) -> None:
 
     doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
     print(
-        f"Live-DOA-Tracking gestartet (Servo-Bereich {config.SERVO_MIN_ANGLE}-"
-        f"{config.SERVO_MAX_ANGLE} Grad geklemmt). Strg+C zum Beenden.\n"
+        f"Live-DOA-Tracking gestartet (Servo-Bereich {turntable.safe_min_angle:.0f}-"
+        f"{turntable.safe_max_angle:.0f} Grad geklemmt). Strg+C zum Beenden.\n"
         "Aus der Nase des Mikrofonarrays sprechen und beobachten, ob Servo/Augen folgen.\n"
         "Bewegung erfolgt nur bei erkannter Sprachaktivitaet (Mikrofon-VAD) und geglaettet -"
         " kurze/leise Stoergeraeusche bewegen den Motor nicht."
