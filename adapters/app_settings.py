@@ -5,54 +5,55 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Keys persisted to the settings file, and how to fall back when one is
+# missing (a fresh install, or a file written before that key existed).
+# Defaults come from config.py / the domain layer rather than being repeated
+# here, so this module stays a storage concern only.
+_SCALAR_KEYS = ("system_prompt", "llm_model", "volume", "servo_min_angle", "servo_max_angle")
 
-def load_app_settings(path: str, default_system_prompt: str, default_voice_id: str) -> dict:
-    """Reads the saved system prompt / named ElevenLabs voice library
-    (editable from the web app's settings tab). Missing/corrupt file just
-    means "not customized yet" - not an error, since a fresh install has no
-    settings file at all.
 
-    Returns {"system_prompt": str, "voices": [{"id": str, "name": str,
-    "voice_id": str}, ...], "active_voice_id": str} - "id" is this app's own
-    stable key for the saved entry (a person can rename a voice or reuse the
-    same ElevenLabs voice_id under two names), "voice_id" is what's actually
-    sent to ElevenLabs, and "active_voice_id" refers to that same "id" field.
+def load_app_settings(path: str, defaults: dict) -> dict:
+    """Reads the settings editable from the web app's settings tab. A
+    missing or corrupt file just means "not customized yet" - not an error,
+    since a fresh install has no settings file at all.
+
+    Returns every key in `defaults`, plus "voices" (a list of
+    {"id", "name", "voice_id"}) and "active_voice_id". "id" is this app's own
+    stable key for a saved voice - a person can rename one, or reuse the same
+    ElevenLabs voice_id under two names - while "voice_id" is what actually
+    gets sent to ElevenLabs.
     """
     try:
         data = json.loads(Path(path).read_text())
     except (FileNotFoundError, ValueError, OSError):
         data = {}
 
+    settings = {key: data.get(key, defaults.get(key)) for key in _SCALAR_KEYS}
+    for key, value in settings.items():
+        if value is None:
+            settings[key] = defaults.get(key)
+
     voices = data.get("voices")
     if not voices:
-        # Fresh install, or migrating from the single-voice_id format this
-        # used before multi-voice support - either way, seed one entry so
-        # there's always at least a "Default" voice to fall back to.
-        legacy_voice_id = data.get("voice_id") or default_voice_id
+        # Fresh install, or a file written before multi-voice support, which
+        # stored a single flat "voice_id" - either way seed one entry so
+        # there is always at least one voice to fall back to.
+        legacy_voice_id = data.get("voice_id") or defaults.get("voice_id") or ""
         voices = [{"id": str(uuid.uuid4()), "name": "Default", "voice_id": legacy_voice_id}]
 
     active_voice_id = data.get("active_voice_id")
     if not active_voice_id or not any(v["id"] == active_voice_id for v in voices):
         active_voice_id = voices[0]["id"]
 
-    volume = data.get("volume")
-    volume = 1.0 if volume is None else max(0.0, min(2.0, float(volume)))
-
-    return {
-        "system_prompt": data.get("system_prompt") or default_system_prompt,
-        "voices": voices,
-        "active_voice_id": active_voice_id,
-        "volume": volume,
-    }
+    settings["voices"] = voices
+    settings["active_voice_id"] = active_voice_id
+    return settings
 
 
-def save_app_settings(
-    path: str, system_prompt: str, voices: list, active_voice_id: str, volume: float = 1.0,
-) -> None:
-    Path(path).write_text(json.dumps({
-        "system_prompt": system_prompt,
-        "voices": voices,
-        "active_voice_id": active_voice_id,
-        "volume": volume,
-    }, indent=2))
-    logger.info("[Settings] System-Prompt/Voice-Bibliothek/Volume gespeichert (%s).", path)
+def save_app_settings(path: str, settings: dict) -> None:
+    """Takes the whole settings dict rather than one parameter per field.
+    The positional form this replaced meant every caller had to re-supply
+    every unrelated value just to change one of them, and silently wrote a
+    stale value for anything it got wrong."""
+    Path(path).write_text(json.dumps(settings, indent=2))
+    logger.info("[Settings] Gespeichert (%s).", path)

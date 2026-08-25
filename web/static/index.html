@@ -466,6 +466,45 @@
     color: var(--muted);
   }
   .zone-mode-hint.error { color: var(--danger); }
+  .zone-mode-hint code {
+    font-size: 11.5px;
+    background: var(--panel-2);
+    border-radius: 4px;
+    padding: 1px 4px;
+  }
+  .range-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .range-row input[type="number"] {
+    width: 78px;
+    flex: none;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 10px;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    background: var(--panel-2);
+    color: var(--text);
+  }
+  .range-row input[type="text"] {
+    flex: 1;
+    min-width: 180px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: 14px;
+    background: var(--panel-2);
+    color: var(--text);
+  }
+  .range-row input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .range-sep { font-size: 13px; color: var(--muted); }
+  .servo-wrap .range-row,
+  .servo-wrap .zone-mode-hint,
+  .servo-wrap .field-label { align-self: stretch; }
   .voice-list {
     display: flex;
     flex-direction: column;
@@ -657,7 +696,7 @@
           <div class="privacy-wrap">
             <div class="privacy-text">
               <h2>Private mode</h2>
-              <p>When on, the assistant only replies out loud while exactly one person is in the room - if someone else enters, the conversation automatically switches to text-only chat.</p>
+              <p>Speak aloud only when you're alone. Switches to text-only if someone else walks in.</p>
             </div>
             <label class="switch">
               <input type="checkbox" id="privateModeToggle">
@@ -679,9 +718,9 @@
           <div class="zone-mode-row">
             <label class="field-label" for="zoneModeSelect">Enforced by</label>
             <select id="zoneModeSelect">
-              <option value="0">Software – sensor reports everything, zone only marks who counts</option>
-              <option value="1">Sensor (detect) – sensor reports only targets inside the zone</option>
-              <option value="2">Sensor (exclude) – sensor ignores the zone, reports everything else</option>
+              <option value="0">Software — all targets stay visible</option>
+              <option value="1">Sensor · detect — only inside the zone</option>
+              <option value="2">Sensor · exclude — ignore inside the zone</option>
             </select>
             <p id="zoneModeHint" class="zone-mode-hint"></p>
           </div>
@@ -699,6 +738,18 @@
             </div>
             <button id="servoSaveBtn" class="servo-save-btn" type="button">Save as home</button>
             <div id="servoStatus" class="radar-status">Loading…</div>
+
+            <label class="field-label">Turning range</label>
+            <div class="range-row">
+              <input id="servoMinInput" type="number" step="5" aria-label="Minimum angle">
+              <span class="range-sep">to</span>
+              <input id="servoMaxInput" type="number" step="5" aria-label="Maximum angle">
+              <span class="range-sep">°</span>
+              <button id="servoRangeSaveBtn" class="servo-save-btn" type="button">Apply</button>
+            </div>
+            <p id="servoRangeHint" class="zone-mode-hint">
+              How far the head may turn. Widen carefully — the limit is the cabling inside the head.
+            </p>
           </div>
         </div>
 
@@ -707,6 +758,13 @@
           <div class="assistant-wrap">
             <label class="field-label" for="volumeInput">Voice volume: <span id="volumeValue">100%</span></label>
             <input id="volumeInput" type="range" min="0" max="2" step="0.05" value="1">
+
+            <label class="field-label" for="llmModelInput">Language model</label>
+            <div class="range-row">
+              <input id="llmModelInput" type="text" placeholder="gemini/gemini-2.0-flash" autocomplete="off">
+              <button id="llmModelSaveBtn" class="servo-save-btn" type="button">Apply</button>
+            </div>
+            <p id="llmModelHint" class="zone-mode-hint">LiteLLM model string, e.g. <code>openai/gpt-4o-mini</code>.</p>
 
             <label class="field-label" for="systemPromptInput">System prompt</label>
             <textarea id="systemPromptInput" rows="4" placeholder="You are a desk office assistant…"></textarea>
@@ -816,6 +874,10 @@
   const voiceIdInputEl = document.getElementById("voiceIdInput");
   const volumeInputEl = document.getElementById("volumeInput");
   const volumeValueEl = document.getElementById("volumeValue");
+  const llmModelInputEl = document.getElementById("llmModelInput");
+  const servoMinInputEl = document.getElementById("servoMinInput");
+  const servoMaxInputEl = document.getElementById("servoMaxInput");
+  const servoRangeHintEl = document.getElementById("servoRangeHint");
 
   const ICON_TRASH =
     '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/>';
@@ -876,6 +938,24 @@
     const v = value == null ? 1 : value;
     volumeInputEl.value = v;
     volumeValueEl.textContent = Math.round(v * 100) + "%";
+  }
+
+  function setLlmModelField(value) {
+    if (document.activeElement === llmModelInputEl) return;
+    llmModelInputEl.value = value || "";
+  }
+
+  const SERVO_RANGE_HINT =
+    "How far the head may turn. Widen carefully — the limit is the cabling inside the head.";
+
+  function setServoRangeFields(range) {
+    if (!range) return;
+    if (document.activeElement !== servoMinInputEl) servoMinInputEl.value = Math.round(range.min);
+    if (document.activeElement !== servoMaxInputEl) servoMaxInputEl.value = Math.round(range.max);
+    servoRangeHintEl.textContent = range.error
+      ? "Rejected: " + range.error
+      : `${Math.round(range.max - range.min)}° of travel. ${SERVO_RANGE_HINT}`;
+    servoRangeHintEl.classList.toggle("error", Boolean(range.error));
   }
 
   function renderVoiceList(items, selectedId) {
@@ -973,6 +1053,8 @@
         setVoiceToggle(data.voice_enabled !== false);
         setPrivateModeToggle(data.private_mode !== false);
         setSystemPromptField(data.system_prompt);
+        setLlmModelField(data.llm_model);
+        setServoRangeFields(data.servo_range);
         renderVoiceList(data.voices, data.active_voice_id);
         setVolumeField(data.volume);
         renderConversationList();
@@ -1030,6 +1112,12 @@
         break;
       case "volume":
         setVolumeField(data.value);
+        break;
+      case "llm_model":
+        setLlmModelField(data.value);
+        break;
+      case "servo_range":
+        setServoRangeFields(data);
         break;
       case "radar_targets":
         renderTargets(data.targets || []);
@@ -1374,12 +1462,9 @@
   const zoneModeHintEl = document.getElementById("zoneModeHint");
 
   const ZONE_MODE_HINTS = {
-    0: "The sensor tracks the whole room and every target stays visible below, " +
-       "which is what you want while checking whether it can see everyone at all.",
-    1: "The sensor itself drops targets outside the zone, so they no longer appear " +
-       "below either – the radar view will look emptier than the room is.",
-    2: "The sensor ignores anything inside the box entirely. Draw it around a " +
-       "persistent noise source (a doorway, a fan, a reflective window), not around people.",
+    0: "Best for diagnosing — you can see everything the sensor tracks.",
+    1: "Targets outside the zone vanish from the view above too.",
+    2: "Draw the box around a noise source (doorway, fan, window) — not around people.",
   };
 
   function setZoneMode(mode) {
@@ -1499,6 +1584,27 @@
     if (!value || !ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "set_system_prompt", value }));
     systemPromptStatusEl.textContent = "Saved.";
+  });
+
+  const llmModelSaveBtn = document.getElementById("llmModelSaveBtn");
+  const llmModelHintEl = document.getElementById("llmModelHint");
+  llmModelSaveBtn.addEventListener("click", () => {
+    const value = llmModelInputEl.value.trim();
+    if (!value || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_llm_model", value }));
+    llmModelHintEl.textContent = "Applied — takes effect on the next reply.";
+  });
+
+  // The range is applied and validated on the device (it can reject a window
+  // wider than the servo can physically sweep), and the reply re-populates
+  // these inputs - so nothing is assumed to have worked just because it was
+  // typed here.
+  const servoRangeSaveBtn = document.getElementById("servoRangeSaveBtn");
+  servoRangeSaveBtn.addEventListener("click", () => {
+    const min = parseFloat(servoMinInputEl.value);
+    const max = parseFloat(servoMaxInputEl.value);
+    if (!ws || ws.readyState !== WebSocket.OPEN || isNaN(min) || isNaN(max)) return;
+    ws.send(JSON.stringify({ type: "set_servo_range", min, max }));
   });
 
   voiceAddBtn.addEventListener("click", () => {

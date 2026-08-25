@@ -247,9 +247,11 @@ class ChatBridgeAdapter:
                 "voice_enabled": self.conversation.voice_enabled,
                 "private_mode": self.conversation.confidential,
                 "system_prompt": self._get_system_prompt(),
+                "llm_model": self._get_llm_model(),
                 "voices": self.voices,
                 "active_voice_id": self.active_voice_id,
                 "volume": self._get_volume(),
+                "servo_range": self._get_servo_range(),
             })
             try:
                 while True:
@@ -310,26 +312,29 @@ class ChatBridgeAdapter:
             value = data.get("value")
             if value is not None and self.tts is not None and hasattr(self.tts, "set_volume"):
                 self.tts.set_volume(float(value))
-                save_app_settings(
-                    self.app_settings_path, self._get_system_prompt(), self.voices, self.active_voice_id,
-                    self._get_volume(),
-                )
+                self._save_settings()
                 self._broadcast({"type": "volume", "value": self._get_volume()})
         elif msg_type == "set_system_prompt":
             text = (data.get("value") or "").strip()
             if text and self.llm is not None:
                 self.llm.system_prompt = text
-                save_app_settings(
-                    self.app_settings_path, text, self.voices, self.active_voice_id, self._get_volume(),
-                )
+                self._save_settings()
                 self._broadcast({"type": "system_prompt", "value": text})
+        elif msg_type == "set_llm_model":
+            model = (data.get("value") or "").strip()
+            if model and self.llm is not None:
+                self.llm.model = model
+                self._save_settings()
+                self._broadcast({"type": "llm_model", "value": model})
+        elif msg_type == "set_servo_range":
+            self._set_servo_range(data.get("min"), data.get("max"))
         elif msg_type == "add_voice":
             name = (data.get("name") or "").strip()
             voice_id = (data.get("voice_id") or "").strip()
             if name and voice_id:
                 entry = {"id": str(uuid.uuid4()), "name": name, "voice_id": voice_id}
                 self.voices.append(entry)
-                self._save_voices()
+                self._save_settings()
                 self._broadcast_voices()
         elif msg_type == "delete_voice":
             self._delete_voice(data.get("id"))
@@ -373,16 +378,44 @@ class ChatBridgeAdapter:
             "voice_enabled": self.conversation.voice_enabled,
             "private_mode": self.conversation.confidential,
             "system_prompt": self._get_system_prompt(),
+            "llm_model": self._get_llm_model(),
             "voices": self.voices,
             "active_voice_id": self.active_voice_id,
             "volume": self._get_volume(),
+            "servo_range": self._get_servo_range(),
         })
 
     def _get_system_prompt(self) -> str:
         return getattr(self.llm, "system_prompt", "") or ""
 
+    def _get_llm_model(self) -> str:
+        return getattr(self.llm, "model", "") or ""
+
     def _get_volume(self) -> float:
         return getattr(self.tts, "volume", 1.0)
+
+    def _get_servo_range(self) -> dict:
+        return {
+            "min": getattr(self.turntable, "safe_min_angle", 0.0),
+            "max": getattr(self.turntable, "safe_max_angle", 180.0),
+        }
+
+    def _set_servo_range(self, min_angle, max_angle) -> None:
+        if min_angle is None or max_angle is None:
+            return
+        try:
+            self.turntable.set_safe_range(float(min_angle), float(max_angle))
+        except (ValueError, TypeError) as e:
+            # Rejected (inverted, or wider than the servo can physically
+            # sweep) - tell the client why and re-send the range still in
+            # force, so its inputs snap back instead of showing a value the
+            # head isn't actually honouring.
+            self._broadcast({
+                "type": "servo_range", "error": str(e), **self._get_servo_range(),
+            })
+            return
+        self._save_settings()
+        self._broadcast({"type": "servo_range", **self._get_servo_range()})
 
     def _select_voice(self, voice_id: str) -> None:
         entry = next((v for v in self.voices if v["id"] == voice_id), None)
@@ -391,7 +424,7 @@ class ChatBridgeAdapter:
         self.active_voice_id = voice_id
         if self.tts is not None and hasattr(self.tts, "voice_id"):
             self.tts.voice_id = entry["voice_id"]
-        self._save_voices()
+        self._save_settings()
         self._broadcast_voices()
 
     def _delete_voice(self, voice_id: str | None) -> None:
@@ -403,14 +436,24 @@ class ChatBridgeAdapter:
         if self.active_voice_id == voice_id:
             self._select_voice(self.voices[0]["id"])  # also saves+broadcasts
         else:
-            self._save_voices()
+            self._save_settings()
             self._broadcast_voices()
 
-    def _save_voices(self) -> None:
-        save_app_settings(
-            self.app_settings_path, self._get_system_prompt(), self.voices, self.active_voice_id,
-            self._get_volume(),
-        )
+    def _save_settings(self) -> None:
+        """Snapshots the whole settings file from the live adapters, rather
+        than tracking a parallel copy of each value. The adapters are the
+        source of truth (llm.model is what the next turn actually uses), so
+        there's nothing here that can drift out of sync with them."""
+        servo = self._get_servo_range()
+        save_app_settings(self.app_settings_path, {
+            "system_prompt": self._get_system_prompt(),
+            "llm_model": self._get_llm_model(),
+            "volume": self._get_volume(),
+            "servo_min_angle": servo["min"],
+            "servo_max_angle": servo["max"],
+            "voices": self.voices,
+            "active_voice_id": self.active_voice_id,
+        })
 
     def _broadcast_voices(self) -> None:
         self._broadcast({"type": "voices", "voices": self.voices, "active_voice_id": self.active_voice_id})
