@@ -103,7 +103,7 @@ class LedEyesAdapter:
 
     def render(self, canvas, t: float) -> None:
         if self._calibration_mode is not None and self._calibration_mode.is_set():
-            self._draw_wrench(canvas)
+            self._draw_gear(canvas)
             return
 
         blinking = (t % self.BLINK_INTERVAL) < self.BLINK_DURATION
@@ -126,35 +126,26 @@ class LedEyesAdapter:
                 continue
             _fill_circle(canvas, cx + px, self._cy, self._dot_r, _WHITE)
 
-    def _draw_wrench(self, canvas) -> None:
-        """A simple open-end-wrench glyph shown in place of the eyes while
-        calibration_mode is set - a short diagonal handle that forks into two
-        rounded horns (prongs) at the head, the shape that actually reads as
-        a wrench at this resolution rather than a single blob/ring. Built
-        from the same _fill_circle/_stamp_line primitives as the eyes."""
+    def _draw_gear(self, canvas) -> None:
+        """A gear glyph shown in place of the eyes while calibration_mode is
+        set - same idea as the web app's settings-tab icon (a ring with
+        teeth stamped around it), sized to roughly match a single eye
+        (_eye_r) rather than spanning the whole matrix."""
         cx = self.x_offset + self.width // 2
-        cy = self.height // 2 - self.height // 6  # shifted up from dead center
+        cy = self.height // 2 + self.height // 10  # a little below dead center
 
-        bar_r = max(1, self._dot_r - 2)
-        horn_r = bar_r + 1
-        handle_len = max(4, self.height * 0.16)
-        horn_spread = max(2, self.height * 0.09)
-        horn_forward = max(2, self.height * 0.05)
+        body_outer_r = self._eye_r
+        body_inner_r = max(1, round(body_outer_r * 0.45))
+        tooth_r = max(1, self._dot_r - 2)
+        tooth_offset = body_outer_r + tooth_r - 1
+        n_teeth = 8
 
-        dx, dy = 0.7071, -0.7071  # 45 degrees, handle pointing up-right to the head
-        px, py = -dy, dx  # perpendicular, for the two horns
-
-        base_x, base_y = cx - dx * handle_len / 2, cy - dy * handle_len / 2
-        head_x, head_y = cx + dx * handle_len / 2, cy + dy * handle_len / 2
-        horn1_x, horn1_y = head_x + px * horn_spread + dx * horn_forward, head_y + py * horn_spread + dy * horn_forward
-        horn2_x, horn2_y = head_x - px * horn_spread + dx * horn_forward, head_y - py * horn_spread + dy * horn_forward
-
-        _stamp_line(canvas, base_x, base_y, head_x, head_y, bar_r, _WHITE)
-        _stamp_line(canvas, head_x, head_y, horn1_x, horn1_y, bar_r, _WHITE)
-        _stamp_line(canvas, head_x, head_y, horn2_x, horn2_y, bar_r, _WHITE)
-        _fill_circle(canvas, int(round(base_x)), int(round(base_y)), bar_r + 1, _WHITE)
-        _fill_circle(canvas, int(round(horn1_x)), int(round(horn1_y)), horn_r, _WHITE)
-        _fill_circle(canvas, int(round(horn2_x)), int(round(horn2_y)), horn_r, _WHITE)
+        _draw_ring(canvas, cx, cy, body_outer_r, body_inner_r, _WHITE)
+        for i in range(n_teeth):
+            angle = 2 * math.pi * i / n_teeth
+            tx = cx + tooth_offset * math.cos(angle)
+            ty = cy + tooth_offset * math.sin(angle)
+            _fill_circle(canvas, int(round(tx)), int(round(ty)), tooth_r, _WHITE)
 
 
 def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
@@ -164,13 +155,9 @@ def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
                 canvas.SetPixel(cx + dx, cy + dy, *color)
 
 
-def _stamp_line(canvas, x0: float, y0: float, x1: float, y1: float, r: int, color: tuple) -> None:
-    """Thick line as filled circles stamped along the segment - gives
-    naturally rounded ends without separate cap geometry."""
-    length = math.hypot(x1 - x0, y1 - y0)
-    steps = max(1, int(length))
-    for i in range(steps + 1):
-        frac = i / steps
-        x = x0 + (x1 - x0) * frac
-        y = y0 + (y1 - y0) * frac
-        _fill_circle(canvas, int(round(x)), int(round(y)), r, color)
+def _draw_ring(canvas, cx: int, cy: int, outer_r: int, inner_r: int, color: tuple) -> None:
+    for dy in range(-outer_r, outer_r + 1):
+        for dx in range(-outer_r, outer_r + 1):
+            dist_sq = dx * dx + dy * dy
+            if inner_r * inner_r <= dist_sq <= outer_r * outer_r:
+                canvas.SetPixel(cx + dx, cy + dy, *color)
