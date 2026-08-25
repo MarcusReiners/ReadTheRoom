@@ -35,17 +35,24 @@ def load_app_settings(path: str, default_system_prompt: str, default_voice_id: s
     if not active_voice_id or not any(v["id"] == active_voice_id for v in voices):
         active_voice_id = voices[0]["id"]
 
+    volume = data.get("volume")
+    volume = 1.0 if volume is None else max(0.0, min(2.0, float(volume)))
+
     return {
         "system_prompt": data.get("system_prompt") or default_system_prompt,
         "voices": voices,
         "active_voice_id": active_voice_id,
+        "volume": volume,
     }
 
 
-def save_app_settings(path: str, system_prompt: str, voices: list, active_voice_id: str) -> None:
+def save_app_settings(
+    path: str, system_prompt: str, voices: list, active_voice_id: str, volume: float = 1.0,
+) -> None:
     Path(path).write_text(json.dumps({
         "system_prompt": system_prompt,
         "voices": voices,
         "active_voice_id": active_voice_id,
+        "volume": volume,
     }, indent=2))
-    logger.info("[Settings] System-Prompt/Voice-Bibliothek gespeichert (%s).", path)
+    logger.info("[Settings] System-Prompt/Voice-Bibliothek/Volume gespeichert (%s).", path)

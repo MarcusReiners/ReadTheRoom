@@ -6,6 +6,8 @@ import threading
 import time
 from typing import Iterable
 
+import numpy as np
+
 from domain.events import SpeechPlaybackStarted, SpeechPlaybackEnded
 from service_layer.bus import EventBus
 
@@ -40,6 +42,13 @@ class StreamingTTSAdapter:
         self._streaming = False
         self._full_text = ""
         self._started_published = False
+        # Editable live from the web app's settings tab - applied per PCM
+        # chunk in _emit() below, so it takes effect immediately (including
+        # mid-sentence) rather than only on the next speak_stream() call.
+        self.volume = 1.0
+
+    def set_volume(self, volume: float) -> None:
+        self.volume = max(0.0, min(2.0, volume))
 
     @property
     def sample_rate(self) -> int:
@@ -85,6 +94,8 @@ class StreamingTTSAdapter:
             for i, chunk in enumerate(self._synthesize_chunks(sentence)):
                 if i == 0 and on_first_chunk is not None:
                     on_first_chunk()
+                if self.volume != 1.0:
+                    chunk = _scale_volume(chunk, self.volume)
                 aplay_proc.stdin.write(chunk)
         except (BrokenPipeError, ValueError, OSError):
             if not self._takeover.is_set():
@@ -144,3 +155,15 @@ class StreamingTTSAdapter:
             return full_text
         finally:
             self._streaming = False
+
+
+def _scale_volume(chunk: bytes, volume: float) -> bytes:
+    """Scales signed 16-bit PCM samples by `volume`, clipping back into
+    range - applied per emitted chunk rather than re-synthesizing, so a
+    volume change takes effect immediately without a round-trip to the TTS
+    API. Uses numpy (already a transitive dependency here) since Python's
+    stdlib `audioop` was removed in 3.13 and a pure-Python per-sample loop
+    would be slow enough to matter on the Pi for a several-second chunk."""
+    samples = np.frombuffer(chunk, dtype=np.int16)
+    scaled = np.clip(samples.astype(np.float32) * volume, -32768, 32767).astype(np.int16)
+    return scaled.tobytes()

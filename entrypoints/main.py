@@ -344,6 +344,8 @@ def main() -> None:
     tts = build_tts(config, bus)
     if hasattr(tts, "voice_id"):
         tts.voice_id = active_voice["voice_id"]
+    if hasattr(tts, "set_volume"):
+        tts.set_volume(app_settings["volume"])
     llm = LLMGatewayAdapter(
         model=config.LLM_MODEL,
         api_base=config.LLM_API_BASE,
