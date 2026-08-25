@@ -374,16 +374,17 @@ def main() -> None:
         store.set_active_id(store.create_conversation())
     turn_queue: "queue.PriorityQueue" = queue.PriorityQueue()
 
-    # System prompt / named ElevenLabs voice library are editable from the
-    # web app's settings tab (ChatBridgeAdapter's set_system_prompt/
-    # add_voice/delete_voice/select_voice) - load whatever was last saved,
-    # falling back to the domain default / config env var on a fresh install
-    # with no settings file yet.
-    app_settings = load_app_settings(
-        config.APP_SETTINGS_PATH,
-        default_system_prompt=SYSTEM_PROMPT,
-        default_voice_id=config.ELEVENLABS_VOICE_ID,
-    )
+    # Everything the web app's settings tab can edit lives in one file, with
+    # config.py / the domain layer supplying the fallbacks for a fresh
+    # install that has no settings file yet.
+    app_settings = load_app_settings(config.APP_SETTINGS_PATH, defaults={
+        "system_prompt": SYSTEM_PROMPT,
+        "llm_model": config.LLM_MODEL,
+        "voice_id": config.ELEVENLABS_VOICE_ID,
+        "volume": 1.0,
+        "servo_min_angle": config.SERVO_MIN_ANGLE,
+        "servo_max_angle": config.SERVO_MAX_ANGLE,
+    })
     active_voice = next(
         (v for v in app_settings["voices"] if v["id"] == app_settings["active_voice_id"]),
         app_settings["voices"][0],
@@ -396,7 +397,7 @@ def main() -> None:
     if hasattr(tts, "set_volume"):
         tts.set_volume(app_settings["volume"])
     llm = LLMGatewayAdapter(
-        model=config.LLM_MODEL,
+        model=app_settings["llm_model"],
         api_base=config.LLM_API_BASE,
         fallback_model=config.LLM_FALLBACK_MODEL,
         fallback_api_base=config.LLM_FALLBACK_API_BASE,
@@ -405,6 +406,10 @@ def main() -> None:
 
     radar = build_radar(config, bus)
     turntable = build_turntable(config)
+    try:
+        turntable.set_safe_range(app_settings["servo_min_angle"], app_settings["servo_max_angle"])
+    except ValueError:
+        logger.exception("Gespeicherter Servo-Bereich ist ungueltig - nutze den aus config.py.")
 
     # Set for as long as the web app's settings tab (servo home calibration)
     # is open - see start_doa_tracking()'s calibration_mode param and

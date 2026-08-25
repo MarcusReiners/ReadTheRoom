@@ -30,6 +30,17 @@ class DummyTurntableAdapter:
     def predict_home_move(self) -> float:
         return abs(self.current_heading_degrees - 90.0)
 
+    @property
+    def safe_min_angle(self) -> float:
+        return 0.0
+
+    @property
+    def safe_max_angle(self) -> float:
+        return 180.0
+
+    def set_safe_range(self, min_angle: float, max_angle: float) -> None:
+        pass
+
     def set_home_offset(self, offset_degrees: float) -> None:
         self.home_offset_degrees = offset_degrees
 
@@ -142,6 +153,45 @@ class ServoTurntableAdapter:
             hi -= shift
 
         return lo, hi
+
+    @property
+    def safe_min_angle(self) -> float:
+        return self._base_min_angle
+
+    @property
+    def safe_max_angle(self) -> float:
+        return self._base_max_angle
+
+    def set_safe_range(self, min_angle: float, max_angle: float) -> None:
+        """Live-adjusts the cable-safety window the head is allowed to turn
+        within (from the web app's settings tab). Widening it lets the head
+        follow speakers further off to the sides; the ceiling is how far the
+        cabling running into the head can take being wound before something
+        gets pulled, which is a physical property of this build and not
+        something the software can discover - so this trusts the caller and
+        only enforces that the window is non-empty and fits the servo's
+        actual mechanical range.
+
+        current_heading_degrees is re-clamped into the new window, otherwise
+        a narrowed range would leave the tracker believing the head sits
+        somewhere it is no longer allowed to be, and every subsequent
+        relative move would be computed from that impossible position."""
+        if max_angle <= min_angle:
+            raise ValueError("max_angle muss groesser als min_angle sein.")
+        span = max_angle - min_angle
+        if span > self._hardware_max_angle - self._hardware_min_angle:
+            raise ValueError("Bereich ist breiter als der mechanische Bereich des Servos.")
+
+        self._base_min_angle = min_angle
+        self._base_max_angle = max_angle
+        self._min_angle, self._max_angle = self._windowed_range(self.home_offset_degrees)
+        self.current_heading_degrees = max(
+            self._min_angle, min(self._max_angle, self.current_heading_degrees)
+        )
+        logger.info(
+            "[Servo] Sicherer Bereich jetzt %.0f-%.0f Grad (Fenster %.0f-%.0f).",
+            min_angle, max_angle, self._min_angle, self._max_angle,
+        )
 
     def set_home_offset(self, offset_degrees: float) -> None:
         """Live-adjusts the home offset (e.g. from a calibration script/web
