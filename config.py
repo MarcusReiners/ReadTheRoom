@@ -82,19 +82,45 @@ LED_MATRIX_BRIGHTNESS = int(_env("LED_MATRIX_BRIGHTNESS", "90"))
 # flicker) - 5 bits is still 32 levels/channel, plenty for solid dots/text.
 LED_MATRIX_PWM_BITS = int(_env("LED_MATRIX_PWM_BITS", "5"))
 
-# --- Servo turntable (360-degree positional servo on hardware PWM) --------
+# --- Servo turntable (DS3225 digital 25kg servo on hardware PWM) ----------
 USE_SERVO = _env_bool("USE_SERVO", True)
 SERVO_GPIO_PIN = int(_env("SERVO_GPIO_PIN", "19"))
 # Safe operating clamp - every commanded angle is restricted to this window so the
 # head can never wind the cables running into it. NOT the servo's physical range.
+# Keep this CENTERED inside SERVO_HARDWARE_MIN/MAX_ANGLE below: the window's
+# midpoint is what home() drives to, so an off-center window puts "straight
+# ahead" off-center in the servo's real travel and gives more headroom to one
+# side than the other.
 SERVO_MIN_ANGLE = float(_env("SERVO_MIN_ANGLE", "0"))
 SERVO_MAX_ANGLE = float(_env("SERVO_MAX_ANGLE", "180"))
 # The servo's true mechanical range, used only to calibrate pulse-width-to-angle.
 # Passing SERVO_MIN_ANGLE/MAX_ANGLE here instead would stretch the full pulse
 # range across just the safe window, turning every commanded move within that
 # window into a near-full physical rotation - confirmed on the bench.
+#
+# These are LABELS on a linear map, not limits: MIN maps to SERVO_MIN_PULSE_WIDTH
+# and MAX to SERVO_MAX_PULSE_WIDTH, with everything between interpolated. So this
+# must equal the servo's REAL physical sweep across that pulse range, or every
+# commanded "degree" silently stops being a degree. This was 360 against a servo
+# that physically sweeps 180 - so each commanded degree moved only half a real
+# degree, and a "5 degree" probe step was really 2.5. That scaling error is a
+# likely contributor to past head-tracking inaccuracy, not just a range problem.
+#
+# 180 here matches the observed behaviour (a full 0-360 command swept 180
+# physical degrees), but the DS3225 ships in BOTH 180 and 270 degree variants
+# using the identical 500-2500us pulse range, so the model name alone can't
+# settle it. Worth re-measuring now that pigpio is actually active: every
+# earlier measurement ran on software-timed PWM, whose pulse-width accuracy is
+# poor near the extremes and can under-sweep the true range.
 SERVO_HARDWARE_MIN_ANGLE = float(_env("SERVO_HARDWARE_MIN_ANGLE", "0"))
-SERVO_HARDWARE_MAX_ANGLE = float(_env("SERVO_HARDWARE_MAX_ANGLE", "360"))
+SERVO_HARDWARE_MAX_ANGLE = float(_env("SERVO_HARDWARE_MAX_ANGLE", "180"))
+# Pulse widths (seconds) the two hardware angles above map to. 500-2500us is the
+# DS3225's documented full range and what its rated sweep is specified against;
+# widening further is how you'd chase more travel, but it drives the servo
+# toward its internal end stops, so change these only with the horn unloaded
+# and stop at the first sign of strain.
+SERVO_MIN_PULSE_WIDTH = float(_env("SERVO_MIN_PULSE_WIDTH", "0.0005"))
+SERVO_MAX_PULSE_WIDTH = float(_env("SERVO_MAX_PULSE_WIDTH", "0.0025"))
 # Use pigpio's DMA-timed PWM instead of gpiozero's default software-timed thread -
 # fixes chatter while holding a fixed position. Needs `sudo pigpiod` running.
 SERVO_USE_PIGPIO = _env_bool("SERVO_USE_PIGPIO", False)
