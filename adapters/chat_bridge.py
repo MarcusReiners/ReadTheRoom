@@ -2,6 +2,7 @@ import asyncio
 import logging
 import queue
 import threading
+import uuid
 from pathlib import Path
 
 import uvicorn
@@ -46,6 +47,8 @@ class ChatBridgeAdapter:
         llm=None,
         tts=None,
         app_settings_path: str = "app_settings.json",
+        voices: list | None = None,
+        active_voice_id: str | None = None,
         calibration_mode: threading.Event | None = None,
         host: str = "0.0.0.0",
         port: int = 8765,
@@ -57,13 +60,19 @@ class ChatBridgeAdapter:
         self.radar = radar
         self.turntable = turntable
         self.servo_calibration_path = servo_calibration_path
-        # For the settings tab's system-prompt/voice-ID editors - llm.system_prompt
-        # and tts.voice_id (where the provider has one) are mutated directly and
-        # persisted to app_settings_path, same read-live-mutate-then-persist
-        # pattern as the servo calibration flow above.
+        # For the settings tab's system-prompt/voice-library editors -
+        # llm.system_prompt and tts.voice_id (where the provider has one) are
+        # mutated directly and persisted to app_settings_path, same
+        # read-live-mutate-then-persist pattern as the servo calibration flow
+        # above. voices/active_voice_id are this class's own in-memory copy
+        # of what main.py loaded from app_settings_path at startup (each
+        # entry: {"id", "name", "voice_id"}) - add_voice/delete_voice/
+        # select_voice below mutate this list and re-save the whole thing.
         self.llm = llm
         self.tts = tts
         self.app_settings_path = app_settings_path
+        self.voices = voices if voices else [{"id": str(uuid.uuid4()), "name": "Default", "voice_id": ""}]
+        self.active_voice_id = active_voice_id or self.voices[0]["id"]
         # Set for as long as a client has the settings tab open - start_doa_tracking()
         # pauses on this (it was fighting live servo-calibration nudges with its own
         # DOA-driven moves otherwise) and LedEyesAdapter shows a wrench instead of the
@@ -202,7 +211,8 @@ class ChatBridgeAdapter:
                 "voice_enabled": self.conversation.voice_enabled,
                 "private_mode": self.conversation.confidential,
                 "system_prompt": self._get_system_prompt(),
-                "voice_id": self._get_voice_id(),
+                "voices": self.voices,
+                "active_voice_id": self.active_voice_id,
             })
             try:
                 while True:
@@ -240,14 +250,22 @@ class ChatBridgeAdapter:
             text = (data.get("value") or "").strip()
             if text and self.llm is not None:
                 self.llm.system_prompt = text
-                save_app_settings(self.app_settings_path, text, self._get_voice_id())
+                save_app_settings(self.app_settings_path, text, self.voices, self.active_voice_id)
                 self._broadcast({"type": "system_prompt", "value": text})
-        elif msg_type == "set_voice_id":
-            voice_id = (data.get("value") or "").strip()
-            if voice_id and self.tts is not None and hasattr(self.tts, "voice_id"):
-                self.tts.voice_id = voice_id
-                save_app_settings(self.app_settings_path, self._get_system_prompt(), voice_id)
-                self._broadcast({"type": "voice_id", "value": voice_id})
+        elif msg_type == "add_voice":
+            name = (data.get("name") or "").strip()
+            voice_id = (data.get("voice_id") or "").strip()
+            if name and voice_id:
+                entry = {"id": str(uuid.uuid4()), "name": name, "voice_id": voice_id}
+                self.voices.append(entry)
+                self._save_voices()
+                self._broadcast_voices()
+        elif msg_type == "delete_voice":
+            self._delete_voice(data.get("id"))
+        elif msg_type == "select_voice":
+            voice_id = data.get("id")
+            if voice_id:
+                self._select_voice(voice_id)
         elif msg_type == "new_conversation":
             new_id = self.store.create_conversation()
             self.store.set_active_id(new_id)
@@ -284,14 +302,40 @@ class ChatBridgeAdapter:
             "voice_enabled": self.conversation.voice_enabled,
             "private_mode": self.conversation.confidential,
             "system_prompt": self._get_system_prompt(),
-            "voice_id": self._get_voice_id(),
+            "voices": self.voices,
+            "active_voice_id": self.active_voice_id,
         })
 
     def _get_system_prompt(self) -> str:
         return getattr(self.llm, "system_prompt", "") or ""
 
-    def _get_voice_id(self) -> str:
-        return getattr(self.tts, "voice_id", "") or ""
+    def _select_voice(self, voice_id: str) -> None:
+        entry = next((v for v in self.voices if v["id"] == voice_id), None)
+        if entry is None:
+            return
+        self.active_voice_id = voice_id
+        if self.tts is not None and hasattr(self.tts, "voice_id"):
+            self.tts.voice_id = entry["voice_id"]
+        self._save_voices()
+        self._broadcast_voices()
+
+    def _delete_voice(self, voice_id: str | None) -> None:
+        if not voice_id or len(self.voices) <= 1:
+            # Always keep at least one voice around - nothing left to fall
+            # back to (and nothing for tts.voice_id to point at) otherwise.
+            return
+        self.voices = [v for v in self.voices if v["id"] != voice_id]
+        if self.active_voice_id == voice_id:
+            self._select_voice(self.voices[0]["id"])  # also saves+broadcasts
+        else:
+            self._save_voices()
+            self._broadcast_voices()
+
+    def _save_voices(self) -> None:
+        save_app_settings(self.app_settings_path, self._get_system_prompt(), self.voices, self.active_voice_id)
+
+    def _broadcast_voices(self) -> None:
+        self._broadcast({"type": "voices", "voices": self.voices, "active_voice_id": self.active_voice_id})
 
     def _broadcast(self, message: dict) -> None:
         if self._loop is None:
