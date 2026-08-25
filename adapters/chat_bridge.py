@@ -8,6 +8,7 @@ import uvicorn
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from adapters.app_settings import save_app_settings
 from adapters.conversation_store import ConversationStore
 from adapters.hardware.servo_calibration import save_home_offset
 from domain.conversation import ConversationState
@@ -42,6 +43,10 @@ class ChatBridgeAdapter:
         radar,
         turntable,
         servo_calibration_path: str,
+        llm=None,
+        tts=None,
+        app_settings_path: str = "app_settings.json",
+        calibration_mode: threading.Event | None = None,
         host: str = "0.0.0.0",
         port: int = 8765,
     ) -> None:
@@ -52,6 +57,20 @@ class ChatBridgeAdapter:
         self.radar = radar
         self.turntable = turntable
         self.servo_calibration_path = servo_calibration_path
+        # For the settings tab's system-prompt/voice-ID editors - llm.system_prompt
+        # and tts.voice_id (where the provider has one) are mutated directly and
+        # persisted to app_settings_path, same read-live-mutate-then-persist
+        # pattern as the servo calibration flow above.
+        self.llm = llm
+        self.tts = tts
+        self.app_settings_path = app_settings_path
+        # Set for as long as a client has the settings tab open - start_doa_tracking()
+        # pauses on this (it was fighting live servo-calibration nudges with its own
+        # DOA-driven moves otherwise) and LedEyesAdapter shows a wrench instead of the
+        # eyes. Shared with main.py's construction of both; a fresh Event() here if
+        # main.py didn't pass one (USE_SERVO/USE_LED_MATRIX both off) so this class
+        # always has something to .set()/.clear() without needing to know why not.
+        self.calibration_mode = calibration_mode if calibration_mode is not None else threading.Event()
         self.host = host
         self.port = port
 
@@ -182,6 +201,8 @@ class ChatBridgeAdapter:
                 "modality": self.conversation.modality,
                 "voice_enabled": self.conversation.voice_enabled,
                 "private_mode": self.conversation.confidential,
+                "system_prompt": self._get_system_prompt(),
+                "voice_id": self._get_voice_id(),
             })
             try:
                 while True:
@@ -210,6 +231,23 @@ class ChatBridgeAdapter:
         elif msg_type == "set_private_mode":
             self.conversation.set_private_mode(bool(data.get("value")))
             self._broadcast({"type": "private_mode", "value": self.conversation.confidential})
+        elif msg_type == "set_calibration_mode":
+            if bool(data.get("value")):
+                self.calibration_mode.set()
+            else:
+                self.calibration_mode.clear()
+        elif msg_type == "set_system_prompt":
+            text = (data.get("value") or "").strip()
+            if text and self.llm is not None:
+                self.llm.system_prompt = text
+                save_app_settings(self.app_settings_path, text, self._get_voice_id())
+                self._broadcast({"type": "system_prompt", "value": text})
+        elif msg_type == "set_voice_id":
+            voice_id = (data.get("value") or "").strip()
+            if voice_id and self.tts is not None and hasattr(self.tts, "voice_id"):
+                self.tts.voice_id = voice_id
+                save_app_settings(self.app_settings_path, self._get_system_prompt(), voice_id)
+                self._broadcast({"type": "voice_id", "value": voice_id})
         elif msg_type == "new_conversation":
             new_id = self.store.create_conversation()
             self.store.set_active_id(new_id)
@@ -245,7 +283,15 @@ class ChatBridgeAdapter:
             "modality": self.conversation.modality,
             "voice_enabled": self.conversation.voice_enabled,
             "private_mode": self.conversation.confidential,
+            "system_prompt": self._get_system_prompt(),
+            "voice_id": self._get_voice_id(),
         })
+
+    def _get_system_prompt(self) -> str:
+        return getattr(self.llm, "system_prompt", "") or ""
+
+    def _get_voice_id(self) -> str:
+        return getattr(self.tts, "voice_id", "") or ""
 
     def _broadcast(self, message: dict) -> None:
         if self._loop is None:
