@@ -181,6 +181,7 @@ class ChatBridgeAdapter:
                 "messages": self.store.get_history(active_id) if active_id else [],
                 "modality": self.conversation.modality,
                 "voice_enabled": self.conversation.voice_enabled,
+                "private_mode": self.conversation.confidential,
             })
             try:
                 while True:
@@ -206,6 +207,9 @@ class ChatBridgeAdapter:
         elif msg_type == "set_voice_enabled":
             self.conversation.voice_enabled = bool(data.get("value"))
             self._broadcast({"type": "voice_enabled", "value": self.conversation.voice_enabled})
+        elif msg_type == "set_private_mode":
+            self.conversation.set_private_mode(bool(data.get("value")))
+            self._broadcast({"type": "private_mode", "value": self.conversation.confidential})
         elif msg_type == "new_conversation":
             new_id = self.store.create_conversation()
             self.store.set_active_id(new_id)
@@ -240,6 +244,7 @@ class ChatBridgeAdapter:
             "messages": self.store.get_history(active_id) if active_id else [],
             "modality": self.conversation.modality,
             "voice_enabled": self.conversation.voice_enabled,
+            "private_mode": self.conversation.confidential,
         })
 
     def _broadcast(self, message: dict) -> None:

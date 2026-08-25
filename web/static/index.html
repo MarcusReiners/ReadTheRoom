@@ -329,6 +329,66 @@
     align-items: center;
     justify-content: center;
   }
+  .privacy-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 28px;
+  }
+  .privacy-wrap {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px 20px;
+    width: 100%;
+    max-width: 620px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .privacy-text { flex: 1; }
+  .privacy-text h2 { margin: 0 0 6px; }
+  .privacy-text p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--muted);
+  }
+  .switch {
+    position: relative;
+    flex: none;
+    width: 46px;
+    height: 26px;
+  }
+  .switch input {
+    position: absolute;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    cursor: pointer;
+  }
+  .switch .slider {
+    position: absolute;
+    inset: 0;
+    background: var(--border);
+    border-radius: 999px;
+    transition: background 0.15s ease;
+  }
+  .switch .slider::before {
+    content: "";
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    left: 3px;
+    top: 3px;
+    background: var(--panel);
+    border-radius: 50%;
+    transition: transform 0.15s ease;
+  }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(20px); }
+  .switch input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 2px; }
   .servo-section {
     display: flex;
     flex-direction: column;
@@ -417,10 +477,10 @@
           <circle cx="12" cy="12" r="2.5"/>
           <g id="gearTeeth"></g>
         </svg>
-        Einstellungen
+        Settings
       </button>
     </nav>
-    <button id="themeToggle" class="icon-btn" type="button" aria-label="Theme wechseln">
+    <button id="themeToggle" class="icon-btn" type="button" aria-label="Toggle theme">
       <svg class="icon" id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
     </button>
     <div class="conn"><span class="dot disconnected" id="connDot"></span></div>
@@ -432,7 +492,7 @@
         <aside class="sidebar">
           <button id="newChatBtn" class="new-chat-btn" type="button">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Neuer Chat
+            New chat
           </button>
           <div id="conversationList" class="conversation-list"></div>
         </aside>
@@ -441,13 +501,13 @@
             <span id="modalityLabel">–</span>
             <button id="voiceToggle" type="button">
               <svg class="icon" id="voiceIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
-              <span id="voiceLabel">Stimme an</span>
+              <span id="voiceLabel">Voice on</span>
             </button>
           </div>
           <div id="messages"></div>
           <form id="composer">
-            <input id="textInput" type="text" placeholder="Nachricht eingeben…" autocomplete="off">
-            <button id="sendBtn" type="submit" aria-label="Senden">
+            <input id="textInput" type="text" placeholder="Type a message…" autocomplete="off">
+            <button id="sendBtn" type="submit" aria-label="Send">
               <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3 11 L20 3 L13 20 L11 13 L3 11 Z"/></svg>
             </button>
           </form>
@@ -457,8 +517,21 @@
 
     <section id="view-settings" class="view">
       <div class="settings-panel">
+        <div class="privacy-section">
+          <div class="privacy-wrap">
+            <div class="privacy-text">
+              <h2>Private mode</h2>
+              <p>When on, the assistant only replies out loud while exactly one person is in the room - if someone else enters, the conversation automatically switches to text-only chat.</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="privateModeToggle">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
         <div class="radar-section">
-          <h2>Tracking-Zone</h2>
+          <h2>Tracking Zone</h2>
           <div class="radar-wrap">
             <svg id="radarSvg" viewBox="0 0 340 300">
               <g id="radarBackground"></g>
@@ -466,21 +539,21 @@
               <g id="targetsGroup"></g>
             </svg>
           </div>
-          <div id="radarStatus" class="radar-status">Lade…</div>
+          <div id="radarStatus" class="radar-status">Loading…</div>
         </div>
 
         <div class="servo-section">
-          <h2>Servo-Home</h2>
+          <h2>Servo Home</h2>
           <div class="servo-wrap">
-            <div id="servoOffset" class="servo-offset">– Grad</div>
+            <div id="servoOffset" class="servo-offset">– degrees</div>
             <div class="servo-buttons">
               <button type="button" data-nudge="-10">−10°</button>
               <button type="button" data-nudge="-1">−1°</button>
               <button type="button" data-nudge="1">+1°</button>
               <button type="button" data-nudge="10">+10°</button>
             </div>
-            <button id="servoSaveBtn" class="servo-save-btn" type="button">Als Home speichern</button>
-            <div id="servoStatus" class="radar-status">Lade…</div>
+            <button id="servoSaveBtn" class="servo-save-btn" type="button">Save as home</button>
+            <div id="servoStatus" class="radar-status">Loading…</div>
           </div>
         </div>
       </div>
@@ -562,6 +635,7 @@
   const voiceLabelEl = document.getElementById("voiceLabel");
   const newChatBtn = document.getElementById("newChatBtn");
   const conversationListEl = document.getElementById("conversationList");
+  const privateModeToggleEl = document.getElementById("privateModeToggle");
 
   const ICON_TRASH =
     '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6"/>';
@@ -593,14 +667,18 @@
   }
 
   function setModalityLabel(modality) {
-    modalityLabelEl.textContent = modality === "voice" ? "Spricht" : "Nur Chat – Person im Raum";
+    modalityLabelEl.textContent = modality === "voice" ? "Speaking" : "Chat only – person in room";
   }
 
   function setVoiceToggle(enabled) {
     voiceEnabled = enabled;
     voiceIconEl.innerHTML = enabled ? ICON_SPEAKER_ON : ICON_SPEAKER_OFF;
-    voiceLabelEl.textContent = enabled ? "Stimme an" : "Stimme aus";
+    voiceLabelEl.textContent = enabled ? "Voice on" : "Voice off";
     voiceToggleEl.classList.toggle("off", !enabled);
+  }
+
+  function setPrivateModeToggle(enabled) {
+    privateModeToggleEl.checked = enabled;
   }
 
   function renderConversationList() {
@@ -617,11 +695,11 @@
       const del = document.createElement("button");
       del.type = "button";
       del.className = "delete-btn";
-      del.setAttribute("aria-label", "Chat löschen");
+      del.setAttribute("aria-label", "Delete chat");
       del.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICON_TRASH + '</svg>';
       del.addEventListener("click", (e) => {
         e.stopPropagation();
-        if (confirm(`"${c.title}" löschen?`)) {
+        if (confirm(`Delete "${c.title}"?`)) {
           ws.send(JSON.stringify({ type: "delete_conversation", id: c.id }));
         }
       });
@@ -647,6 +725,7 @@
         renderHistory(data.messages || []);
         setModalityLabel(data.modality || "voice");
         setVoiceToggle(data.voice_enabled !== false);
+        setPrivateModeToggle(data.private_mode !== false);
         renderConversationList();
         break;
       case "user_message":
@@ -669,6 +748,9 @@
         break;
       case "voice_enabled":
         setVoiceToggle(data.value);
+        break;
+      case "private_mode":
+        setPrivateModeToggle(data.value);
         break;
       case "radar_targets":
         renderTargets(data.targets || []);
@@ -701,6 +783,11 @@
   voiceToggleEl.addEventListener("click", () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "set_voice_enabled", value: !voiceEnabled }));
+  });
+
+  privateModeToggleEl.addEventListener("change", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_private_mode", value: privateModeToggleEl.checked }));
   });
 
   newChatBtn.addEventListener("click", () => {
@@ -793,7 +880,7 @@
   function renderTargets(targets) {
     // radar_targets only arrives when the Pi's poll of the XIAO just
     // succeeded - a reliable signal the radar is back, so clear a stale
-    // "nicht erreichbar" status left over from before it reconnected.
+    // "unreachable" status left over from before it reconnected.
     if (radarStatusEl.classList.contains("error")) loadZone();
 
     const seen = new Set();
@@ -938,7 +1025,7 @@
   async function loadZone() {
     const result = await radarFetch("/api/radar/zone");
     if (!result.ok) {
-      radarStatusEl.textContent = "Radar nicht erreichbar: " + result.error;
+      radarStatusEl.textContent = "Radar unreachable: " + result.error;
       radarStatusEl.classList.add("error");
       bounds = { ...DEFAULT_BOUNDS };
       zoneValid = false;
@@ -952,11 +1039,11 @@
         min_y_mm: result.data.min_y_mm, max_y_mm: result.data.max_y_mm,
       };
       zoneValid = true;
-      radarStatusEl.textContent = "Zone gespeichert.";
+      radarStatusEl.textContent = "Zone saved.";
     } else {
       savedBounds = null;
       zoneValid = false;
-      radarStatusEl.textContent = "Keine Zone gespeichert – ziehe das Rechteck, um eine festzulegen.";
+      radarStatusEl.textContent = "No zone saved – drag the rectangle to set one.";
     }
     bounds = { ...(savedBounds || DEFAULT_BOUNDS) };
     renderZone();
@@ -965,21 +1052,21 @@
   // Auto-saves whatever shape the rectangle is in as soon as you let go of it.
   async function saveZone() {
     radarStatusEl.classList.remove("error");
-    radarStatusEl.textContent = "Speichere…";
+    radarStatusEl.textContent = "Saving…";
     const result = await radarFetch("/api/radar/zone", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(bounds),
     });
     if (!result.ok) {
-      radarStatusEl.textContent = "Speichern fehlgeschlagen: " + result.error;
+      radarStatusEl.textContent = "Save failed: " + result.error;
       radarStatusEl.classList.add("error");
       return;
     }
     savedBounds = { ...bounds };
     zoneValid = true;
     radarStatusEl.classList.remove("error");
-    radarStatusEl.textContent = "Zone gespeichert.";
+    radarStatusEl.textContent = "Zone saved.";
   }
 
   loadZone();
@@ -997,12 +1084,12 @@
   async function loadServoCalibration() {
     const result = await radarFetch("/api/servo/calibration");
     if (!result.ok) {
-      servoStatusEl.textContent = "Servo nicht erreichbar: " + result.error;
+      servoStatusEl.textContent = "Servo unreachable: " + result.error;
       servoStatusEl.classList.add("error");
       return;
     }
     servoStatusEl.classList.remove("error");
-    servoStatusEl.textContent = "Gespeicherter Home-Offset geladen.";
+    servoStatusEl.textContent = "Loaded saved home offset.";
     renderServoOffset(result.data.home_offset_degrees);
   }
 
@@ -1010,35 +1097,35 @@
     btn.addEventListener("click", async () => {
       const delta = parseFloat(btn.dataset.nudge);
       servoStatusEl.classList.remove("error");
-      servoStatusEl.textContent = "Bewege…";
+      servoStatusEl.textContent = "Moving…";
       const result = await radarFetch("/api/servo/nudge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ delta }),
       });
       if (!result.ok) {
-        servoStatusEl.textContent = "Bewegen fehlgeschlagen: " + result.error;
+        servoStatusEl.textContent = "Move failed: " + result.error;
         servoStatusEl.classList.add("error");
         return;
       }
       renderServoOffset(result.data.home_offset_degrees);
-      servoStatusEl.textContent = "Noch nicht gespeichert – Position pruefen, dann „Als Home speichern“.";
+      servoStatusEl.textContent = "Not saved yet – check the position, then “Save as home”.";
     });
   });
 
   servoSaveBtn.addEventListener("click", async () => {
     servoSaveBtn.disabled = true;
     servoStatusEl.classList.remove("error");
-    servoStatusEl.textContent = "Speichere…";
+    servoStatusEl.textContent = "Saving…";
     const result = await radarFetch("/api/servo/save", { method: "POST" });
     servoSaveBtn.disabled = false;
     if (!result.ok) {
-      servoStatusEl.textContent = "Speichern fehlgeschlagen: " + result.error;
+      servoStatusEl.textContent = "Save failed: " + result.error;
       servoStatusEl.classList.add("error");
       return;
     }
     renderServoOffset(result.data.home_offset_degrees);
-    servoStatusEl.textContent = "Als Home gespeichert.";
+    servoStatusEl.textContent = "Saved as home.";
   });
 
   loadServoCalibration();
