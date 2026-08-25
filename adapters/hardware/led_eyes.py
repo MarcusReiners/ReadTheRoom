@@ -128,37 +128,39 @@ class LedEyesAdapter:
 
     def _draw_wrench(self, canvas) -> None:
         """A simple open-end-wrench glyph shown in place of the eyes while
-        calibration_mode is set - a handle (thick diagonal bar) leading up to
-        an open jaw (ring) at one end, small grip knob at the other. Built
-        from the same _fill_circle/_draw_ring primitives as the eyes, stamped
-        along a line rather than hand-authored pixel-by-pixel."""
+        calibration_mode is set - a short diagonal handle that forks into two
+        rounded horns (prongs) at the head, the shape that actually reads as
+        a wrench at this resolution rather than a single blob/ring. Built
+        from the same _fill_circle/_stamp_line primitives as the eyes."""
         cx = self.x_offset + self.width // 2
-        cy = self.height // 2
-        scale = 1 / 3
-        span = min(self.width, self.height * 2) * 0.32 * scale
-        bar_r = max(1, round((self._dot_r - 1) * scale))
-        jaw_outer_r = max(bar_r + 1, round((self._eye_r + 2) * scale))
+        cy = self.height // 2 - self.height // 6  # shifted up from dead center
 
-        grip_x, grip_y = cx - span, cy + span * 0.55
-        jaw_x, jaw_y = cx + span, cy - span * 0.55
+        bar_r = max(1, self._dot_r - 2)
+        horn_r = bar_r + 1
+        handle_len = max(4, self.height * 0.16)
+        horn_spread = max(2, self.height * 0.09)
+        horn_forward = max(2, self.height * 0.05)
 
-        _stamp_line(canvas, grip_x, grip_y, jaw_x, jaw_y, bar_r, _WHITE)
-        _fill_circle(canvas, int(round(grip_x)), int(round(grip_y)), bar_r + 1, _WHITE)
-        _draw_ring(canvas, int(round(jaw_x)), int(round(jaw_y)), jaw_outer_r, bar_r, _WHITE)
+        dx, dy = 0.7071, -0.7071  # 45 degrees, handle pointing up-right to the head
+        px, py = -dy, dx  # perpendicular, for the two horns
+
+        base_x, base_y = cx - dx * handle_len / 2, cy - dy * handle_len / 2
+        head_x, head_y = cx + dx * handle_len / 2, cy + dy * handle_len / 2
+        horn1_x, horn1_y = head_x + px * horn_spread + dx * horn_forward, head_y + py * horn_spread + dy * horn_forward
+        horn2_x, horn2_y = head_x - px * horn_spread + dx * horn_forward, head_y - py * horn_spread + dy * horn_forward
+
+        _stamp_line(canvas, base_x, base_y, head_x, head_y, bar_r, _WHITE)
+        _stamp_line(canvas, head_x, head_y, horn1_x, horn1_y, bar_r, _WHITE)
+        _stamp_line(canvas, head_x, head_y, horn2_x, horn2_y, bar_r, _WHITE)
+        _fill_circle(canvas, int(round(base_x)), int(round(base_y)), bar_r + 1, _WHITE)
+        _fill_circle(canvas, int(round(horn1_x)), int(round(horn1_y)), horn_r, _WHITE)
+        _fill_circle(canvas, int(round(horn2_x)), int(round(horn2_y)), horn_r, _WHITE)
 
 
 def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
     for dy in range(-r, r + 1):
         for dx in range(-r, r + 1):
             if dx * dx + dy * dy <= r * r:
-                canvas.SetPixel(cx + dx, cy + dy, *color)
-
-
-def _draw_ring(canvas, cx: int, cy: int, outer_r: int, inner_r: int, color: tuple) -> None:
-    for dy in range(-outer_r, outer_r + 1):
-        for dx in range(-outer_r, outer_r + 1):
-            dist_sq = dx * dx + dy * dy
-            if inner_r * inner_r <= dist_sq <= outer_r * outer_r:
                 canvas.SetPixel(cx + dx, cy + dy, *color)
 
 
