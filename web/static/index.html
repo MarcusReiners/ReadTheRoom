@@ -747,9 +747,7 @@
               <span class="range-sep">°</span>
               <button id="servoRangeSaveBtn" class="servo-save-btn" type="button">Apply</button>
             </div>
-            <p id="servoRangeHint" class="zone-mode-hint">
-              How far the head may turn. Widen carefully — the limit is the cabling inside the head.
-            </p>
+            <p id="servoRangeHint" class="zone-mode-hint">Widen carefully — the cabling is the limit.</p>
           </div>
         </div>
 
@@ -764,7 +762,7 @@
               <input id="llmModelInput" type="text" placeholder="gemini/gemini-2.0-flash" autocomplete="off">
               <button id="llmModelSaveBtn" class="servo-save-btn" type="button">Apply</button>
             </div>
-            <p id="llmModelHint" class="zone-mode-hint">LiteLLM model string, e.g. <code>openai/gpt-4o-mini</code>.</p>
+            <p id="llmModelHint" class="zone-mode-hint">LiteLLM model string.</p>
 
             <label class="field-label" for="reasoningEffortSelect">Thinking before answering</label>
             <select id="reasoningEffortSelect">
@@ -775,14 +773,14 @@
               <option value="medium">Medium</option>
               <option value="high">High — slowest</option>
             </select>
-            <p class="zone-mode-hint">Thinking happens before anything can be spoken, so it is pure silence. Gemini 3 models cannot switch it off entirely — the lowest setting is as far down as it goes.</p>
+            <p class="zone-mode-hint">More thinking means a longer silence before it speaks.</p>
 
             <label class="field-label" for="sttLanguageInput">Speech recognition language</label>
             <div class="range-row">
               <input id="sttLanguageInput" type="text" placeholder="eng" autocomplete="off">
               <button id="sttLanguageSaveBtn" class="servo-save-btn" type="button">Apply</button>
             </div>
-            <p class="zone-mode-hint">Three-letter code (<code>eng</code>, <code>deu</code>). Leave empty to auto-detect — best if more than one language gets spoken. A <em>wrong</em> fixed code returns mangled transcripts rather than an error.</p>
+            <p class="zone-mode-hint">Three-letter code. Empty = auto-detect.</p>
 
             <label class="field-label" for="systemPromptInput">System prompt</label>
             <textarea id="systemPromptInput" rows="4" placeholder="You are a desk office assistant…"></textarea>
@@ -975,8 +973,7 @@
     sttLanguageInputEl.value = value || "";
   }
 
-  const SERVO_RANGE_HINT =
-    "How far the head may turn. Widen carefully — the limit is the cabling inside the head.";
+  const SERVO_RANGE_HINT = "Widen carefully — the cabling is the limit.";
 
   function setServoRangeFields(range) {
     if (!range) return;
@@ -1630,7 +1627,7 @@
     const value = llmModelInputEl.value.trim();
     if (!value || !ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "set_llm_model", value }));
-    llmModelHintEl.textContent = "Applied — takes effect on the next reply.";
+    llmModelHintEl.textContent = "Applied.";
   });
 
   // Empty is a real value for both of these (provider default / auto-detect),
