@@ -12,6 +12,12 @@ litellm.drop_params = True
 
 logger = logging.getLogger(__name__)
 
+# Spoken aloud, so: short, plain, no punctuation salad, and English to match
+# the assistant's locked reply language. Anything diagnostic belongs in the
+# log - see the except blocks in ask_stream().
+_SPOKEN_ERROR = "Sorry, something went wrong reaching the language model. The details are in the log."
+_SPOKEN_UNREACHABLE = "Sorry, I can't reach the language model right now."
+
 
 class _StreamStalled(Exception):
     """The provider accepted the request but produced no token in time.
@@ -80,13 +86,17 @@ class LLMGatewayAdapter:
                     return
                 except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout, _StreamStalled):
                     pass
-            yield ("Fehler: Kann das LLM-Backend nicht erreichen. "
-                   "Läuft der Server und ist die URL korrekt?")
+            yield _SPOKEN_UNREACHABLE
         except Exception as e:
             if emitted_any:
                 logger.exception("LLM-Stream nach Teilantwort abgebrochen: %s", e)
                 return
-            yield f"Fehler bei LLM: {e}"
+            # The detail goes to the log, NOT to the speaker. Yielding the raw
+            # exception meant a provider error was read out loud verbatim -
+            # a model-retired 404 came through as several seconds of spoken
+            # JSON, punctuation and all.
+            logger.exception("LLM-Fehler: %s", e)
+            yield _SPOKEN_ERROR
 
     def _stream_with_deadline(self, completion_kwargs: dict) -> Iterator[str]:
         """Yields content deltas, raising _StreamStalled if the provider goes
