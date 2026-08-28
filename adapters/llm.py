@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 _SPOKEN_ERROR = "Sorry, something went wrong reaching the language model. The details are in the log."
 _SPOKEN_UNREACHABLE = "Sorry, I can't reach the language model right now."
 
+# Replies that are apologies for a failure, not answers. main.py checks this
+# before writing a turn to the conversation store: persisting them poisons the
+# history, since every later turn then ships the failure back to the model as
+# if the assistant had really said it.
+ERROR_REPLIES = frozenset({_SPOKEN_ERROR, _SPOKEN_UNREACHABLE})
+
 
 class _StreamStalled(Exception):
     """The provider accepted the request but produced no token in time.

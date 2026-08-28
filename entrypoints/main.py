@@ -28,7 +28,7 @@ from adapters.factory import build_stt, build_tts, build_radar, build_turntable
 from adapters.app_settings import load_app_settings
 from adapters.chat_bridge import ChatBridgeAdapter
 from adapters.conversation_store import ConversationStore
-from adapters.llm import LLMGatewayAdapter
+from adapters.llm import ERROR_REPLIES, LLMGatewayAdapter
 from adapters.hardware.face_display import DummyFaceDisplayAdapter
 
 logger = logging.getLogger(__name__)
@@ -374,7 +374,15 @@ def handle_turn(
         bus.publish(AssistantTurnCancelled(conversation_id=conversation_id))
         return
 
-    store.add_assistant_message(conversation_id, full_text)
+    if full_text in ERROR_REPLIES:
+        # An apology for a failed call, not something the assistant said.
+        # Storing it fed the failure back as context on every later turn -
+        # and left the question that triggered it sitting in the history
+        # unanswered, so the model would keep trying to answer it alongside
+        # whatever was actually asked next.
+        logger.warning("Fehlerantwort wird nicht in der Historie gespeichert: %s", full_text)
+    else:
+        store.add_assistant_message(conversation_id, full_text)
     bus.publish(AssistantMessageCompleted(text=full_text, conversation_id=conversation_id))
 
 
