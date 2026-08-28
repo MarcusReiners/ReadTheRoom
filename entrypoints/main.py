@@ -188,8 +188,7 @@ def console_input_loop(
 def vad_input_loop(
     bus: EventBus, turn_queue: "queue.PriorityQueue", stt, doa, doa_lock: threading.Lock,
     mic_lock: threading.Lock, assistant_speaking: threading.Event,
-    poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8, trigger_confirm_polls: int = 2,
-    trigger_confirm_max_gaps: int = 3,
+    poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8, min_voice_polls: int = 2,
     calibration_mode: threading.Event | None = None, composing_mode: threading.Event | None = None,
     servo_recentering: threading.Event | None = None,
 ) -> None:
@@ -231,16 +230,11 @@ def vad_input_loop(
     recording is already open, some motor noise in the audio is a far
     smaller problem than losing the speech entirely.
 
-    trigger_confirm_polls: after voice_active first flips true, recording
-    starts immediately (so no audio is lost) but is discarded unless
-    voice_active reads true for this many more polls - rejects a single brief
-    noise blip (a knock, a click) without delaying the start of a real
-    utterance to find out.
-
-    trigger_confirm_max_gaps: how many quiet polls to tolerate while waiting
-    for those confirmations. Must be >0: speech is not continuously "active"
-    at a 200ms sampling rate, so requiring an unbroken run rejects ordinary
-    sentences along with the noise.
+    min_voice_polls: how many polls across the WHOLE recording must have
+    reported voice for the result to be worth transcribing. Counted
+    cumulatively, so pauses inside a sentence cost nothing, while a knock or
+    a click never reaches the total. The recording always runs to its natural
+    end first - this only decides whether to spend an STT call on it.
     trailing_silence_s deliberately isn't too short either: cutting off after
     a shorter gap clips natural mid-sentence pauses (thinking, a breath).
     """
@@ -272,14 +266,23 @@ def vad_input_loop(
             bus.publish(ListeningStateChanged(listening=True))
             proc, raw_file = _spawn_recorder(temp_in)
 
-            # Confirmation phase: recording's already running (so no audio is
-            # lost), but require voice_active to stay true a few more polls
-            # before treating this as real speech rather than a brief blip.
-            confirmed_polls = 0
-            gap_polls = 0
-            while confirmed_polls < trigger_confirm_polls:
+            # One loop, and the keep-or-discard decision is made AFTER the
+            # recording ends rather than during it. The previous design
+            # aborted mid-utterance whenever voice_active read false for a
+            # few consecutive polls - but ordinary sentences pause ("Hello,
+            # who are you?"), and a pause past the tolerance threw the whole
+            # recording away half-spoken. Nothing gets truncated now: a pause
+            # shorter than trailing_silence_s keeps recording, a longer one
+            # ends the turn exactly as it always did.
+            start_time = time.monotonic()
+            last_active_time = start_time
+            voice_polls = 1  # the trigger poll that opened this recording
+            while True:
                 time.sleep(poll_interval_s)
                 if assistant_speaking.is_set():
+                    # TTS started mid-recording - almost certainly means this
+                    # recording has picked up (or is about to pick up) the
+                    # assistant's own voice. Discard rather than transcribe it.
                     abort_reason = "Assistent hat zu sprechen begonnen"
                     break
                 if calibration_mode is not None and calibration_mode.is_set():
@@ -291,44 +294,20 @@ def vad_input_loop(
                 with doa_lock:
                     still_active = doa.get_voice_active()
                 if still_active:
-                    confirmed_polls += 1
-                else:
-                    # A single quiet poll used to discard the whole recording.
-                    # That is far too strict: ordinary speech has micro-pauses
-                    # between words, and at a 0.2s poll interval one of them
-                    # lands inside the confirmation window constantly - real
-                    # sentences were being thrown away as "brief blips". Only
-                    # a sustained gap now counts as "that wasn't speech".
-                    gap_polls += 1
-                    if gap_polls > trigger_confirm_max_gaps:
-                        abort_reason = "nur kurzer Ausschlag, keine echte Sprache"
-                        break
+                    voice_polls += 1
+                    last_active_time = time.monotonic()
+                if time.monotonic() - last_active_time >= trailing_silence_s:
+                    break
+                if time.monotonic() - start_time >= config.MAX_RECORD_SECONDS:
+                    break
 
-            if abort_reason is None:
-                start_time = time.monotonic()
-                last_active_time = start_time
-                while True:
-                    time.sleep(poll_interval_s)
-                    if assistant_speaking.is_set():
-                        # TTS started mid-recording - almost certainly means this
-                        # recording has picked up (or is about to pick up) the
-                        # assistant's own voice. Discard rather than transcribe it.
-                        abort_reason = "Assistent hat zu sprechen begonnen"
-                        break
-                    if calibration_mode is not None and calibration_mode.is_set():
-                        abort_reason = "Kalibrierungsmodus aktiv"
-                        break
-                    if composing_mode is not None and composing_mode.is_set():
-                        abort_reason = "Nutzer tippt im Chat"
-                        break
-                    with doa_lock:
-                        still_active = doa.get_voice_active()
-                    if still_active:
-                        last_active_time = time.monotonic()
-                    if time.monotonic() - last_active_time >= trailing_silence_s:
-                        break
-                    if time.monotonic() - start_time >= config.MAX_RECORD_SECONDS:
-                        break
+            # Cumulative, not consecutive: a real utterance accumulates voice
+            # across its own pauses, while a single knock or click never
+            # reaches the total. This only avoids a pointless STT call -
+            # anything slipping through is caught downstream, where an empty
+            # or annotation-only transcript is discarded anyway.
+            if abort_reason is None and voice_polls < min_voice_polls:
+                abort_reason = f"zu wenig Sprachaktivitaet ({voice_polls} Messungen)"
 
             bus.publish(ListeningStateChanged(listening=False))
             success = _finish_recording(proc, raw_file, temp_in)
