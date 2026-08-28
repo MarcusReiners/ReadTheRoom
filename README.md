@@ -11,7 +11,7 @@ A desk voice assistant that "reads the room": a radar sensor detects how many pe
 5. A single LED matrix panel shows eyes that blink and track the last known speaker direction. Status (idle/listening/speaking) is shown separately on a 7-LED "tie" strip driven by the bridge ESP32
 6. A DS3225 digital servo pans the head towards that same direction, for gesturing or turning to face incoming speech
 7. A [Seeed XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/) running the LD2450 firmware (`../mmWave/`) reads the sensor over UART and sends target data over **ESP-NOW** (no WiFi AP/router involved — sidesteps the association/isolation issues plain WiFi ran into). A second XIAO ESP32S3 running the bridge firmware (`../mmWaveBridge/`) receives those packets and relays them to the Pi as newline-delimited JSON over USB serial. The Pi reads that (`adapters/hardware/radar_ld2450.py::RadarLD2450Adapter`) and publishes `PersonCountChanged`/`RadarTargetsUpdated`.
-8. A small web app (`adapters/chat_bridge.py`, served at `http://<pi-address>:8765`) mirrors the conversation as text, accepts typed messages, and has a settings tab for the radar zone, servo calibration and turning range, voices, volume, system prompt and LLM model. When the radar detects a second person, the current/next answer is automatically redirected from speech to that chat — reverting back to speech once alone again. A voice on/off toggle overrides this manually regardless of who's in the room.
+8. A small web app (`adapters/chat_bridge.py`, served at `http://<pi-address>:8765`) mirrors the conversation as text, accepts typed messages, and has a settings tab for the radar zone and enforcement mode, servo calibration and turning range, private mode, the voice library and volume, the system prompt, the LLM model and its thinking level, and the speech-recognition language. When the radar detects a second person, the current/next answer is automatically redirected from speech to that chat — reverting back to speech once alone again. A voice on/off toggle overrides this manually regardless of who's in the room.
 
 ## Architecture
 
@@ -111,10 +111,14 @@ All settings live in [config.py](config.py) and are read from environment variab
 | Variable | Meaning |
 |---|---|
 | `STT_PROVIDER`, `TTS_PROVIDER` | `elevenlabs` \| `local` \| `remote` |
-| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_TTS_MODEL`, `ELEVENLABS_STT_MODEL`, `ELEVENLABS_LANGUAGE_CODE`, `ELEVENLABS_TTS_LANGUAGE_CODE` | ElevenLabs settings (STT uses ISO 639-3, TTS uses ISO 639-1) |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_TTS_MODEL`, `ELEVENLABS_STT_MODEL` | ElevenLabs credentials and model selection |
+| `ELEVENLABS_LANGUAGE_CODE` | STT input language, ISO 639-3 (`eng`, `deu`). Empty = let Scribe auto-detect, which is what you want if more than one language gets spoken. A *wrong* fixed code returns mangled transcripts rather than an error |
+| `ELEVENLABS_TTS_LANGUAGE_CODE` | TTS output language, ISO 639-1 (`en`, `de`) — keep it consistent with what the system prompt tells the model to reply in, or the voice mispronounces its own output |
 | `OPENAI_API_KEY`, `GEMINI_API_KEY` | Read by LiteLLM when `LLM_MODEL` starts with `openai/` / `gemini/` |
 | `LLM_MODEL`, `LLM_API_BASE` | Primary LLM (LiteLLM model string + optional server address) |
 | `LLM_FALLBACK_MODEL`, `LLM_FALLBACK_API_BASE` | Local/LAN Ollama fallback if the primary LLM is unreachable |
+| `LLM_REASONING_EFFORT` | How much the model may "think" before answering: `minimal`/`none`/`disable`/`low`/`medium`/`high`, or empty for the provider's default. Thinking is pure dead air here — nothing can be spoken until the first real token. Note Gemini 3.x cannot disable it fully; `disable` lands on its lowest level. Also editable from the web app |
+| `LLM_MAX_TOKENS` | Ceiling on reply length (default 500). Thinking tokens count against it |
 | `MAC_SERVER_URL`, `MAC_SERVER_TTS_SAMPLE_RATE` | Address of the Mac pipeline server, and its Piper voice's sample rate |
 | `WHISPER_MODEL`, `WHISPER_THREADS`, `WHISPER_VAD` | Local STT fallback: path to the CT2 model, CPU threads, VAD filter |
 | `PIPER_MODEL` | Local TTS fallback: path to the Piper voice (.onnx) |
@@ -131,7 +135,7 @@ All settings live in [config.py](config.py) and are read from environment variab
 | `RADAR_PROVIDER`, `RADAR_SERIAL_PORT`, `RADAR_SERIAL_BAUD` | `ld2450` (read radar data relayed by the bridge ESP32 over USB serial) \| `dummy`; the bridge's serial device (default `/dev/ttyUSB0`); baud rate (default `115200`) |
 | `CHAT_BRIDGE_HOST`, `CHAT_BRIDGE_PORT` | Address the web app binds to (default `0.0.0.0:8765`) — open `http://<pi-address>:8765` in a browser |
 | `CONVERSATIONS_DB_PATH` | SQLite file holding chat history (default `conversations.db`) |
-| `APP_SETTINGS_PATH` | Settings written by the web app's settings tab — system prompt, LLM model, voice library, volume, servo range (default `app_settings.json`). Values here take precedence over the `config.py` defaults |
+| `APP_SETTINGS_PATH` | Settings written by the web app's settings tab — system prompt, LLM model, reasoning effort, STT language, voice library, volume, servo range (default `app_settings.json`). **Values here take precedence over `.env` and the `config.py` defaults**, so a setting saved from the web app wins until it is changed there or removed from the file |
 | `MAX_RECORD_SECONDS` | Watchdog against endless recordings |
 | `LOG_DIR`, `LOG_FILE`, `LOG_LEVEL`, `LOG_MAX_BYTES`, `LOG_BACKUP_COUNT` | Logging (see below) |
 
@@ -150,7 +154,11 @@ Speaking is hands-free: the mic array's onboard VAD starts and stops recording o
 - **ENTER** — start recording, **ENTER** again — stop recording
 - **Ctrl+C** — quit
 
-Typed messages from the web app take priority over speech: sending one interrupts an in-progress spoken reply rather than queueing behind it. Voice input also pauses while the chat box is focused, and entirely while the settings tab is open.
+Typed messages from the web app take priority over speech: sending one interrupts an in-progress spoken reply rather than queueing behind it. Voice input pauses while the chat box is focused, entirely while the settings tab is open, and while the head is recentering (that move is the one servo noise loud enough to trip the mic, and it only happens when nobody is talking).
+
+A recording runs until `trailing_silence_s` (0.8s) of quiet, then is kept only if at least `min_voice_polls` polls across the whole recording reported voice. That count is **cumulative, not consecutive** — pauses inside a sentence cost nothing, while a knock never reaches the total. Raise `min_voice_polls` if noise gets transcribed; raise `trailing_silence_s` if you are being cut off mid-sentence.
+
+A failed LLM call is spoken as a short apology and deliberately **not** written to the conversation history — persisting it fed the failure back as context on every later turn.
 
 ## Testing hardware
 
@@ -175,6 +183,7 @@ Other scripts, roughly in the order you'd reach for them:
 | `check_stale_targets.py` | Reports how long radar targets sit frozen, to check whether the firmware's ghost filter is erasing real, motionless people |
 | `raw_serial_monitor.py` | Raw bytes off the bridge's serial port, bypassing JSON parsing — for diagnosing a link that "connects" but yields nothing usable |
 | `test_tie_led.py` | Exercises the 7-LED tie strip on the bridge ESP32 |
+| `simulate_doa.py` | Replays DOA angles through the same conversion the live adapter uses, no hardware needed |
 
 [scripts/home_servo.py](scripts/home_servo.py) moves the servo to its front-facing center position and holds it there (doesn't detach) until you Ctrl+C — handy while physically assembling the head, so you can attach the horn/mount at a known reference angle instead of wherever it happened to power on at:
 
