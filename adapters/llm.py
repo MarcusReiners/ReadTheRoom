@@ -1,4 +1,6 @@
 import logging
+import queue
+import threading
 import time
 from typing import Iterator, Optional
 
@@ -11,6 +13,16 @@ litellm.drop_params = True
 logger = logging.getLogger(__name__)
 
 
+class _StreamStalled(Exception):
+    """The provider accepted the request but produced no token in time.
+
+    litellm's own `timeout` covers establishing the request, not an idle gap
+    on an already-open stream - a Gemini call was seen taking 105s to its
+    first token with timeout=15 set and nothing tripping. Enforced here
+    instead, and treated exactly like litellm.exceptions.Timeout.
+    """
+
+
 class LLMGatewayAdapter:
     def __init__(
         self,
@@ -19,6 +31,10 @@ class LLMGatewayAdapter:
         fallback_model: Optional[str] = None,
         fallback_api_base: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
+        max_tokens: int = 500,
+        first_token_timeout_s: float = 20.0,
+        stall_timeout_s: float = 30.0,
     ) -> None:
         self.model = model
         self.api_base = api_base
@@ -28,6 +44,15 @@ class LLMGatewayAdapter:
         # app's settings tab can edit it live - see ChatBridgeAdapter's
         # set_system_prompt handler.
         self.system_prompt = system_prompt or SYSTEM_PROMPT
+        self.reasoning_effort = reasoning_effort or None
+        self.max_tokens = max_tokens
+        # How long to wait for the FIRST token, and for each subsequent one.
+        # The first is the one that matters for perceived responsiveness -
+        # nothing has been spoken yet, so the turn is simply dead air. Later
+        # gaps get a longer allowance since a long answer legitimately
+        # streams over many seconds.
+        self.first_token_timeout_s = first_token_timeout_s
+        self.stall_timeout_s = stall_timeout_s
 
     def ask_stream(self, user_text: str, history: Optional[list[dict]] = None) -> Iterator[str]:
         # Tracks whether the primary model already emitted anything before
@@ -42,7 +67,7 @@ class LLMGatewayAdapter:
             for delta in self._ask_stream(self.model, self.api_base, user_text, history):
                 emitted_any = True
                 yield delta
-        except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout):
+        except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout, _StreamStalled):
             if emitted_any:
                 logger.warning("'%s' brach mitten im Stream ab - kein Fallback, Antwort bleibt unvollstaendig.",
                                 self.model)
@@ -53,7 +78,7 @@ class LLMGatewayAdapter:
                 try:
                     yield from self._ask_stream(self.fallback_model, self.fallback_api_base, user_text, history)
                     return
-                except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout):
+                except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout, _StreamStalled):
                     pass
             yield ("Fehler: Kann das LLM-Backend nicht erreichen. "
                    "Läuft der Server und ist die URL korrekt?")
@@ -62,6 +87,59 @@ class LLMGatewayAdapter:
                 logger.exception("LLM-Stream nach Teilantwort abgebrochen: %s", e)
                 return
             yield f"Fehler bei LLM: {e}"
+
+    def _stream_with_deadline(self, completion_kwargs: dict) -> Iterator[str]:
+        """Yields content deltas, raising _StreamStalled if the provider goes
+        quiet for too long.
+
+        The request runs on a worker thread feeding a queue, because the only
+        way to put a deadline on a blocking iterator is to not be the one
+        blocking on it. A stalled call can't be cancelled - litellm exposes no
+        handle for that - so the thread is abandoned and left to finish on its
+        own; it's a daemon and holds nothing but its own HTTP connection.
+        """
+        chunks: "queue.Queue[tuple[str, object]]" = queue.Queue()
+
+        def worker() -> None:
+            try:
+                for chunk in litellm.completion(**completion_kwargs):
+                    chunks.put(("chunk", chunk))
+                chunks.put(("done", None))
+            except Exception as e:  # re-raised on the consumer side below
+                chunks.put(("error", e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        model = completion_kwargs.get("model")
+        # The first-token limit is an ABSOLUTE deadline, not a per-chunk one.
+        # A per-chunk timeout is restarted by every arriving chunk - including
+        # content-free keepalives - so a provider that streams empty chunks
+        # while producing nothing would hold the turn open indefinitely and
+        # never trip it. Only real content resets the clock.
+        first_deadline = time.monotonic() + self.first_token_timeout_s
+        got_first = False
+        while True:
+            if got_first:
+                wait = self.stall_timeout_s
+            else:
+                wait = max(0.05, first_deadline - time.monotonic())
+            try:
+                kind, payload = chunks.get(timeout=wait)
+            except queue.Empty:
+                raise _StreamStalled(f"Kein Token von {model} - Stream abgebrochen.")
+            if kind == "done":
+                return
+            if kind == "error":
+                raise payload
+            delta = payload.choices[0].delta.content
+            if delta:
+                got_first = True
+                yield delta
+            elif not got_first and time.monotonic() >= first_deadline:
+                raise _StreamStalled(
+                    f"Kein Token von {model} binnen {self.first_token_timeout_s:.0f}s "
+                    "(nur leere Chunks) - Stream abgebrochen."
+                )
 
     def _ask_stream(
         self, model: str, api_base: Optional[str], user_text: str, history: Optional[list[dict]],
@@ -80,13 +158,17 @@ class LLMGatewayAdapter:
             # off before it ever reaches the actual reply text - a plain
             # non-reasoning model just stops early via finish_reason=stop
             # well under this ceiling, so it costs those nothing.
-            max_tokens=500,
+            max_tokens=self.max_tokens,
             # No timeout previously meant a slow/hung API response (seen once
             # taking 46s+) blocked the whole turn with nothing to make it
             # fail fast - this raises Timeout instead, which now also
             # triggers the fallback model the same way a connection error does.
             timeout=15,
         )
+        if self.reasoning_effort:
+            # Only sent when explicitly configured - omitting it leaves the
+            # provider default alone rather than silently picking one.
+            completion_kwargs["reasoning_effort"] = self.reasoning_effort
         if model.startswith("ollama"):
             # Ollama-specific: disables qwen3's "think" preamble via its
             # native REST field. Other providers reject unknown fields
@@ -94,11 +176,9 @@ class LLMGatewayAdapter:
             completion_kwargs["extra_body"] = {"think": False}
             completion_kwargs["keep_alive"] = "24h"
 
-        response = litellm.completion(**completion_kwargs)
         t_start = time.monotonic()
         t_first = None
-        for chunk in response:
-            delta = chunk.choices[0].delta.content
+        for delta in self._stream_with_deadline(completion_kwargs):
             if delta:
                 if t_first is None:
                     t_first = time.monotonic()

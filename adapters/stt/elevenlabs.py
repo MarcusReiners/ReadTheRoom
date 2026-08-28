@@ -11,12 +11,16 @@ class ElevenLabsSTTAdapter:
         self,
         api_key: str,
         model_id: str = "scribe_v1",
-        language_code: str = "deu",
+        language_code: str = "eng",
     ) -> None:
         if not api_key:
             raise ValueError("ELEVENLABS_API_KEY ist nicht gesetzt.")
         self.model_id = model_id
-        self.language_code = language_code
+        # Empty -> None, so an empty ELEVENLABS_LANGUAGE_CODE means "let
+        # Scribe auto-detect" rather than sending a blank code the API
+        # rejects. Auto-detect is the right setting for a multilingual user;
+        # a fixed code is more accurate when the language really is fixed.
+        self.language_code = language_code or None
         self._client = ElevenLabs(api_key=api_key)
 
     def transcribe(self, audio_file: str) -> str:

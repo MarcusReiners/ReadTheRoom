@@ -108,7 +108,12 @@ def record_audio(output_file: str) -> bool:
 # wherever they appear (not just when the whole transcript is one) - a
 # transcript like "Ja [hustet] genau" should become "Ja genau", not be kept
 # or discarded wholesale.
-_NON_SPEECH_ANNOTATION_RE = re.compile(r"[\[(][^\])]*[\])]")
+#
+# Square brackets ONLY. This used to also strip anything in parentheses,
+# which over-filters: Scribe marks audio events with square brackets, while
+# parentheses appear in ordinary transcribed speech ("der Preis (netto) ist
+# ...") and were being silently deleted from real sentences.
+_NON_SPEECH_ANNOTATION_RE = re.compile(r"\[[^\]]*\]")
 
 # turn_queue is a PriorityQueue of (priority, monotonic_ns, text) - lower
 # priority number is served first. A typed chat message should always jump
@@ -184,7 +189,9 @@ def vad_input_loop(
     bus: EventBus, turn_queue: "queue.PriorityQueue", stt, doa, doa_lock: threading.Lock,
     mic_lock: threading.Lock, assistant_speaking: threading.Event,
     poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8, trigger_confirm_polls: int = 2,
+    trigger_confirm_max_gaps: int = 3,
     calibration_mode: threading.Event | None = None, composing_mode: threading.Event | None = None,
+    servo_moving: threading.Event | None = None,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
     onboard VAD and starts recording automatically once it detects speech,
@@ -211,11 +218,22 @@ def vad_input_loop(
     the draft aloud) doesn't also get picked up and queued as a second,
     separate voice turn.
 
+    servo_moving: set by start_doa_tracking() while the head is moving or
+    still inside its post-move quiet window. Without it this loop heard the
+    servo's own motor noise as speech: it opened recordings on it, and worse,
+    a move mid-utterance cut a real recording short. Nearly every capture
+    came out 1-2 seconds long and the transcripts were mangled fragments.
+
     trigger_confirm_polls: after voice_active first flips true, recording
     starts immediately (so no audio is lost) but is discarded unless
-    voice_active stays true for this many more consecutive polls - rejects a
-    single brief noise blip (a knock, click, a moment of servo/motor noise)
-    without needing to delay the start of a real utterance to find out.
+    voice_active reads true for this many more polls - rejects a single brief
+    noise blip (a knock, a click) without delaying the start of a real
+    utterance to find out.
+
+    trigger_confirm_max_gaps: how many quiet polls to tolerate while waiting
+    for those confirmations. Must be >0: speech is not continuously "active"
+    at a 200ms sampling rate, so requiring an unbroken run rejects ordinary
+    sentences along with the noise.
     trailing_silence_s deliberately isn't too short either: cutting off after
     a shorter gap clips natural mid-sentence pauses (thinking, a breath).
     """
@@ -224,6 +242,7 @@ def vad_input_loop(
             assistant_speaking.is_set()
             or (calibration_mode is not None and calibration_mode.is_set())
             or (composing_mode is not None and composing_mode.is_set())
+            or (servo_moving is not None and servo_moving.is_set())
         ):
             time.sleep(poll_interval_s)
             continue
@@ -250,6 +269,7 @@ def vad_input_loop(
             # lost), but require voice_active to stay true a few more polls
             # before treating this as real speech rather than a brief blip.
             confirmed_polls = 0
+            gap_polls = 0
             while confirmed_polls < trigger_confirm_polls:
                 time.sleep(poll_interval_s)
                 if assistant_speaking.is_set():
@@ -261,13 +281,24 @@ def vad_input_loop(
                 if composing_mode is not None and composing_mode.is_set():
                     abort_reason = "Nutzer tippt im Chat"
                     break
+                if servo_moving is not None and servo_moving.is_set():
+                    abort_reason = "Servo bewegt sich"
+                    break
                 with doa_lock:
                     still_active = doa.get_voice_active()
                 if still_active:
                     confirmed_polls += 1
                 else:
-                    abort_reason = "nur kurzer Ausschlag, keine echte Sprache"
-                    break
+                    # A single quiet poll used to discard the whole recording.
+                    # That is far too strict: ordinary speech has micro-pauses
+                    # between words, and at a 0.2s poll interval one of them
+                    # lands inside the confirmation window constantly - real
+                    # sentences were being thrown away as "brief blips". Only
+                    # a sustained gap now counts as "that wasn't speech".
+                    gap_polls += 1
+                    if gap_polls > trigger_confirm_max_gaps:
+                        abort_reason = "nur kurzer Ausschlag, keine echte Sprache"
+                        break
 
             if abort_reason is None:
                 start_time = time.monotonic()
@@ -285,6 +316,9 @@ def vad_input_loop(
                         break
                     if composing_mode is not None and composing_mode.is_set():
                         abort_reason = "Nutzer tippt im Chat"
+                        break
+                    if servo_moving is not None and servo_moving.is_set():
+                        abort_reason = "Servo bewegt sich"
                         break
                     with doa_lock:
                         still_active = doa.get_voice_active()
@@ -402,6 +436,8 @@ def main() -> None:
         fallback_model=config.LLM_FALLBACK_MODEL,
         fallback_api_base=config.LLM_FALLBACK_API_BASE,
         system_prompt=app_settings["system_prompt"],
+        reasoning_effort=config.LLM_REASONING_EFFORT,
+        max_tokens=config.LLM_MAX_TOKENS,
     )
 
     radar = build_radar(config, bus)
@@ -421,6 +457,11 @@ def main() -> None:
     # doesn't also get picked up as a separate spoken turn. Created unconditionally
     # for the same reason as calibration_mode above.
     composing_mode = threading.Event()
+
+    # Set by start_doa_tracking() while the head is moving or still settling.
+    # vad_input_loop() is a separate thread polling the same VAD, so without
+    # a shared flag it heard the servo's own motor noise as speech.
+    servo_moving = threading.Event()
 
     # Set by ChatBridgeAdapter the instant a chat message is typed and sent -
     # see handle_turn()'s cancel_event param. Cleared by the turn loop below
@@ -485,11 +526,15 @@ def main() -> None:
         start_doa_tracking(
             doa, turntable, face, lock=doa_lock,
             assistant_speaking=assistant_speaking, calibration_mode=calibration_mode,
+            servo_moving=servo_moving,
         )
         threading.Thread(
             target=vad_input_loop,
             args=(bus, turn_queue, stt, doa, doa_lock, mic_lock, assistant_speaking),
-            kwargs={"calibration_mode": calibration_mode, "composing_mode": composing_mode},
+            kwargs={
+                "calibration_mode": calibration_mode, "composing_mode": composing_mode,
+                "servo_moving": servo_moving,
+            },
             daemon=True,
         ).start()
 
