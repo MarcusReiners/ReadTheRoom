@@ -54,6 +54,7 @@ class ChatBridgeAdapter:
         servo_calibration_path: str,
         llm=None,
         tts=None,
+        stt=None,
         app_settings_path: str = "app_settings.json",
         voices: list | None = None,
         active_voice_id: str | None = None,
@@ -80,6 +81,7 @@ class ChatBridgeAdapter:
         # select_voice below mutate this list and re-save the whole thing.
         self.llm = llm
         self.tts = tts
+        self.stt = stt
         self.app_settings_path = app_settings_path
         self.voices = voices if voices else [{"id": str(uuid.uuid4()), "name": "Default", "voice_id": ""}]
         self.active_voice_id = active_voice_id or self.voices[0]["id"]
@@ -248,6 +250,8 @@ class ChatBridgeAdapter:
                 "private_mode": self.conversation.confidential,
                 "system_prompt": self._get_system_prompt(),
                 "llm_model": self._get_llm_model(),
+                "reasoning_effort": self._get_reasoning_effort(),
+                "stt_language": self._get_stt_language(),
                 "voices": self.voices,
                 "active_voice_id": self.active_voice_id,
                 "volume": self._get_volume(),
@@ -326,6 +330,25 @@ class ChatBridgeAdapter:
                 self.llm.model = model
                 self._save_settings()
                 self._broadcast({"type": "llm_model", "value": model})
+        elif msg_type == "set_reasoning_effort":
+            # "" is meaningful: leave the provider's own default alone rather
+            # than forcing a level. Note Gemini 3.x cannot fully disable
+            # thinking - "disable"/"none" land on its lowest level, not off.
+            value = (data.get("value") or "").strip()
+            if self.llm is not None:
+                self.llm.reasoning_effort = value or None
+                self._save_settings()
+                self._broadcast({"type": "reasoning_effort", "value": value})
+        elif msg_type == "set_stt_language":
+            # "" means let Scribe auto-detect - the right setting when more
+            # than one language gets spoken at the assistant. A fixed code is
+            # more accurate when the language really is fixed, and a WRONG
+            # fixed code returns mangled transcripts rather than an error.
+            value = (data.get("value") or "").strip()
+            if self.stt is not None and hasattr(self.stt, "language_code"):
+                self.stt.language_code = value or None
+                self._save_settings()
+                self._broadcast({"type": "stt_language", "value": value})
         elif msg_type == "set_servo_range":
             self._set_servo_range(data.get("min"), data.get("max"))
         elif msg_type == "add_voice":
@@ -379,6 +402,8 @@ class ChatBridgeAdapter:
             "private_mode": self.conversation.confidential,
             "system_prompt": self._get_system_prompt(),
             "llm_model": self._get_llm_model(),
+            "reasoning_effort": self._get_reasoning_effort(),
+            "stt_language": self._get_stt_language(),
             "voices": self.voices,
             "active_voice_id": self.active_voice_id,
             "volume": self._get_volume(),
@@ -390,6 +415,12 @@ class ChatBridgeAdapter:
 
     def _get_llm_model(self) -> str:
         return getattr(self.llm, "model", "") or ""
+
+    def _get_reasoning_effort(self) -> str:
+        return getattr(self.llm, "reasoning_effort", "") or ""
+
+    def _get_stt_language(self) -> str:
+        return getattr(self.stt, "language_code", "") or ""
 
     def _get_volume(self) -> float:
         return getattr(self.tts, "volume", 1.0)
@@ -448,6 +479,8 @@ class ChatBridgeAdapter:
         save_app_settings(self.app_settings_path, {
             "system_prompt": self._get_system_prompt(),
             "llm_model": self._get_llm_model(),
+            "reasoning_effort": self._get_reasoning_effort(),
+            "stt_language_code": self._get_stt_language(),
             "volume": self._get_volume(),
             "servo_min_angle": servo["min"],
             "servo_max_angle": servo["max"],

@@ -766,6 +766,24 @@
             </div>
             <p id="llmModelHint" class="zone-mode-hint">LiteLLM model string, e.g. <code>openai/gpt-4o-mini</code>.</p>
 
+            <label class="field-label" for="reasoningEffortSelect">Thinking before answering</label>
+            <select id="reasoningEffortSelect">
+              <option value="">Provider default</option>
+              <option value="disable">Lowest — fastest to first word</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High — slowest</option>
+            </select>
+            <p class="zone-mode-hint">Thinking happens before anything can be spoken, so it is pure silence. Gemini 3 models cannot switch it off entirely — the lowest setting is as far down as it goes.</p>
+
+            <label class="field-label" for="sttLanguageInput">Speech recognition language</label>
+            <div class="range-row">
+              <input id="sttLanguageInput" type="text" placeholder="eng" autocomplete="off">
+              <button id="sttLanguageSaveBtn" class="servo-save-btn" type="button">Apply</button>
+            </div>
+            <p class="zone-mode-hint">Three-letter code (<code>eng</code>, <code>deu</code>). Leave empty to auto-detect — best if more than one language gets spoken. A <em>wrong</em> fixed code returns mangled transcripts rather than an error.</p>
+
             <label class="field-label" for="systemPromptInput">System prompt</label>
             <textarea id="systemPromptInput" rows="4" placeholder="You are a desk office assistant…"></textarea>
             <button id="systemPromptSaveBtn" class="servo-save-btn" type="button">Save prompt</button>
@@ -875,6 +893,8 @@
   const volumeInputEl = document.getElementById("volumeInput");
   const volumeValueEl = document.getElementById("volumeValue");
   const llmModelInputEl = document.getElementById("llmModelInput");
+  const reasoningEffortSelectEl = document.getElementById("reasoningEffortSelect");
+  const sttLanguageInputEl = document.getElementById("sttLanguageInput");
   const servoMinInputEl = document.getElementById("servoMinInput");
   const servoMaxInputEl = document.getElementById("servoMaxInput");
   const servoRangeHintEl = document.getElementById("servoRangeHint");
@@ -943,6 +963,16 @@
   function setLlmModelField(value) {
     if (document.activeElement === llmModelInputEl) return;
     llmModelInputEl.value = value || "";
+  }
+
+  function setReasoningEffortField(value) {
+    if (document.activeElement === reasoningEffortSelectEl) return;
+    reasoningEffortSelectEl.value = value || "";
+  }
+
+  function setSttLanguageField(value) {
+    if (document.activeElement === sttLanguageInputEl) return;
+    sttLanguageInputEl.value = value || "";
   }
 
   const SERVO_RANGE_HINT =
@@ -1054,6 +1084,8 @@
         setPrivateModeToggle(data.private_mode !== false);
         setSystemPromptField(data.system_prompt);
         setLlmModelField(data.llm_model);
+        setReasoningEffortField(data.reasoning_effort);
+        setSttLanguageField(data.stt_language);
         setServoRangeFields(data.servo_range);
         renderVoiceList(data.voices, data.active_voice_id);
         setVolumeField(data.volume);
@@ -1115,6 +1147,12 @@
         break;
       case "llm_model":
         setLlmModelField(data.value);
+        break;
+      case "reasoning_effort":
+        setReasoningEffortField(data.value);
+        break;
+      case "stt_language":
+        setSttLanguageField(data.value);
         break;
       case "servo_range":
         setServoRangeFields(data);
@@ -1593,6 +1631,18 @@
     if (!value || !ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "set_llm_model", value }));
     llmModelHintEl.textContent = "Applied — takes effect on the next reply.";
+  });
+
+  // Empty is a real value for both of these (provider default / auto-detect),
+  // so they send on change rather than requiring non-empty input.
+  reasoningEffortSelectEl.addEventListener("change", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_reasoning_effort", value: reasoningEffortSelectEl.value }));
+  });
+
+  document.getElementById("sttLanguageSaveBtn").addEventListener("click", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "set_stt_language", value: sttLanguageInputEl.value.trim() }));
   });
 
   // The range is applied and validated on the device (it can reject a window

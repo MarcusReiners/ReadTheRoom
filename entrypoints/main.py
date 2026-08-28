@@ -415,6 +415,8 @@ def main() -> None:
     app_settings = load_app_settings(config.APP_SETTINGS_PATH, defaults={
         "system_prompt": SYSTEM_PROMPT,
         "llm_model": config.LLM_MODEL,
+        "reasoning_effort": config.LLM_REASONING_EFFORT,
+        "stt_language_code": config.ELEVENLABS_LANGUAGE_CODE,
         "voice_id": config.ELEVENLABS_VOICE_ID,
         "volume": 1.0,
         "servo_min_angle": config.SERVO_MIN_ANGLE,
@@ -426,6 +428,8 @@ def main() -> None:
     )
 
     stt = build_stt(config)
+    if hasattr(stt, "language_code"):
+        stt.language_code = app_settings["stt_language_code"] or None
     tts = build_tts(config, bus)
     if hasattr(tts, "voice_id"):
         tts.voice_id = active_voice["voice_id"]
@@ -437,7 +441,7 @@ def main() -> None:
         fallback_model=config.LLM_FALLBACK_MODEL,
         fallback_api_base=config.LLM_FALLBACK_API_BASE,
         system_prompt=app_settings["system_prompt"],
-        reasoning_effort=config.LLM_REASONING_EFFORT,
+        reasoning_effort=app_settings["reasoning_effort"],
         max_tokens=config.LLM_MAX_TOKENS,
     )
 
@@ -499,6 +503,7 @@ def main() -> None:
         servo_calibration_path=config.SERVO_CALIBRATION_PATH,
         llm=llm,
         tts=tts,
+        stt=stt,
         app_settings_path=config.APP_SETTINGS_PATH,
         voices=app_settings["voices"],
         active_voice_id=app_settings["active_voice_id"],

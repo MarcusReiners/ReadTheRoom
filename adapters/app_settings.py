@@ -9,7 +9,10 @@ logger = logging.getLogger(__name__)
 # missing (a fresh install, or a file written before that key existed).
 # Defaults come from config.py / the domain layer rather than being repeated
 # here, so this module stays a storage concern only.
-_SCALAR_KEYS = ("system_prompt", "llm_model", "volume", "servo_min_angle", "servo_max_angle")
+_SCALAR_KEYS = (
+    "system_prompt", "llm_model", "reasoning_effort", "stt_language_code",
+    "volume", "servo_min_angle", "servo_max_angle",
+)
 
 
 def load_app_settings(path: str, defaults: dict) -> dict:
