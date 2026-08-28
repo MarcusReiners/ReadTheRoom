@@ -39,7 +39,13 @@ GEMINI_API_KEY = _env_opt("GEMINI_API_KEY")
 ELEVENLABS_VOICE_ID = _env("ELEVENLABS_VOICE_ID", "wDsJlOXPqcvIUKdLXjDs")
 ELEVENLABS_TTS_MODEL = _env("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
 ELEVENLABS_STT_MODEL = _env("ELEVENLABS_STT_MODEL", "scribe_v1")
-ELEVENLABS_LANGUAGE_CODE = _env("ELEVENLABS_LANGUAGE_CODE", "deu")
+# STT input language, ISO 639-3. Was "deu" - now "eng" to match the English-only
+# setup (see SYSTEM_PROMPT and ELEVENLABS_TTS_LANGUAGE_CODE below); a mismatch
+# here is costly, since Scribe forced to the wrong language returns mangled
+# transcripts rather than failing outright. Set to an empty string to let
+# Scribe auto-detect instead, which is what you want if you speak more than
+# one language at the assistant.
+ELEVENLABS_LANGUAGE_CODE = _env("ELEVENLABS_LANGUAGE_CODE", "eng")
 # ISO 639-1 (two-letter), unlike ELEVENLABS_LANGUAGE_CODE above which is
 # STT's ISO 639-3 - only eleven_flash_v2_5/eleven_turbo_v2_5-class models
 # actually enforce this for TTS.
@@ -49,6 +55,17 @@ ELEVENLABS_TTS_LANGUAGE_CODE = _env("ELEVENLABS_TTS_LANGUAGE_CODE", "en")
 LLM_MODEL = _env("LLM_MODEL", "openai/gpt-4o-mini")
 LLM_API_BASE = _env_opt("LLM_API_BASE")
 LLM_FALLBACK_MODEL = _env_opt("LLM_FALLBACK_MODEL") or "ollama_chat/qwen3.5:9b"
+# How much the model is allowed to "think" before answering. Empty = leave the
+# provider's default alone (Gemini's is thinking ON). Accepted by LiteLLM:
+# minimal | none | disable | low | medium | high.
+#
+# Thinking tokens are pure dead air here - nothing can be spoken until the
+# model emits its first real token - and they also count against LLM_MAX_TOKENS.
+# Note LiteLLM maps "none"/"disable" to the LOWEST available level rather than
+# truly off on Gemini 3.x models ("Gemini 3 cannot fully disable thinking"),
+# so on those the floor is "minimal", not zero.
+LLM_REASONING_EFFORT = _env("LLM_REASONING_EFFORT", "")
+LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "500"))
 LLM_FALLBACK_API_BASE = _env_opt("LLM_FALLBACK_API_BASE") or "http://192.168.178.37:11434"
 
 # --- Local model fallback paths -----------------------------------------
