@@ -191,7 +191,7 @@ def vad_input_loop(
     poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8, trigger_confirm_polls: int = 2,
     trigger_confirm_max_gaps: int = 3,
     calibration_mode: threading.Event | None = None, composing_mode: threading.Event | None = None,
-    servo_moving: threading.Event | None = None,
+    servo_recentering: threading.Event | None = None,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
     onboard VAD and starts recording automatically once it detects speech,
@@ -218,11 +218,18 @@ def vad_input_loop(
     the draft aloud) doesn't also get picked up and queued as a second,
     separate voice turn.
 
-    servo_moving: set by start_doa_tracking() while the head is moving or
-    still inside its post-move quiet window. Without it this loop heard the
-    servo's own motor noise as speech: it opened recordings on it, and worse,
-    a move mid-utterance cut a real recording short. Nearly every capture
-    came out 1-2 seconds long and the transcripts were mangled fragments.
+    servo_recentering: set by start_doa_tracking() only while the head is
+    driving back to home after a silence timeout - never for tracking moves.
+    A recenter happens when nobody has spoken for seconds, so VAD activity
+    during one is the motor, not a person, and starting a recording on it is
+    always wrong.
+
+    Checked ONLY before opening a recording, never to abort one already in
+    progress. Aborting was tried and was badly wrong: the head turns toward
+    a speaker because they are speaking, so mid-recording servo checks threw
+    away the recording of the very utterance that caused the move. If a
+    recording is already open, some motor noise in the audio is a far
+    smaller problem than losing the speech entirely.
 
     trigger_confirm_polls: after voice_active first flips true, recording
     starts immediately (so no audio is lost) but is discarded unless
@@ -242,7 +249,7 @@ def vad_input_loop(
             assistant_speaking.is_set()
             or (calibration_mode is not None and calibration_mode.is_set())
             or (composing_mode is not None and composing_mode.is_set())
-            or (servo_moving is not None and servo_moving.is_set())
+            or (servo_recentering is not None and servo_recentering.is_set())
         ):
             time.sleep(poll_interval_s)
             continue
@@ -281,9 +288,6 @@ def vad_input_loop(
                 if composing_mode is not None and composing_mode.is_set():
                     abort_reason = "Nutzer tippt im Chat"
                     break
-                if servo_moving is not None and servo_moving.is_set():
-                    abort_reason = "Servo bewegt sich"
-                    break
                 with doa_lock:
                     still_active = doa.get_voice_active()
                 if still_active:
@@ -316,9 +320,6 @@ def vad_input_loop(
                         break
                     if composing_mode is not None and composing_mode.is_set():
                         abort_reason = "Nutzer tippt im Chat"
-                        break
-                    if servo_moving is not None and servo_moving.is_set():
-                        abort_reason = "Servo bewegt sich"
                         break
                     with doa_lock:
                         still_active = doa.get_voice_active()
@@ -458,10 +459,10 @@ def main() -> None:
     # for the same reason as calibration_mode above.
     composing_mode = threading.Event()
 
-    # Set by start_doa_tracking() while the head is moving or still settling.
-    # vad_input_loop() is a separate thread polling the same VAD, so without
-    # a shared flag it heard the servo's own motor noise as speech.
-    servo_moving = threading.Event()
+    # Set by start_doa_tracking() only while the head recenters after a
+    # silence timeout - vad_input_loop() skips opening a recording then,
+    # since VAD activity during a recenter is the motor, not a person.
+    servo_recentering = threading.Event()
 
     # Set by ChatBridgeAdapter the instant a chat message is typed and sent -
     # see handle_turn()'s cancel_event param. Cleared by the turn loop below
@@ -526,14 +527,14 @@ def main() -> None:
         start_doa_tracking(
             doa, turntable, face, lock=doa_lock,
             assistant_speaking=assistant_speaking, calibration_mode=calibration_mode,
-            servo_moving=servo_moving,
+            servo_recentering=servo_recentering,
         )
         threading.Thread(
             target=vad_input_loop,
             args=(bus, turn_queue, stt, doa, doa_lock, mic_lock, assistant_speaking),
             kwargs={
                 "calibration_mode": calibration_mode, "composing_mode": composing_mode,
-                "servo_moving": servo_moving,
+                "servo_recentering": servo_recentering,
             },
             daemon=True,
         ).start()

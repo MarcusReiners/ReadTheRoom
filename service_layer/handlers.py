@@ -82,7 +82,7 @@ def start_doa_tracking(
     doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
-    post_move_quiet_s: float = 0.6, servo_moving=None,
+    post_move_quiet_s: float = 0.6, servo_recentering=None,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -119,15 +119,18 @@ def start_doa_tracking(
     quiet, recenters again, forever. Starting the window after the move gives
     the motor noise time to decay before the mic is trusted again.
 
-    servo_moving: a threading.Event held set for as long as the head is
-    moving OR still inside its post-move quiet window. This loop only gates
-    ITSELF on moving_until - main.py's vad_input_loop is a separate thread
-    polling the same VAD to decide when to record, and knew nothing about
-    servo motion, so it kept starting recordings on the motor's own noise.
-    The result wasn't just spurious recordings: real speech got started and
-    cut by servo noise instead of by the speaker, so ElevenLabs only ever
-    received 1-2 second fragments and returned mangled transcripts. Sharing
-    the flag lets the recorder ignore the same noise this loop already does.
+    servo_recentering: a threading.Event set only while the head is driving
+    back to home (and through its quiet window), so main.py's vad_input_loop
+    can ignore the motor noise that move makes.
+
+    Deliberately NOT set for tracking moves, which is the whole subtlety
+    here. The head turns toward a speaker BECAUSE they are speaking, so a
+    flag covering every move is raised exactly when real speech is happening
+    - an earlier version gated the recorder on that and killed the recording
+    of every utterance that made the head turn ("Aufnahme verworfen (Servo
+    bewegt sich)"), or stopped one from ever opening. A recenter is the
+    opposite case: it fires after silence_timeout_s of nobody talking, so
+    anything the mic hears during it really is the servo.
 
     eye_lead_s: on a detected direction, the eyes dart to it immediately and
     the head follows eye_lead_s later (a person's eyes move before their head
@@ -184,6 +187,8 @@ def start_doa_tracking(
                     )
                     settle_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
                     moving_until = time.monotonic() + settle_s
+                    if servo_recentering is not None:
+                        servo_recentering.set()
                     turntable.home(ramp_duration_s=settle_s)
                     at_home = True
                     last_active_time = time.monotonic()
@@ -191,8 +196,8 @@ def start_doa_tracking(
                 settling = time.monotonic() < moving_until
                 # Mirror the settle gate onto the shared flag so the recorder
                 # thread ignores exactly the window this loop already does.
-                if servo_moving is not None and not settling:
-                    servo_moving.clear()
+                if servo_recentering is not None and not settling:
+                    servo_recentering.clear()
 
                 if was_speaking and not speaking:
                     # A reply just finished - start the silence clock fresh
@@ -238,8 +243,6 @@ def start_doa_tracking(
                         )
 
                         moved = turntable.predict_relative_move(angle)
-                        if servo_moving is not None:
-                            servo_moving.set()
                         if moved > 0.5:
                             ramp_s = settle_base_s + moved / settle_deg_per_s
                             # Eyes drift back to center over the same span the
@@ -265,8 +268,8 @@ def start_doa_tracking(
                     ):
                         logger.info("[DOA] %.0fs Stille - Kopf kehrt zur Home-Position zurueck.", silence_timeout_s)
                         ramp_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
-                        if servo_moving is not None:
-                            servo_moving.set()
+                        if servo_recentering is not None:
+                            servo_recentering.set()
                         face.animate_eye_direction(90.0, duration_s=ramp_s)
                         turntable.home(ramp_duration_s=ramp_s)
                         at_home = True
