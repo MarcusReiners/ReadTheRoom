@@ -184,6 +184,8 @@ Other scripts, roughly in the order you'd reach for them:
 | `raw_serial_monitor.py` | Raw bytes off the bridge's serial port, bypassing JSON parsing — for diagnosing a link that "connects" but yields nothing usable |
 | `test_tie_led.py` | Exercises the 7-LED tie strip on the bridge ESP32 |
 | `simulate_doa.py` | Replays DOA angles through the same conversion the live adapter uses, no hardware needed |
+| `study_head_accuracy.py` | Runs Study 1 (head-orientation accuracy), logging every trial — see [study/README.md](study/README.md) |
+| `analyse_head_accuracy.py` | Analyses the Study 1 CSVs: error decomposition, Kruskal-Wallis, optional plots |
 
 [scripts/home_servo.py](scripts/home_servo.py) moves the servo to its front-facing center position and holds it there (doesn't detach) until you Ctrl+C — handy while physically assembling the head, so you can attach the horn/mount at a known reference angle instead of wherever it happened to power on at:
 
