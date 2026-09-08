@@ -121,7 +121,7 @@ class RadarLD2450Adapter:
         try:
             self._serial.write(line.encode("utf-8"))
         except serial.SerialException as e:
-            logger.warning("[Radar] Befehl konnte nicht gesendet werden: %s", e)
+            logger.warning("[Radar] Could not send command: %s", e)
 
     def _read_loop(self) -> None:
         while not self._stop.is_set():
@@ -134,7 +134,7 @@ class RadarLD2450Adapter:
                     self._pending_commands.clear()
                 self._consume(self._serial)
             except serial.SerialException as e:
-                logger.warning("[Radar] Bridge auf %s nicht erreichbar: %s", self._serial_port, e)
+                logger.warning("[Radar] Bridge on %s unreachable: %s", self._serial_port, e)
                 time.sleep(1.0)
             finally:
                 with self._write_lock:

@@ -19,7 +19,7 @@ def main() -> None:
     logging_setup.configure_logging(config)
 
     if not config.USE_SERVO:
-        print("USE_SERVO ist False - kein Servo zum Homen.")
+        print("USE_SERVO is False - no servo to home.")
         return
 
     from adapters.factory import build_turntable
@@ -27,11 +27,11 @@ def main() -> None:
     turntable = build_turntable(config)
     if args.angle is not None:
         turntable.set_doa_angle_immediate(args.angle)
-        print(f"Servo haelt bei DOA-Winkel {args.angle:.0f} Grad (90=Home).")
+        print(f"Servo holding at DOA angle {args.angle:.0f} deg (90 = home).")
     else:
         turntable.home()
-        print("Servo in Home-Position.")
-    print("Strg+C zum Beenden (Servo wird danach freigegeben).")
+        print("Servo at home position.")
+    print("Ctrl+C to quit (the servo is released afterwards).")
 
     try:
         while True:
@@ -40,7 +40,7 @@ def main() -> None:
         pass
     finally:
         turntable.stop()
-        print("\nServo freigegeben. Ciao!")
+        print("\nServo released.")
 
 
 if __name__ == "__main__":

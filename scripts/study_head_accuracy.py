@@ -18,6 +18,8 @@ STUDY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 SETTLE_QUIET_S = 1.0
 MISS_TIMEOUT_S = 5.0
 ARM_TIMEOUT_S = 30.0
+POST_MOVE_QUIET_S = 1.5
+MIN_DOA_SAMPLES = 3
 HOME_SETTLE_S = 1.5
 HOME_TOLERANCE_DEG = 2.0
 HOME_ATTEMPTS = 3
@@ -41,7 +43,7 @@ CSV_COLUMNS = [
     "playback_start_ts", "settle_ts", "settle_time_s", "settle_from_voice_s", "playback_mode",
     "head_heading_at_start", "started_at_home",
     "doa_logged_angle", "head_heading_at_doa", "doa_implied_bearing",
-    "servo_target_angle", "physical_angle_measured",
+    "servo_target_angle", "servo_first_target_angle", "n_track_moves", "physical_angle_measured",
     "moved", "miss", "simulated", "n_doa_samples", "n_servo_commands", "notes",
 ]
 
@@ -259,14 +261,6 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
             break
         print(f"  head drifted to {turntable.current_heading_degrees:.1f} during homing "
               f"(a tracking reaction was still in flight), retrying")
-    recorder.clear()
-
-    start_heading = turntable.current_heading_degrees
-    started_at_home = abs(start_heading - home_angle) <= HOME_TOLERANCE_DEG
-    if not started_at_home:
-        print(f"WARNING head is at {start_heading:.1f}, expected {home_angle:.1f}. "
-              "Bearings for this trial will be off - redo it once the room is quiet.")
-
     player = None
     if play_file:
         print("Playing stimulus...")
@@ -281,6 +275,12 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         playback_start_mono = time.monotonic()
         playback_start_ts = _now_iso()
         playback_mode = "manual"
+    recorder.clear()
+    start_heading = turntable.current_heading_degrees
+    started_at_home = abs(start_heading - home_angle) <= HOME_TOLERANCE_DEG
+    if not started_at_home:
+        print(f"WARNING head is at {start_heading:.1f}, expected {home_angle:.1f}. "
+              "Bearings for this trial will be off - redo it once the room is quiet.")
     if on_playback_start is not None:
         on_playback_start()
 
@@ -296,11 +296,13 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         settle_from_voice_s = (round(settle_mono - doa_samples[0]["t"], 3)
                                if doa_samples else "")
         servo_target = track_moves[-1]["resulting_heading"]
+        servo_first_target = track_moves[0]["resulting_heading"]
     else:
         settle_ts = ""
         settle_time_s = ""
         settle_from_voice_s = ""
         servo_target = ""
+        servo_first_target = ""
 
     if player is not None and player.poll() is None:
         player.wait()
@@ -324,6 +326,7 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         "head_heading_at_start": round(start_heading, 2), "started_at_home": int(started_at_home),
         "doa_logged_angle": doa_angle, "head_heading_at_doa": head_at_doa,
         "doa_implied_bearing": implied, "servo_target_angle": servo_target,
+        "servo_first_target_angle": servo_first_target, "n_track_moves": len(track_moves),
         "physical_angle_measured": "",
         "moved": int(bool(track_moves)), "miss": int(miss), "simulated": int(bool(simulated)),
         "n_doa_samples": len(doa_samples), "n_servo_commands": len(pwm_updates),
@@ -346,6 +349,10 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
     else:
         print(f"settle_time={settle_time_s}s  (from voice {settle_from_voice_s}s)  "
               f"doa={doa_angle}  implied_bearing={implied}  servo_target={servo_target}")
+        if len(track_moves) > 1:
+            print(f"  NOTE {len(track_moves)} moves this trial (first {servo_first_target}, "
+                  f"final {servo_target}). Check the JSONL: retriggered by the servo's own "
+                  "noise, or by the stimulus still playing?")
     if measure:
         print("Take the overhead photo now.")
     return row, detail
@@ -385,6 +392,10 @@ def main():
     parser.add_argument("--simulate", action="store_true", help="no hardware, for rehearsing the procedure")
     parser.add_argument("--play", metavar="WAV",
                         help="stimulus file the script plays itself, so onset is machine-timed")
+    parser.add_argument("--min-doa-samples", type=int, default=MIN_DOA_SAMPLES,
+                        help="readings required before the head is allowed to move")
+    parser.add_argument("--post-move-quiet", type=float, default=POST_MOVE_QUIET_S,
+                        help="seconds the tracker ignores DOA after a move, to reject servo noise")
     parser.add_argument("--no-measure", action="store_true",
                         help="skip the protractor prompt; error is then commanded-only")
     parser.add_argument("--arm-timeout", type=float, default=ARM_TIMEOUT_S,
@@ -418,7 +429,7 @@ def main():
         base_doa = SimulatedDOA(lambda: args.angle)
     else:
         if not config.USE_SERVO:
-            print("USE_SERVO ist False - kein Servo zum Messen.")
+            print("USE_SERVO is False - no servo to measure.")
             return
         from adapters.factory import build_turntable
         from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
@@ -434,12 +445,19 @@ def main():
         doa, turntable, SilentFace(),
         lock=threading.Lock(),
         silence_timeout_s=0,
+        post_move_quiet_s=args.post_move_quiet,
+        min_doa_samples=args.min_doa_samples,
+        accept_range=(base_turntable.safe_min_angle, base_turntable.safe_max_angle),
     )
 
     print(f"\nSession {args.session}")
     print(f"Data sheet : {csv_path}")
     print(f"Trial log  : {jsonl_path}")
     print(f"Servo range: {base_turntable.safe_min_angle:.0f}-{base_turntable.safe_max_angle:.0f} deg")
+    print(f"Post-move deaf period: {args.post_move_quiet:.1f}s")
+    print(f"Min DOA samples to move: {args.min_doa_samples}")
+    print(f"Accepted bearings: {base_turntable.safe_min_angle:.0f}-"
+          f"{base_turntable.safe_max_angle:.0f} deg (others ignored as impossible)")
     print(f"Condition  : angle={args.angle} distance={args.distance}m noise={args.noise}, {args.reps} reps")
     if args.play:
         print(f"Stimulus   : {args.play} (auto, +{args.play_latency_ms:.0f}ms latency offset)")

@@ -145,13 +145,13 @@ class StreamingTTSAdapter:
                 aplay_proc.wait()
                 completed = aplay_proc.returncode == 0
 
-            logger.info("Antworte: %s", full_text)
+            logger.info("Replying: %s", full_text)
             return full_text
 
         except BrokenPipeError:
             return full_text
         except Exception as e:
-            logger.exception("TTS Fehler: %s: %s", type(e).__name__, e)
+            logger.exception("TTS error: %s: %s", type(e).__name__, e)
             return full_text
         finally:
             self._streaming = False

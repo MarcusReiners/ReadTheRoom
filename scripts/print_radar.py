@@ -14,7 +14,7 @@ def main() -> None:
     logging_setup.configure_logging(config)
 
     if config.RADAR_PROVIDER != "ld2450":
-        print(f"RADAR_PROVIDER ist {config.RADAR_PROVIDER!r}, nicht 'ld2450' - nichts zu testen.")
+        print(f"RADAR_PROVIDER is {config.RADAR_PROVIDER!r}, not 'ld2450' - nothing to test.")
         return
 
     from adapters.factory import build_radar
@@ -26,7 +26,7 @@ def main() -> None:
     radar = build_radar(config, bus)
     print(
         "Radar/ESP-NOW-Test - nur die Bridge-Verbindung und ankommende Sensordaten, "
-        "kein Servo/Matrix/STT/LLM/TTS. Strg+C zum Beenden.\n"
+        "kein Servo/Matrix/STT/LLM/TTS. Ctrl+C to quit.\n"
         f"Port: {config.RADAR_SERIAL_PORT}\n"
     )
     radar.start()
@@ -39,7 +39,7 @@ def main() -> None:
     finally:
         if hasattr(radar, "stop"):
             radar.stop()
-        print("\nCiao!")
+        print("\nBye!")
 
 
 if __name__ == "__main__":

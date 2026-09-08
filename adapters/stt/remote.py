@@ -13,7 +13,7 @@ class RemoteSTTAdapter:
 
     def transcribe(self, audio_file: str) -> str:
         if not os.path.exists(audio_file):
-            logger.error("Audiodatei '%s' nicht gefunden.", audio_file)
+            logger.error("Audio file '%s' not found.", audio_file)
             return ""
         try:
             with open(audio_file, "rb") as f:
@@ -25,7 +25,7 @@ class RemoteSTTAdapter:
             response.raise_for_status()
             return response.json().get("text", "").strip()
         except requests.RequestException as e:
-            logger.error("STT Fehler (Mac-Server): %s", e)
+            logger.error("STT error (Mac server): %s", e)
             return ""
 
     def stop(self) -> None:

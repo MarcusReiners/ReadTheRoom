@@ -70,7 +70,7 @@ def _finish_recording(proc, raw_file, output_file: str) -> bool:
     try:
         if not os.path.exists(raw_file) or os.path.getsize(raw_file) == 0:
             stderr = proc.stderr.read().decode().strip() if proc.stderr else ""
-            logger.error("arecord Fehler: %s", stderr or "keine Audiodaten aufgenommen")
+            logger.error("arecord error: %s", stderr or "no audio recorded")
             return False
 
         result = subprocess.run(
@@ -79,7 +79,7 @@ def _finish_recording(proc, raw_file, output_file: str) -> bool:
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
         if result.returncode != 0:
-            logger.error("sox Fehler: %s", result.stderr.decode().strip())
+            logger.error("sox error: %s", result.stderr.decode().strip())
             return False
 
         return os.path.exists(output_file)
@@ -147,11 +147,11 @@ def _transcribe_and_enqueue(stt, turn_queue: "queue.PriorityQueue", temp_in: str
     if user_text:
         cleaned = _strip_non_speech_annotations(user_text)
         if cleaned != user_text.strip():
-            logger.info("[%s] Nicht-Sprache-Anmerkungen entfernt: '%s' -> '%s'", log_prefix, user_text, cleaned)
+            logger.info("[%s] Removed non-speech annotations: '%s' -> '%s'", log_prefix, user_text, cleaned)
         user_text = cleaned
 
     if not user_text or len(user_text) < 2:
-        logger.warning("%s: nichts erkannt.", log_prefix)
+        logger.warning("%s: nothing recognised.", log_prefix)
         return
 
     logger.info("[%s] Du hast gesagt: '%s'", log_prefix, user_text)
@@ -164,7 +164,7 @@ def console_input_loop(
     """Reads stdin on its own thread: bare ENTER starts/stops a voice recording,
     whose result is pushed onto turn_queue like any other turn. Still works
     as a manual override alongside automatic VAD-triggered recording."""
-    print("\nENTER startet die Aufnahme, ENTER stoppt sie.\n")
+    print("\nENTER starts recording, ENTER stops it.\n")
     while True:
         try:
             line = input()
@@ -172,14 +172,14 @@ def console_input_loop(
             break
 
         temp_in = "temp_in.wav"
-        print("Aufnahme läuft... sprechen und mit ENTER beenden.")
+        print("Recording... speak, then press ENTER to stop.")
         with mic_lock:
             bus.publish(ListeningStateChanged(listening=True))
             success = record_audio(temp_in)
             bus.publish(ListeningStateChanged(listening=False))
 
         if not success:
-            logger.error("Aufnahme fehlgeschlagen.")
+            logger.error("Recording failed.")
             continue
 
         _transcribe_and_enqueue(stt, turn_queue, temp_in, "manuell")
@@ -317,11 +317,11 @@ def vad_input_loop(
         if abort_reason is not None:
             if os.path.exists(temp_in):
                 os.remove(temp_in)
-            logger.info("[VAD] Aufnahme verworfen (%s).", abort_reason)
+            logger.info("[VAD] Recording discarded (%s).", abort_reason)
             continue
 
         if not success:
-            logger.error("VAD-Aufnahme fehlgeschlagen.")
+            logger.error("VAD-Recording failed.")
             continue
 
         _transcribe_and_enqueue(stt, turn_queue, temp_in, "VAD")
@@ -380,7 +380,7 @@ def handle_turn(
         # and left the question that triggered it sitting in the history
         # unanswered, so the model would keep trying to answer it alongside
         # whatever was actually asked next.
-        logger.warning("Fehlerantwort wird nicht in der Historie gespeichert: %s", full_text)
+        logger.warning("Error reply not stored in the conversation history: %s", full_text)
     else:
         store.add_assistant_message(conversation_id, full_text)
     bus.publish(AssistantMessageCompleted(text=full_text, conversation_id=conversation_id))
@@ -553,9 +553,9 @@ def main() -> None:
                 # so losing this thread used to take the whole process down
                 # with it - or, worse, leave the unit visibly alive and
                 # tracking while silently never answering again.
-                logger.exception("Turn fehlgeschlagen - Assistent laeuft weiter.")
+                logger.exception("Turn failed - the assistant keeps running.")
         except KeyboardInterrupt:
-            print("\nCiao!")
+            print("\nBye!")
             stt.stop()
             if hasattr(turntable, "stop"):
                 turntable.stop()

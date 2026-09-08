@@ -25,9 +25,9 @@ class LocalTTSAdapter(StreamingTTSAdapter):
                 f"Piper-Modell nicht gefunden: {model_path}\n"
                 "Bitte laden: wget .../de_DE-thorsten-low.onnx -P ~/piper-voices/"
             )
-        logger.info("Lade Piper-Stimme...")
+        logger.info("Loading Piper voice...")
         self._voice = PiperVoice.load(model_path)
-        logger.info("Piper bereit.")
+        logger.info("Piper ready.")
 
     @property
     def sample_rate(self) -> int:

@@ -49,7 +49,7 @@ class LedMatrix:
 
     def start(self) -> None:
         self._thread.start()
-        logger.info("[LedMatrix] %sx%s gestartet.", self.width, self.height)
+        logger.info("[LedMatrix] %sx%s started.", self.width, self.height)
 
     def _loop(self) -> None:
         canvas = self.matrix.CreateFrameCanvas()
