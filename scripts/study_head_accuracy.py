@@ -20,7 +20,11 @@ MISS_TIMEOUT_S = 5.0
 ARM_TIMEOUT_S = 30.0
 POST_MOVE_QUIET_S = 1.5
 MIN_DOA_SAMPLES = 3
-DOA_SAMPLE_INTERVAL_S = 0.2
+DOA_SAMPLE_INTERVAL_S = 0.25
+DOA_ONSET_SKIP_S = 1.5
+PLAN_ANGLES = [45, 90, 135]
+PLAN_DISTANCES = [0.5, 1.25, 2.5]
+PLAN_NOISES = ["none", "ambient"]
 RESUME_LATENCY_S = 0.35
 HOME_SETTLE_S = 1.5
 HOME_TOLERANCE_DEG = 2.0
@@ -46,7 +50,9 @@ CSV_COLUMNS = [
     "head_heading_at_start", "started_at_home",
     "doa_logged_angle", "head_heading_at_doa", "doa_implied_bearing",
     "servo_target_angle", "servo_first_target_angle", "n_track_moves", "physical_angle_measured",
-    "moved", "miss", "simulated", "n_doa_samples", "n_servo_commands", "notes",
+    "moved", "miss", "simulated", "n_doa_samples", "n_servo_commands",
+    "cfg_onset_skip_s", "cfg_sample_interval_s", "cfg_min_samples", "cfg_post_move_quiet_s",
+    "notes",
 ]
 
 
@@ -256,7 +262,7 @@ def wait_until_settled(recorder, deadline_s, quiet_s, arm_timeout_s=None, progre
 
 def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_quiet_s, miss_timeout_s,
               on_playback_start=None, play_file=None, play_latency_s=0.0, arm_timeout_s=None,
-              simulated=False, measure=True, paused=None):
+              simulated=False, measure=True, paused=None, cfg=None):
     print(f"\n--- trial {trial_id}  angle={condition['angle_true']}  "
           f"distance={condition['distance_m']}m  noise={condition['noise_condition']}  rep={rep} ---")
     if paused is not None:
@@ -354,13 +360,15 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         "physical_angle_measured": "",
         "moved": int(bool(track_moves)), "miss": int(miss), "simulated": int(bool(simulated)),
         "n_doa_samples": len(doa_samples), "n_servo_commands": len(pwm_updates),
+        "cfg_onset_skip_s": cfg["onset_skip_s"], "cfg_sample_interval_s": cfg["sample_interval_s"],
+        "cfg_min_samples": cfg["min_samples"], "cfg_post_move_quiet_s": cfg["post_move_quiet_s"],
         "notes": "",
     }
     detail = {
         "trial_id": trial_id, "session": session, "condition": condition, "rep": rep,
         "playback_start_ts": playback_start_ts, "settled": settled, "miss": miss,
         "playback_mode": playback_mode, "play_file": play_file or "",
-        "simulated": bool(simulated),
+        "simulated": bool(simulated), "config": cfg,
         "doa_samples": doa_samples, "moves": moves, "pwm_updates": pwm_updates,
     }
 
@@ -416,6 +424,8 @@ def main():
     parser.add_argument("--simulate", action="store_true", help="no hardware, for rehearsing the procedure")
     parser.add_argument("--play", metavar="WAV",
                         help="stimulus file the script plays itself, so onset is machine-timed")
+    parser.add_argument("--doa-onset-skip", type=float, default=DOA_ONSET_SKIP_S,
+                        help="seconds to discard after voice starts, before sampling begins")
     parser.add_argument("--doa-sample-interval", type=float, default=DOA_SAMPLE_INTERVAL_S,
                         help="seconds between DOA samples; must exceed the array's update period")
     parser.add_argument("--min-doa-samples", type=int, default=MIN_DOA_SAMPLES,
@@ -436,7 +446,7 @@ def main():
         check_player()
 
     if args.plan:
-        print_plan([45, 90, 135], [0.5, 1.5, 3.0], ["none", "ambient"], args.reps)
+        print_plan(PLAN_ANGLES, PLAN_DISTANCES, PLAN_NOISES, args.reps)
         return
 
     if args.angle is None or args.distance is None or args.noise is None:
@@ -475,6 +485,7 @@ def main():
         post_move_quiet_s=args.post_move_quiet,
         min_doa_samples=args.min_doa_samples,
         doa_sample_interval_s=args.doa_sample_interval,
+        doa_onset_skip_s=args.doa_onset_skip,
         sample_window_s=max(2.5, args.doa_sample_interval * 12),
         accept_range=(base_turntable.safe_min_angle, base_turntable.safe_max_angle),
         paused=tracking_paused,
@@ -486,9 +497,13 @@ def main():
     print(f"Servo range: {base_turntable.safe_min_angle:.0f}-{base_turntable.safe_max_angle:.0f} deg")
     print(f"Post-move deaf period: {args.post_move_quiet:.1f}s")
     print(f"Min DOA samples to move: {args.min_doa_samples}")
+    print(f"Onset skipped: first {args.doa_onset_skip:.2f}s after voice starts "
+          "(array needs time to converge)")
     print(f"DOA sample spacing: {args.doa_sample_interval * 1000:.0f}ms "
           f"(5 samples span {args.doa_sample_interval * 4:.2f}s minimum, "
           f"up to {max(2.5, args.doa_sample_interval * 12):.1f}s through VAD dropouts)")
+    print(f"Head commits ~{args.doa_onset_skip + args.doa_sample_interval * 4:.2f}s after voice "
+          f"starts - stimulus must sustain past that")
     print(f"Accepted bearings: {base_turntable.safe_min_angle:.0f}-"
           f"{base_turntable.safe_max_angle:.0f} deg (others ignored as impossible)")
     print(f"Condition  : angle={args.angle} distance={args.distance}m noise={args.noise}, {args.reps} reps")
@@ -504,6 +519,13 @@ def main():
         print("\nAfter each trial: measure the head with the protractor, then")
         print("ENTER = keep and continue, r = redo this rep, q = quit.\n")
 
+    cfg = {
+        "onset_skip_s": args.doa_onset_skip,
+        "sample_interval_s": args.doa_sample_interval,
+        "min_samples": args.min_doa_samples,
+        "post_move_quiet_s": args.post_move_quiet,
+        "doa_samples": 5,
+    }
     condition = {"angle_true": args.angle, "distance_m": args.distance, "noise_condition": args.noise}
     rep = 1
     kept = 0
@@ -518,7 +540,7 @@ def main():
                 args.settle_quiet, args.miss_timeout, on_playback_start=on_start,
                 play_file=args.play, play_latency_s=args.play_latency_ms / 1000.0,
                 arm_timeout_s=args.arm_timeout, simulated=args.simulate,
-                measure=not args.no_measure, paused=tracking_paused,
+                measure=not args.no_measure, paused=tracking_paused, cfg=cfg,
             )
             measured = "" if args.no_measure else _ask("Protractor reading in deg (ENTER to skip) > ").strip()
             if measured:

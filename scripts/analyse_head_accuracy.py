@@ -166,6 +166,9 @@ def enrich(rows):
         rec["distance_m"] = fnum(row, "distance_m")
         rec["miss"] = (row.get("miss") or "0").strip() in ("1", "true", "True")
         rec["simulated"] = (row.get("simulated") or "0").strip() in ("1", "true", "True")
+        rec["cfg"] = tuple((row.get(k) or "").strip() for k in
+                           ("cfg_onset_skip_s", "cfg_sample_interval_s",
+                            "cfg_min_samples", "cfg_post_move_quiet_s"))
         rec["settle_time_s"] = fnum(row, "settle_time_s")
         rec["settle_from_voice_s"] = fnum(row, "settle_from_voice_s")
         rec["playback_mode"] = (row.get("playback_mode") or "").strip()
@@ -263,6 +266,23 @@ def main():
         print("                 show mechanical error - report this limitation.")
     else:
         print(f"Protractor     : all {len(measured)} trials physically measured")
+
+    cfgs = {}
+    for r in analysed:
+        cfgs.setdefault(r["cfg"], []).append(r)
+    if len(cfgs) > 1:
+        print("\n" + "!" * 78)
+        print("WARNING: trials were collected under DIFFERENT tracker settings.")
+        print("Angle/distance/noise effects are confounded with these changes -")
+        print("a difference between conditions may just be a difference in setup.")
+        for cfg, rs in sorted(cfgs.items(), key=lambda kv: -len(kv[1])):
+            label = ("onset_skip={0}s interval={1}s min_samples={2} post_move_quiet={3}s"
+                     .format(*(c or "?" for c in cfg)))
+            angles = sorted({r["angle_true"] for r in rs})
+            print(f"  {len(rs):>3} trials  {label}")
+            print(f"       angles: {', '.join(f'{a:g}' for a in angles)}")
+        print("Either re-run the odd group, or report them as separate datasets.")
+        print("!" * 78)
 
     print("\n" + "-" * 78)
     print("ERROR DECOMPOSITION (degrees, signed bias / unsigned magnitudes)")
