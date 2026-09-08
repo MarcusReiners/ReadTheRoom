@@ -84,6 +84,7 @@ def start_doa_tracking(
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
     post_move_quiet_s: float = 0.6, servo_recentering=None, min_doa_samples: int = 2,
     accept_range=None, paused=None, sample_window_s: float = 0.6,
+    doa_sample_interval_s=None,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -238,8 +239,14 @@ def start_doa_tracking(
                         # median matters most. Skip the quiet polls instead and
                         # keep gathering until either enough samples or the
                         # window runs out.
+                        # Spacing is deliberately NOT tied to eye_lead_s (an
+                        # animation timing) - samples closer together than the
+                        # array's own DOA update period are the same estimate
+                        # read twice, and a median over duplicates averages
+                        # nothing away.
                         samples = [angle]
-                        step = eye_lead_s / max(1, doa_samples - 1)
+                        step = (doa_sample_interval_s if doa_sample_interval_s
+                                else eye_lead_s / max(1, doa_samples - 1))
                         sample_deadline = time.monotonic() + sample_window_s
                         while len(samples) < doa_samples and time.monotonic() < sample_deadline:
                             time.sleep(step)
