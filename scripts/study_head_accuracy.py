@@ -205,7 +205,7 @@ def print_plan(angles, distances, noises, reps):
     print()
 
 
-def wait_until_settled(recorder, deadline_s, quiet_s, arm_timeout_s=None):
+def wait_until_settled(recorder, deadline_s, quiet_s, arm_timeout_s=None, progress=False):
     """Waits for the head to react and come to rest.
 
     deadline_s only starts counting once the array first reports voice, so an
@@ -214,18 +214,35 @@ def wait_until_settled(recorder, deadline_s, quiet_s, arm_timeout_s=None):
     """
     start = time.monotonic()
     arm_deadline = start + (arm_timeout_s if arm_timeout_s is not None else deadline_s)
+    shown = None
     while True:
         now = time.monotonic()
         last = recorder.last_activity_time()
         if recorder.has_track_move() and last is not None and now - last >= quiet_s:
+            if progress:
+                sys.stdout.write("\r" + " " * 60 + "\r")
+                sys.stdout.flush()
             return True
         voice_at = recorder.first_doa_time()
+        if progress:
+            if voice_at is None:
+                label = f"  waiting for playback... {arm_deadline - now:.0f}s left"
+            else:
+                label = f"  voice detected, tracking... {now - voice_at:.1f}s"
+            if label != shown:
+                sys.stdout.write("\r" + label.ljust(58))
+                sys.stdout.flush()
+                shown = label
         if voice_at is None:
             if now >= arm_deadline:
-                return False
+                break
         elif now - voice_at >= deadline_s:
-            return False
+            break
         time.sleep(0.05)
+    if progress:
+        sys.stdout.write("\r" + " " * 60 + "\r")
+        sys.stdout.flush()
+    return False
 
 
 def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_quiet_s, miss_timeout_s,
@@ -267,7 +284,8 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
     if on_playback_start is not None:
         on_playback_start()
 
-    settled = wait_until_settled(recorder, miss_timeout_s, settle_quiet_s, arm_timeout_s)
+    settled = wait_until_settled(recorder, miss_timeout_s, settle_quiet_s, arm_timeout_s,
+                                 progress=True)
     doa_samples, moves, pwm_updates = recorder.snapshot()
     track_moves = [m for m in moves if m["kind"] == "track"]
 
