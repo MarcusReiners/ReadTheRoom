@@ -149,6 +149,7 @@ SERVO_CALIBRATION_PATH = _env("SERVO_CALIBRATION_PATH", "servo_calibration.json"
 # straight ahead of the mount - see RespeakerDOAAdapter.get_direction_degrees().
 # Tune by watching "[DOA] Stimme erkannt bei X Grad" while standing dead ahead.
 DOA_FRONT_REFERENCE_DEGREES = float(_env("DOA_FRONT_REFERENCE_DEGREES", "0"))
+DOA_OFFAXIS_GAIN = float(_env("DOA_OFFAXIS_GAIN", "1.0"))
 
 # --- Radar (HLK-LD2450 on a Seeed XIAO ESP32S3 -> ESP-NOW -> bridge ESP32 --
 # --- -> USB serial into the Pi; see mmWave/ and mmWaveBridge/) -------------

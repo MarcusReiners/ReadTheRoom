@@ -16,7 +16,8 @@ _DOAANGLE_PARAM = (21, 0x00)
 _VOICEACTIVITY_PARAM = (19, 0x20)
 
 
-def raw_to_target_degrees(raw: float, front_reference_degrees: float) -> float:
+def raw_to_target_degrees(raw: float, front_reference_degrees: float,
+                          offaxis_gain: float = 1.0) -> float:
     """Converts a raw array reading into a DOA-convention angle (90 = straight
     ahead, matching ServoTurntableAdapter's rotate_towards()/track_relative_angle()
     - track_relative_angle() derives its actual servo delta from
@@ -35,6 +36,13 @@ def raw_to_target_degrees(raw: float, front_reference_degrees: float) -> float:
     target - 90 is always the smallest real turn that reaches the intended
     direction, which is the only sensible reading for hardware with no wraparound."""
     diff = (raw - front_reference_degrees + 180.0) % 360.0 - 180.0
+    # The array under-reports how far off-axis a source is: measured on this
+    # mount, a true 45 read as 58.6 and a true 135 as 123.0, while 90 was
+    # exact - a linear compression toward the front with gain 0.716
+    # (R2 = 0.9998 over those three points). Dividing by that gain undoes it.
+    # offaxis_gain=1.0 leaves the reading untouched.
+    if offaxis_gain and offaxis_gain != 1.0:
+        diff /= offaxis_gain
     return 90.0 + diff
 
 
@@ -67,7 +75,8 @@ class RespeakerDOAAdapter:
     usb_4_mic_array/tuning.py, independent of the audio stream.
     """
 
-    def __init__(self, front_reference_degrees: float = 0.0) -> None:
+    def __init__(self, front_reference_degrees: float = 0.0,
+                 offaxis_gain: float = 1.0) -> None:
         """front_reference_degrees is whatever raw DOA value the array reports
         when a speaker is actually standing straight ahead of the physical
         mount - the array's own 0 has no relation to how it happens to be
@@ -76,6 +85,7 @@ class RespeakerDOAAdapter:
         while standing dead ahead and setting DOA_FRONT_REFERENCE_DEGREES to
         that value; default 0 is just an unconfigured starting guess."""
         self._front_reference_degrees = front_reference_degrees
+        self._offaxis_gain = offaxis_gain
         self._dev = usb.core.find(idVendor=_VENDOR_ID, idProduct=_PRODUCT_ID)
         if self._dev is None:
             raise RuntimeError(
@@ -109,7 +119,7 @@ class RespeakerDOAAdapter:
 
     def get_direction_degrees(self) -> float:
         raw = float(self._read_param(*_DOAANGLE_PARAM))
-        return raw_to_target_degrees(raw, self._front_reference_degrees)
+        return raw_to_target_degrees(raw, self._front_reference_degrees, self._offaxis_gain)
 
     def get_voice_active(self) -> bool:
         """Onboard VAD flag - use this to gate on "loud enough"/speech-like sound
