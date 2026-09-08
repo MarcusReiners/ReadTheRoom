@@ -51,3 +51,7 @@ def main() -> None:
     print(f"-> the array updates roughly every {med * 1000:.0f}ms ({1.0 / med:.1f} Hz)")
     print(f"-> space study samples at least {med * 1000:.0f}ms apart "
           f"(--doa-sample-interval {max(0.05, med):.2f})")
+
+
+if __name__ == "__main__":
+    main()
