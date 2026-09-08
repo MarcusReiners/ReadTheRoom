@@ -24,10 +24,10 @@ def probe_direction(turntable, start_angle: float, sign: int, step_degrees: floa
     while True:
         line = input(f"  [Position {angle:.1f} Grad] > ").strip().lower()
         if line in ("q", "quit"):
-            print("Abgebrochen - keine Grenze fuer diese Richtung gespeichert.")
+            print("Cancelled - no limit saved for this direction.")
             return start_angle
         if line in ("s", "stop"):
-            print(f"Grenze {label}: {last_safe:.1f} Grad.")
+            print(f"Limit {label}: {last_safe:.1f} deg.")
             return last_safe
 
         # Any other input (including empty Enter) advances one step - this
@@ -52,7 +52,7 @@ def main() -> None:
     logging_setup.configure_logging(config)
 
     if not config.USE_SERVO:
-        print("USE_SERVO ist False - kein Servo zum Testen.")
+        print("USE_SERVO is False - no servo to test.")
         return
 
     step_degrees = DEFAULT_STEP_DEGREES
@@ -88,13 +88,13 @@ def main() -> None:
         input("Enter zum Start Richtung MIN (Strg+C jederzeit zum Abbrechen ohne Speichern) > ")
         min_limit = probe_direction(turntable, start_angle, sign=-1, step_degrees=step_degrees, label="MIN")
 
-        print(f"\nZurueck zur Startposition ({start_angle:.1f} Grad)...")
+        print(f"\nBack to the start position ({start_angle:.1f} deg)...")
         turntable.set_raw_angle(start_angle)
 
         input("Enter zum Start Richtung MAX > ")
         max_limit = probe_direction(turntable, start_angle, sign=1, step_degrees=step_degrees, label="MAX")
 
-        print(f"\nZurueck zur Startposition ({start_angle:.1f} Grad)...")
+        print(f"\nBack to the start position ({start_angle:.1f} deg)...")
         turntable.set_raw_angle(start_angle)
 
         margin = max(step_degrees, 5.0)
@@ -112,10 +112,10 @@ def main() -> None:
             "Bereichs liegen - andernfalls calibrate_servo_home.py erneut ausfuehren."
         )
     except KeyboardInterrupt:
-        print("\nAbgebrochen - keine Aenderung vorgenommen.")
+        print("\nCancelled - nothing changed.")
     finally:
         turntable.stop()
-        print("Servo freigegeben. Ciao!")
+        print("Servo released.")
 
 
 if __name__ == "__main__":

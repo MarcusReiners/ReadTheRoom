@@ -16,7 +16,7 @@ def main() -> None:
     from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
 
     doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
-    print("DOA-Ausgabe - kein Servo, kein Sensor-Rauschfilter. Strg+C zum Beenden.\n")
+    print("DOA output - no servo, no sensor noise filter. Ctrl+C to quit.\n")
 
     try:
         while True:
@@ -27,7 +27,7 @@ def main() -> None:
         pass
     finally:
         doa.close()
-        print("\nCiao!")
+        print("\nBye!")
 
 
 if __name__ == "__main__":

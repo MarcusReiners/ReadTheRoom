@@ -330,7 +330,7 @@ class ServoTurntableAdapter:
         else:
             self.current_heading_degrees = center
             self._servo.angle = center
-        logger.info("[Servo] Home-Position (%.0f Grad).", center)
+        logger.info("[Servo] Home position (%.0f deg).", center)
 
     def set_angle_immediate(self, angle_degrees: float) -> None:
         """Directly drives the servo to an exact angle already expressed in

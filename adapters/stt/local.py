@@ -29,11 +29,11 @@ class LocalSTTAdapter:
         logger.info("Lade Whisper-Modell...")
         self._model = WhisperModel(model_path, device="cpu", compute_type=compute_type,
                                    cpu_threads=cpu_threads, num_workers=1)
-        logger.info("Whisper bereit.")
+        logger.info("Whisper ready.")
 
     def transcribe(self, audio_file: str) -> str:
         if not os.path.exists(audio_file):
-            logger.error("Audiodatei '%s' nicht gefunden.", audio_file)
+            logger.error("Audio file '%s' not found.", audio_file)
             return ""
         try:
             segments, info = self._model.transcribe(
@@ -51,7 +51,7 @@ class LocalSTTAdapter:
             return text.strip()
 
         except Exception as e:
-            logger.exception("STT Fehler: %s: %s", type(e).__name__, e)
+            logger.exception("STT error: %s: %s", type(e).__name__, e)
             return ""
 
     def stop(self) -> None:

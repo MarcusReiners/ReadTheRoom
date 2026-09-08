@@ -25,7 +25,7 @@ class ElevenLabsSTTAdapter:
 
     def transcribe(self, audio_file: str) -> str:
         if not os.path.exists(audio_file):
-            logger.error("Audiodatei '%s' nicht gefunden.", audio_file)
+            logger.error("Audio file '%s' not found.", audio_file)
             return ""
         try:
             with open(audio_file, "rb") as f:
@@ -36,7 +36,7 @@ class ElevenLabsSTTAdapter:
                 )
             return (result.text or "").strip()
         except Exception as e:
-            logger.exception("STT Fehler: %s: %s", type(e).__name__, e)
+            logger.exception("STT error: %s: %s", type(e).__name__, e)
             return ""
 
     def stop(self) -> None:

@@ -13,7 +13,7 @@ from domain.events import ListeningStateChanged, SpeechPlaybackStarted, SpeechPl
 
 def build_display(bus: EventBus):
     if not config.USE_LED_MATRIX:
-        print("USE_LED_MATRIX ist False - kein Display zum Testen.")
+        print("USE_LED_MATRIX is False - no display to test.")
         return None, None
 
     from adapters.hardware.led_matrix import LedMatrix
@@ -45,7 +45,7 @@ def build_display(bus: EventBus):
 
 def build_test_turntable():
     if not config.USE_SERVO:
-        print("USE_SERVO ist False - kein Servo zum Testen.")
+        print("USE_SERVO is False - no servo to test.")
         return None
 
     from adapters.factory import build_turntable
@@ -85,16 +85,16 @@ def demo_servo(turntable) -> None:
     # which live DOA tracking uses and which would compound with each step
     # here instead of landing on the same three positions every time.
     lo, hi = turntable.safe_min_angle, turntable.safe_max_angle
-    print(f"Servo: sweeping {lo:.0f}-{hi:.0f} Grad...")
+    print(f"Servo: sweeping {lo:.0f}-{hi:.0f} deg...")
     for angle in (lo, hi, (lo + hi) / 2):
-        print(f"  -> {angle} Grad")
+        print(f"  -> {angle} deg")
         turntable.set_doa_angle_immediate(target_angle_degrees=angle)
         time.sleep(2)
 
 
 def live_doa_tracking(turntable, face, poll_interval_s: float = 0.3) -> None:
     if turntable is None:
-        print("USE_SERVO ist False - Servo kann DOA nicht folgen.")
+        print("USE_SERVO is False - the servo cannot follow DOA.")
         return
 
     from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
@@ -102,7 +102,7 @@ def live_doa_tracking(turntable, face, poll_interval_s: float = 0.3) -> None:
     doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
     print(
         f"Live-DOA-Tracking gestartet (Servo-Bereich {turntable.safe_min_angle:.0f}-"
-        f"{turntable.safe_max_angle:.0f} Grad geklemmt). Strg+C zum Beenden.\n"
+        f"{turntable.safe_max_angle:.0f} Grad geklemmt). Ctrl+C to quit.\n"
         "Aus der Nase des Mikrofonarrays sprechen und beobachten, ob Servo/Augen folgen.\n"
         "Bewegung erfolgt nur bei erkannter Sprachaktivitaet (Mikrofon-VAD) und geglaettet -"
         " kurze/leise Stoergeraeusche bewegen den Motor nicht."
@@ -111,7 +111,7 @@ def live_doa_tracking(turntable, face, poll_interval_s: float = 0.3) -> None:
         while True:
             if doa.get_voice_active():
                 angle = doa.get_direction_degrees()
-                print(f"DOA: {angle:.0f} Grad (Stimme aktiv)")
+                print(f"DOA: {angle:.0f} deg (voice active)")
                 turntable.rotate_towards(target_angle_degrees=angle)
                 if face is not None:
                     face.set_eye_direction(angle_degrees=angle)
@@ -137,7 +137,7 @@ def main() -> None:
     turntable = build_test_turntable()
 
     if face is None and turntable is None:
-        print("Weder Display noch Servo aktiviert (USE_LED_MATRIX/USE_SERVO) - nichts zu testen.")
+        print("Neither display nor servo enabled (USE_LED_MATRIX/USE_SERVO) - nothing to test.")
         return
 
     try:
@@ -146,13 +146,13 @@ def main() -> None:
         else:
             demo_display(bus, face)
             demo_servo(turntable)
-            print("Fertig. Strg+C zum Beenden, oder Enter fuer eine weitere Runde.")
+            print("Done. Ctrl+C to quit, or ENTER for another round.")
             while True:
                 input()
                 demo_display(bus, face)
                 demo_servo(turntable)
     except KeyboardInterrupt:
-        print("\nCiao!")
+        print("\nBye!")
     finally:
         if turntable is not None and hasattr(turntable, "stop"):
             turntable.stop()

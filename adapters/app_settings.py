@@ -78,4 +78,4 @@ def save_app_settings(path: str, settings: dict) -> None:
     every unrelated value just to change one of them, and silently wrote a
     stale value for anything it got wrong."""
     Path(path).write_text(json.dumps(settings, indent=2))
-    logger.info("[Settings] Gespeichert (%s).", path)
+    logger.info("[Settings] Saved (%s).", path)

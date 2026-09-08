@@ -38,4 +38,4 @@ class RemoteTTSAdapter(StreamingTTSAdapter):
             response.raise_for_status()
             yield from response.iter_content(chunk_size=4096)
         except requests.RequestException as e:
-            logger.error("TTS Fehler (Mac-Server): %s", e)
+            logger.error("TTS error (Mac server): %s", e)

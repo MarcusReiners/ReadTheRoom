@@ -14,7 +14,7 @@ def main() -> None:
     logging_setup.configure_logging(config)
 
     if not config.USE_SERVO:
-        print("USE_SERVO ist False - kein Servo zum Testen.")
+        print("USE_SERVO is False - no servo to test.")
         return
 
     from adapters.factory import build_turntable
@@ -25,23 +25,23 @@ def main() -> None:
     # from the web app, and commanding the config value would sweep a
     # narrower arc than the head is actually allowed to travel.
     lo, hi = turntable.safe_min_angle, turntable.safe_max_angle
-    print(f"Voller Schwenk zwischen {lo:.0f} und {hi:.0f} Grad.")
-    print("Strg+C zum Beenden.")
+    print(f"Full sweep between {lo:.0f} and {hi:.0f} deg.")
+    print("Ctrl+C to quit.")
 
     try:
         while True:
-            print(f"-> {lo:.0f} Grad")
+            print(f"-> {lo:.0f} deg")
             turntable.set_angle_immediate(lo)
             time.sleep(HOLD_SECONDS)
 
-            print(f"-> {hi:.0f} Grad")
+            print(f"-> {hi:.0f} deg")
             turntable.set_angle_immediate(hi)
             time.sleep(HOLD_SECONDS)
     except KeyboardInterrupt:
         pass
     finally:
         turntable.stop()
-        print("\nServo freigegeben. Ciao!")
+        print("\nServo released.")
 
 
 if __name__ == "__main__":

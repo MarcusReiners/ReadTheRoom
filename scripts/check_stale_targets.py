@@ -34,9 +34,9 @@ def main() -> None:
     port = sys.argv[1] if len(sys.argv) > 1 else config.RADAR_SERIAL_PORT
     ser = serial.Serial(port, config.RADAR_SERIAL_BAUD, timeout=1)
 
-    print(f"Lausche auf {port}. Strg+C zum Beenden.\n")
-    print("Sitz erst still im Zonenbereich, dann verlasse den Raum - und "
-          "vergleiche, wo Freezes auftreten.\n")
+    print(f"Listening on {port}. Ctrl+C to quit.\n")
+    print("First sit still inside the zone, then leave the room - and "
+          "compare where freezes occur.\n")
 
     last_pos: dict[int, tuple[int, int]] = {}
     frozen_since: dict[int, float] = {}
@@ -90,4 +90,4 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nCiao!")
+        print("\nBye!")

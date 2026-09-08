@@ -13,7 +13,7 @@ def main() -> None:
     logging_setup.configure_logging(config)
 
     if not config.USE_SERVO:
-        print("USE_SERVO ist False - kein Servo zum Tracken.")
+        print("USE_SERVO is False - no servo to track with.")
         return
 
     from adapters.factory import build_turntable
@@ -37,7 +37,7 @@ def main() -> None:
     print(
         "Audio-Tracking laeuft - der Servo folgt jeder erkannten Stimme "
         f"(sicherer Bereich {turntable.safe_min_angle:.0f}-{turntable.safe_max_angle:.0f} Grad).\n"
-        "Strg+C zum Beenden."
+        "Ctrl+C to quit."
     )
 
     try:
@@ -48,7 +48,7 @@ def main() -> None:
     finally:
         doa.close()
         turntable.stop()
-        print("\nServo freigegeben. Ciao!")
+        print("\nServo released.")
 
 
 if __name__ == "__main__":

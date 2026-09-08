@@ -24,7 +24,7 @@ def main() -> None:
     logging.getLogger("adapters.hardware.turntable").setLevel(logging.DEBUG)
 
     if not config.USE_SERVO:
-        print("USE_SERVO ist False - kein Servo zum Simulieren.")
+        print("USE_SERVO is False - no servo to simulate.")
         return
 
     from adapters.factory import build_turntable
@@ -47,7 +47,7 @@ def main() -> None:
         for raw in RAW_READINGS:
             target = raw_to_target_degrees(raw, front_reference)
             before = turntable.current_heading_degrees
-            print(f"-> Simuliere RAW={raw:.0f} Grad -> target={target:.1f} Grad (aktuell: {before:.1f})")
+            print(f"-> Simulating RAW={raw:.0f} deg -> target={target:.1f} deg (currently: {before:.1f})")
             turntable.rotate_towards(target_angle_degrees=target)
             after = turntable.current_heading_degrees
             print(f"   Ergebnis: current_heading_degrees={after:.1f} (Delta {after - before:+.1f})\n")
@@ -56,7 +56,7 @@ def main() -> None:
         pass
     finally:
         turntable.stop()
-        print("\nServo freigegeben. Ciao!")
+        print("\nServo released.")
 
 
 if __name__ == "__main__":

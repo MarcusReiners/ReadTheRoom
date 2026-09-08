@@ -18,4 +18,4 @@ def load_home_offset(path: str) -> float:
 
 def save_home_offset(path: str, offset_degrees: float) -> None:
     Path(path).write_text(json.dumps({"home_offset_degrees": offset_degrees}))
-    logger.info("[Servo] Home-Offset %.1f Grad gespeichert (%s).", offset_degrees, path)
+    logger.info("[Servo] Home offset %.1f deg saved (%s).", offset_degrees, path)

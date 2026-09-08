@@ -56,14 +56,14 @@ def main() -> None:
                 print(f"-> {name} ({mode}, period_ms={period_ms})")
                 send_led(radar, mode, period_ms)
                 time.sleep(HOLD_SECONDS)
-            print("Durchlauf fertig, Strg+C zum Beenden oder weiter im Kreis...\n")
+            print("Cycle complete, Ctrl+C to quit or keep looping...\n")
     except KeyboardInterrupt:
         pass
     finally:
         send_led(radar, "off", None)
         if hasattr(radar, "stop"):
             radar.stop()
-        print("\nLEDs aus. Ciao!")
+        print("\nLEDs off.")
 
 
 if __name__ == "__main__":

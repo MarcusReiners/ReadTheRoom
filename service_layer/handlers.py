@@ -33,9 +33,9 @@ def register_handlers(
         if event.count > 1 and conversation.confidential and conversation.modality == "voice":
             conversation.switch_modality("web")
             bus.publish(ModalitySwitched(to_modality="web", reason="person_entered"))
-            logger.info("Modalitätswechsel zu 'web' (PersonCount=%s)", event.count)
+            logger.info("Modality switched to 'web' (PersonCount=%s)", event.count)
             if tts.request_takeover():
-                logger.info("Sprachausgabe unterbrochen (Person betrat den Raum).")
+                logger.info("Speech interrupted (a person entered the room).")
         elif event.count <= 1 and conversation.modality == "web":
             conversation.switch_modality("voice")
             bus.publish(ModalitySwitched(to_modality="voice", reason="alone_again"))
@@ -82,7 +82,8 @@ def start_doa_tracking(
     doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
-    post_move_quiet_s: float = 0.6, servo_recentering=None,
+    post_move_quiet_s: float = 0.6, servo_recentering=None, min_doa_samples: int = 2,
+    accept_range=None,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -170,7 +171,7 @@ def start_doa_tracking(
 
     def _tracking_loop() -> None:
         nonlocal moving_until
-        logger.info("[DOA] Tracking gestartet.")
+        logger.info("[DOA] Tracking started.")
         last_active_time = time.monotonic()
         was_speaking = False
         was_calibrating = False
@@ -182,8 +183,8 @@ def start_doa_tracking(
 
                 if calibrating != was_calibrating:
                     logger.info(
-                        "[DOA] Kalibrierungsmodus %s - Kopf faehrt zur Home-Position.",
-                        "aktiv" if calibrating else "beendet",
+                        "[DOA] Calibration mode %s - head moving to home.",
+                        "active" if calibrating else "ended",
                     )
                     settle_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
                     moving_until = time.monotonic() + settle_s
@@ -214,7 +215,7 @@ def start_doa_tracking(
                     if active:
                         last_active_time = time.monotonic()
                         at_home = False
-                        logger.debug("[DOA] Erste Messung %.0f Grad.", angle)
+                        logger.debug("[DOA] First reading %.0f deg.", angle)
                         # Eyes dart to the sound first, human-like, before the
                         # head starts physically catching up.
                         face.set_eye_direction(angle_degrees=angle)
@@ -236,9 +237,31 @@ def start_doa_tracking(
                                 if not doa.get_voice_active():
                                     break
                                 samples.append(doa.get_direction_degrees())
+                        if len(samples) < min_doa_samples:
+                            # VAD dropped again almost immediately: a knock, a
+                            # chair, the servo's own settling - not speech. The
+                            # single reading taken on such a blip is meaningless
+                            # (the array reports a stale/defaulted bearing) and
+                            # used to be enough to swing the head.
+                            logger.info(
+                                "[DOA] Only %d reading(s) - too short to be speech, ignored.",
+                                len(samples),
+                            )
+                            time.sleep(poll_interval_s)
+                            continue
                         angle = median_angle(samples)
+                        if accept_range is not None and not (accept_range[0] <= angle <= accept_range[1]):
+                            # Physically impossible for this mount: the head
+                            # cannot turn there, so the target would only clamp
+                            # to an end stop and park the head off-axis.
+                            logger.info(
+                                "[DOA] %.0f deg is outside %s - ignored.",
+                                angle, accept_range,
+                            )
+                            time.sleep(poll_interval_s)
+                            continue
                         logger.info(
-                            "[DOA] Stimme erkannt bei %.0f Grad (Median aus %d Messungen).",
+                            "[DOA] Voice detected at %.0f deg (median of %d readings).",
                             angle, len(samples),
                         )
 
@@ -266,7 +289,7 @@ def start_doa_tracking(
                         and silence_timeout_s > 0
                         and time.monotonic() - last_active_time >= silence_timeout_s
                     ):
-                        logger.info("[DOA] %.0fs Stille - Kopf kehrt zur Home-Position zurueck.", silence_timeout_s)
+                        logger.info("[DOA] %.0fs of silence - head returning to home.", silence_timeout_s)
                         ramp_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
                         if servo_recentering is not None:
                             servo_recentering.set()
@@ -279,7 +302,7 @@ def start_doa_tracking(
                         # the silence clock and the head would never settle.
                         last_active_time = time.monotonic()
             except Exception:
-                logger.exception("[DOA] Fehler beim Lesen/Ansteuern - Tracking-Thread beendet sich NICHT.")
+                logger.exception("[DOA] Error while reading or driving - the tracking thread does NOT exit.")
             time.sleep(poll_interval_s)
 
     threading.Thread(target=_tracking_loop, daemon=True).start()

@@ -81,11 +81,11 @@ class LLMGatewayAdapter:
                 yield delta
         except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout, _StreamStalled):
             if emitted_any:
-                logger.warning("'%s' brach mitten im Stream ab - kein Fallback, Antwort bleibt unvollstaendig.",
+                logger.warning("'%s' aborted mid-stream - no fallback, the reply stays incomplete.",
                                 self.model)
                 return
             if self.fallback_model:
-                logger.warning("'%s' nicht erreichbar/zu langsam, weiche aus auf Fallback '%s'.",
+                logger.warning("'%s' unreachable or too slow, falling back to '%s'.",
                                 self.model, self.fallback_model)
                 try:
                     yield from self._ask_stream(self.fallback_model, self.fallback_api_base, user_text, history)
@@ -95,13 +95,13 @@ class LLMGatewayAdapter:
             yield _SPOKEN_UNREACHABLE
         except Exception as e:
             if emitted_any:
-                logger.exception("LLM-Stream nach Teilantwort abgebrochen: %s", e)
+                logger.exception("LLM stream aborted after a partial reply: %s", e)
                 return
             # The detail goes to the log, NOT to the speaker. Yielding the raw
             # exception meant a provider error was read out loud verbatim -
             # a model-retired 404 came through as several seconds of spoken
             # JSON, punctuation and all.
-            logger.exception("LLM-Fehler: %s", e)
+            logger.exception("LLM error: %s", e)
             yield _SPOKEN_ERROR
 
     def _stream_with_deadline(self, completion_kwargs: dict) -> Iterator[str]:

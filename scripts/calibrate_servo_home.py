@@ -11,7 +11,7 @@ def main() -> None:
     logging_setup.configure_logging(config)
 
     if not config.USE_SERVO:
-        print("USE_SERVO ist False - kein Servo zum Kalibrieren.")
+        print("USE_SERVO is False - no servo to calibrate.")
         return
 
     from adapters.factory import build_turntable
@@ -57,7 +57,7 @@ def main() -> None:
                 offset = turntable.offset_for_raw_angle(raw_angle)
                 turntable.set_home_offset(offset)
                 save_home_offset(config.SERVO_CALIBRATION_PATH, offset)
-                print(f"Gespeichert: Offset {offset:.1f} Grad (Position {raw_angle:.1f}).")
+                print(f"Saved: offset {offset:.1f} deg (position {raw_angle:.1f}).")
                 continue
             try:
                 delta = float(line)
@@ -70,7 +70,7 @@ def main() -> None:
         pass
     finally:
         turntable.stop()
-        print("\nServo freigegeben. Nicht gespeicherte Aenderungen wurden verworfen. Ciao!")
+        print("\nServo released. Unsaved changes were discarded.")
 
 
 if __name__ == "__main__":
