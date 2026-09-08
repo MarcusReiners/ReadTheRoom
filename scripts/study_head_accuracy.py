@@ -2,6 +2,8 @@ import argparse
 import csv
 import json
 import os
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -15,14 +17,28 @@ import logging_setup
 STUDY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "study")
 SETTLE_QUIET_S = 1.0
 MISS_TIMEOUT_S = 5.0
+ARM_TIMEOUT_S = 30.0
 HOME_SETTLE_S = 1.5
 HOME_TOLERANCE_DEG = 2.0
 HOME_ATTEMPTS = 3
 MEASUREMENT_SANITY_DEG = 20.0
 
+
+def playback_command(path):
+    if sys.platform == "darwin":
+        return ["afplay", path]
+    return ["aplay", "-q", path]
+
+
+def check_player():
+    exe = playback_command("x")[0]
+    if shutil.which(exe) is None:
+        raise SystemExit(f"'{exe}' not found - install it or drop --play to time playback by hand.")
+    return exe
+
 CSV_COLUMNS = [
     "trial_id", "session", "timestamp", "angle_true", "distance_m", "noise_condition", "rep",
-    "playback_start_ts", "settle_ts", "settle_time_s",
+    "playback_start_ts", "settle_ts", "settle_time_s", "settle_from_voice_s", "playback_mode",
     "head_heading_at_start", "started_at_home",
     "doa_logged_angle", "head_heading_at_doa", "doa_implied_bearing",
     "servo_target_angle", "physical_angle_measured",
@@ -70,6 +86,10 @@ class TrialRecorder:
         with self._lock:
             times = [e[-1]["t"] for e in (self.pwm_updates, self.moves) if e]
             return max(times) if times else None
+
+    def first_doa_time(self):
+        with self._lock:
+            return self.doa_samples[0]["t"] if self.doa_samples else None
 
     def has_track_move(self):
         with self._lock:
@@ -185,18 +205,31 @@ def print_plan(angles, distances, noises, reps):
     print()
 
 
-def wait_until_settled(recorder, deadline_s, quiet_s):
+def wait_until_settled(recorder, deadline_s, quiet_s, arm_timeout_s=None):
+    """Waits for the head to react and come to rest.
+
+    deadline_s only starts counting once the array first reports voice, so an
+    operator starting playback on another machine is under no time pressure.
+    arm_timeout_s bounds that waiting-for-voice phase.
+    """
     start = time.monotonic()
-    while time.monotonic() - start < deadline_s:
+    arm_deadline = start + (arm_timeout_s if arm_timeout_s is not None else deadline_s)
+    while True:
+        now = time.monotonic()
         last = recorder.last_activity_time()
-        if recorder.has_track_move() and last is not None and time.monotonic() - last >= quiet_s:
+        if recorder.has_track_move() and last is not None and now - last >= quiet_s:
             return True
+        voice_at = recorder.first_doa_time()
+        if voice_at is None:
+            if now >= arm_deadline:
+                return False
+        elif now - voice_at >= deadline_s:
+            return False
         time.sleep(0.05)
-    return False
 
 
 def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_quiet_s, miss_timeout_s,
-              on_playback_start=None):
+              on_playback_start=None, play_file=None, play_latency_s=0.0, arm_timeout_s=None):
     print(f"\n--- trial {trial_id}  angle={condition['angle_true']}  "
           f"distance={condition['distance_m']}m  noise={condition['noise_condition']}  rep={rep} ---")
     print("Homing...")
@@ -216,14 +249,24 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         print(f"WARNING head is at {start_heading:.1f}, expected {home_angle:.1f}. "
               "Bearings for this trial will be off - redo it once the room is quiet.")
 
-    if _ask("Press ENTER at the exact moment playback starts > ").strip().lower() == "q":
-        raise KeyboardInterrupt
-    playback_start_mono = time.monotonic()
-    playback_start_ts = _now_iso()
+    player = None
+    if play_file:
+        print("Playing stimulus...")
+        player = subprocess.Popen(playback_command(play_file),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        playback_start_mono = time.monotonic() + play_latency_s
+        playback_start_ts = _now_iso()
+        playback_mode = "auto"
+    else:
+        if _ask("ENTER to arm, then start playback on the Mac > ").strip().lower() == "q":
+            raise KeyboardInterrupt
+        playback_start_mono = time.monotonic()
+        playback_start_ts = _now_iso()
+        playback_mode = "manual"
     if on_playback_start is not None:
         on_playback_start()
 
-    settled = wait_until_settled(recorder, miss_timeout_s, settle_quiet_s)
+    settled = wait_until_settled(recorder, miss_timeout_s, settle_quiet_s, arm_timeout_s)
     doa_samples, moves, pwm_updates = recorder.snapshot()
     track_moves = [m for m in moves if m["kind"] == "track"]
 
@@ -231,11 +274,17 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         settle_mono = max([e[-1]["t"] for e in (pwm_updates, moves) if e])
         settle_ts = _now_iso()
         settle_time_s = round(settle_mono - playback_start_mono, 3)
+        settle_from_voice_s = (round(settle_mono - doa_samples[0]["t"], 3)
+                               if doa_samples else "")
         servo_target = track_moves[-1]["resulting_heading"]
     else:
         settle_ts = ""
         settle_time_s = ""
+        settle_from_voice_s = ""
         servo_target = ""
+
+    if player is not None and player.poll() is None:
+        player.wait()
 
     if doa_samples:
         first = doa_samples[0]
@@ -251,7 +300,8 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         "angle_true": condition["angle_true"], "distance_m": condition["distance_m"],
         "noise_condition": condition["noise_condition"], "rep": rep,
         "playback_start_ts": playback_start_ts, "settle_ts": settle_ts,
-        "settle_time_s": settle_time_s,
+        "settle_time_s": settle_time_s, "settle_from_voice_s": settle_from_voice_s,
+        "playback_mode": playback_mode,
         "head_heading_at_start": round(start_heading, 2), "started_at_home": int(started_at_home),
         "doa_logged_angle": doa_angle, "head_heading_at_doa": head_at_doa,
         "doa_implied_bearing": implied, "servo_target_angle": servo_target,
@@ -263,14 +313,19 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
     detail = {
         "trial_id": trial_id, "session": session, "condition": condition, "rep": rep,
         "playback_start_ts": playback_start_ts, "settled": settled, "miss": miss,
+        "playback_mode": playback_mode, "play_file": play_file or "",
         "doa_samples": doa_samples, "moves": moves, "pwm_updates": pwm_updates,
     }
 
     if miss:
-        print(f"MISS - no servo movement within {miss_timeout_s}s")
+        if not doa_samples:
+            print(f"MISS - the array never reported voice within {arm_timeout_s or miss_timeout_s:.0f}s. "
+                  "Did playback actually start?")
+        else:
+            print(f"MISS - voice detected but no servo movement within {miss_timeout_s}s")
     else:
-        print(f"settle_time={settle_time_s}s  doa={doa_angle}  implied_bearing={implied}  "
-              f"servo_target={servo_target}")
+        print(f"settle_time={settle_time_s}s  (from voice {settle_from_voice_s}s)  "
+              f"doa={doa_angle}  implied_bearing={implied}  servo_target={servo_target}")
     print("Take the overhead photo now.")
     return row, detail
 
@@ -307,7 +362,18 @@ def main():
     parser.add_argument("--miss-timeout", type=float, default=MISS_TIMEOUT_S)
     parser.add_argument("--plan", action="store_true", help="print the full run plan and exit")
     parser.add_argument("--simulate", action="store_true", help="no hardware, for rehearsing the procedure")
+    parser.add_argument("--play", metavar="WAV",
+                        help="stimulus file the script plays itself, so onset is machine-timed")
+    parser.add_argument("--arm-timeout", type=float, default=ARM_TIMEOUT_S,
+                        help="seconds to wait for playback to begin after arming a manual trial")
+    parser.add_argument("--play-latency-ms", type=float, default=0.0,
+                        help="constant audio-device startup latency to add to the onset timestamp")
     args = parser.parse_args()
+
+    if args.play:
+        if not os.path.isfile(args.play):
+            raise SystemExit(f"stimulus file not found: {args.play}")
+        check_player()
 
     if args.plan:
         print_plan([45, 90, 135], [0.5, 1.5, 3.0], ["none", "ambient"], args.reps)
@@ -352,6 +418,11 @@ def main():
     print(f"Trial log  : {jsonl_path}")
     print(f"Servo range: {base_turntable.safe_min_angle:.0f}-{base_turntable.safe_max_angle:.0f} deg")
     print(f"Condition  : angle={args.angle} distance={args.distance}m noise={args.noise}, {args.reps} reps")
+    if args.play:
+        print(f"Stimulus   : {args.play} (auto, +{args.play_latency_ms:.0f}ms latency offset)")
+    else:
+        print(f"Stimulus   : manual - arm, then play on the Mac (up to {args.arm_timeout:.0f}s)")
+        print("             report settle_from_voice_s, not settle_time_s")
     print("\nAfter each trial: measure the head with the protractor, then")
     print("ENTER = keep and continue, r = redo this rep, q = quit.\n")
 
@@ -366,6 +437,8 @@ def main():
             row, detail = run_trial(
                 recorder, turntable, args.session, trial_id, condition, rep,
                 args.settle_quiet, args.miss_timeout, on_playback_start=on_start,
+                play_file=args.play, play_latency_s=args.play_latency_ms / 1000.0,
+                arm_timeout_s=args.arm_timeout,
             )
             measured = _ask("Protractor reading in deg (ENTER to skip) > ").strip()
             if measured:
