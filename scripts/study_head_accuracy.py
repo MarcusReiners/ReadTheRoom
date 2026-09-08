@@ -52,6 +52,7 @@ CSV_COLUMNS = [
     "servo_target_angle", "servo_first_target_angle", "n_track_moves", "physical_angle_measured",
     "moved", "miss", "simulated", "n_doa_samples", "n_servo_commands",
     "cfg_onset_skip_s", "cfg_sample_interval_s", "cfg_min_samples", "cfg_post_move_quiet_s",
+    "cfg_offaxis_gain",
     "notes",
 ]
 
@@ -362,6 +363,7 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         "n_doa_samples": len(doa_samples), "n_servo_commands": len(pwm_updates),
         "cfg_onset_skip_s": cfg["onset_skip_s"], "cfg_sample_interval_s": cfg["sample_interval_s"],
         "cfg_min_samples": cfg["min_samples"], "cfg_post_move_quiet_s": cfg["post_move_quiet_s"],
+        "cfg_offaxis_gain": cfg["offaxis_gain"],
         "notes": "",
     }
     detail = {
@@ -424,6 +426,9 @@ def main():
     parser.add_argument("--simulate", action="store_true", help="no hardware, for rehearsing the procedure")
     parser.add_argument("--play", metavar="WAV",
                         help="stimulus file the script plays itself, so onset is machine-timed")
+    parser.add_argument("--offaxis-gain", type=float, default=None,
+                        help="divide the off-axis component by this "
+                             "(measured 0.716 on this mount; omit for raw readings)")
     parser.add_argument("--doa-onset-skip", type=float, default=DOA_ONSET_SKIP_S,
                         help="seconds to discard after voice starts, before sampling begins")
     parser.add_argument("--doa-sample-interval", type=float, default=DOA_SAMPLE_INTERVAL_S,
@@ -440,6 +445,8 @@ def main():
                         help="constant audio-device startup latency to add to the onset timestamp")
     args = parser.parse_args()
 
+    if args.offaxis_gain is None:
+        args.offaxis_gain = config.DOA_OFFAXIS_GAIN
     if args.play:
         if not os.path.isfile(args.play):
             raise SystemExit(f"stimulus file not found: {args.play}")
@@ -470,7 +477,9 @@ def main():
         from adapters.factory import build_turntable
         from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
         base_turntable = build_turntable(config)
-        base_doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
+        base_doa = RespeakerDOAAdapter(
+            front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES,
+            offaxis_gain=args.offaxis_gain)
 
     patch_pwm_recording(base_turntable, recorder)
     turntable = RecordingTurntable(base_turntable, recorder)
@@ -504,6 +513,8 @@ def main():
           f"up to {max(2.5, args.doa_sample_interval * 12):.1f}s through VAD dropouts)")
     print(f"Head commits ~{args.doa_onset_skip + args.doa_sample_interval * 4:.2f}s after voice "
           f"starts - stimulus must sustain past that")
+    print(f"Off-axis gain: {args.offaxis_gain:.4f}"
+          f"{' (raw, uncorrected)' if args.offaxis_gain == 1.0 else ' (compression corrected)'}")
     print(f"Accepted bearings: {base_turntable.safe_min_angle:.0f}-"
           f"{base_turntable.safe_max_angle:.0f} deg (others ignored as impossible)")
     print(f"Condition  : angle={args.angle} distance={args.distance}m noise={args.noise}, {args.reps} reps")
@@ -524,6 +535,7 @@ def main():
         "sample_interval_s": args.doa_sample_interval,
         "min_samples": args.min_doa_samples,
         "post_move_quiet_s": args.post_move_quiet,
+        "offaxis_gain": args.offaxis_gain,
         "doa_samples": 5,
     }
     condition = {"angle_true": args.angle, "distance_m": args.distance, "noise_condition": args.noise}
