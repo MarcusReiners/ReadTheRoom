@@ -83,7 +83,7 @@ def start_doa_tracking(
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
     post_move_quiet_s: float = 0.6, servo_recentering=None, min_doa_samples: int = 2,
-    accept_range=None, paused=None,
+    accept_range=None, paused=None, sample_window_s: float = 0.6,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -231,13 +231,21 @@ def start_doa_tracking(
                         # against a second opinion. A median over the window
                         # both averages down per-sample noise and discards the
                         # occasional wall-reflection outlier.
+                        # A dropout mid-utterance is normal - the VAD flutters
+                        # between phonemes, and harder in noise. Bailing out on
+                        # the first inactive poll (as this used to) yields one or
+                        # two samples in exactly the conditions where a stable
+                        # median matters most. Skip the quiet polls instead and
+                        # keep gathering until either enough samples or the
+                        # window runs out.
                         samples = [angle]
-                        for _ in range(max(0, doa_samples - 1)):
-                            time.sleep(eye_lead_s / max(1, doa_samples - 1))
+                        step = eye_lead_s / max(1, doa_samples - 1)
+                        sample_deadline = time.monotonic() + sample_window_s
+                        while len(samples) < doa_samples and time.monotonic() < sample_deadline:
+                            time.sleep(step)
                             with lock:
-                                if not doa.get_voice_active():
-                                    break
-                                samples.append(doa.get_direction_degrees())
+                                if doa.get_voice_active():
+                                    samples.append(doa.get_direction_degrees())
                         if len(samples) < min_doa_samples:
                             # VAD dropped again almost immediately: a knock, a
                             # chair, the servo's own settling - not speech. The
