@@ -20,6 +20,7 @@ MISS_TIMEOUT_S = 5.0
 ARM_TIMEOUT_S = 30.0
 POST_MOVE_QUIET_S = 1.5
 MIN_DOA_SAMPLES = 3
+RESUME_LATENCY_S = 0.35
 HOME_SETTLE_S = 1.5
 HOME_TOLERANCE_DEG = 2.0
 HOME_ATTEMPTS = 3
@@ -249,9 +250,11 @@ def wait_until_settled(recorder, deadline_s, quiet_s, arm_timeout_s=None, progre
 
 def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_quiet_s, miss_timeout_s,
               on_playback_start=None, play_file=None, play_latency_s=0.0, arm_timeout_s=None,
-              simulated=False, measure=True):
+              simulated=False, measure=True, paused=None):
     print(f"\n--- trial {trial_id}  angle={condition['angle_true']}  "
           f"distance={condition['distance_m']}m  noise={condition['noise_condition']}  rep={rep} ---")
+    if paused is not None:
+        paused.set()
     print("Homing...")
     home_angle = (turntable.safe_min_angle + turntable.safe_max_angle) / 2.0
     for attempt in range(HOME_ATTEMPTS):
@@ -276,6 +279,9 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         playback_start_ts = _now_iso()
         playback_mode = "manual"
     recorder.clear()
+    if paused is not None:
+        paused.clear()
+        time.sleep(RESUME_LATENCY_S)
     start_heading = turntable.current_heading_degrees
     started_at_home = abs(start_heading - home_angle) <= HOME_TOLERANCE_DEG
     if not started_at_home:
@@ -287,6 +293,8 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
     settled = wait_until_settled(recorder, miss_timeout_s, settle_quiet_s, arm_timeout_s,
                                  progress=True)
     doa_samples, moves, pwm_updates = recorder.snapshot()
+    if paused is not None:
+        paused.set()
     track_moves = [m for m in moves if m["kind"] == "track"]
 
     if track_moves:
@@ -441,6 +449,7 @@ def main():
     doa = RecordingDOA(base_doa, base_turntable, recorder)
 
     from service_layer.handlers import start_doa_tracking
+    tracking_paused = threading.Event()
     start_doa_tracking(
         doa, turntable, SilentFace(),
         lock=threading.Lock(),
@@ -448,6 +457,7 @@ def main():
         post_move_quiet_s=args.post_move_quiet,
         min_doa_samples=args.min_doa_samples,
         accept_range=(base_turntable.safe_min_angle, base_turntable.safe_max_angle),
+        paused=tracking_paused,
     )
 
     print(f"\nSession {args.session}")
@@ -485,7 +495,7 @@ def main():
                 args.settle_quiet, args.miss_timeout, on_playback_start=on_start,
                 play_file=args.play, play_latency_s=args.play_latency_ms / 1000.0,
                 arm_timeout_s=args.arm_timeout, simulated=args.simulate,
-                measure=not args.no_measure,
+                measure=not args.no_measure, paused=tracking_paused,
             )
             measured = "" if args.no_measure else _ask("Protractor reading in deg (ENTER to skip) > ").strip()
             if measured:

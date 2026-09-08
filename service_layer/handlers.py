@@ -83,7 +83,7 @@ def start_doa_tracking(
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
     post_move_quiet_s: float = 0.6, servo_recentering=None, min_doa_samples: int = 2,
-    accept_range=None,
+    accept_range=None, paused=None,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -207,7 +207,8 @@ def start_doa_tracking(
                     last_active_time = time.monotonic()
                 was_speaking = speaking
 
-                if not speaking and not settling and not calibrating:
+                is_paused = paused is not None and paused.is_set()
+                if not speaking and not settling and not calibrating and not is_paused:
                     with lock:
                         active = doa.get_voice_active()
                         angle = doa.get_direction_degrees() if active else None
