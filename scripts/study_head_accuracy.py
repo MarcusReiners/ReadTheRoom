@@ -230,7 +230,7 @@ def wait_until_settled(recorder, deadline_s, quiet_s, arm_timeout_s=None):
 
 def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_quiet_s, miss_timeout_s,
               on_playback_start=None, play_file=None, play_latency_s=0.0, arm_timeout_s=None,
-              simulated=False):
+              simulated=False, measure=True):
     print(f"\n--- trial {trial_id}  angle={condition['angle_true']}  "
           f"distance={condition['distance_m']}m  noise={condition['noise_condition']}  rep={rep} ---")
     print("Homing...")
@@ -328,7 +328,8 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
     else:
         print(f"settle_time={settle_time_s}s  (from voice {settle_from_voice_s}s)  "
               f"doa={doa_angle}  implied_bearing={implied}  servo_target={servo_target}")
-    print("Take the overhead photo now.")
+    if measure:
+        print("Take the overhead photo now.")
     return row, detail
 
 
@@ -366,6 +367,8 @@ def main():
     parser.add_argument("--simulate", action="store_true", help="no hardware, for rehearsing the procedure")
     parser.add_argument("--play", metavar="WAV",
                         help="stimulus file the script plays itself, so onset is machine-timed")
+    parser.add_argument("--no-measure", action="store_true",
+                        help="skip the protractor prompt; error is then commanded-only")
     parser.add_argument("--arm-timeout", type=float, default=ARM_TIMEOUT_S,
                         help="seconds to wait for playback to begin after arming a manual trial")
     parser.add_argument("--play-latency-ms", type=float, default=0.0,
@@ -425,8 +428,12 @@ def main():
     else:
         print(f"Stimulus   : manual - arm, then play on the Mac (up to {args.arm_timeout:.0f}s)")
         print("             report settle_from_voice_s, not settle_time_s")
-    print("\nAfter each trial: measure the head with the protractor, then")
-    print("ENTER = keep and continue, r = redo this rep, q = quit.\n")
+    if args.no_measure:
+        print("\nNo physical measurement: error is commanded-only (perception + mapping).")
+        print("After each trial: ENTER = keep, r = redo this rep, q = quit.\n")
+    else:
+        print("\nAfter each trial: measure the head with the protractor, then")
+        print("ENTER = keep and continue, r = redo this rep, q = quit.\n")
 
     condition = {"angle_true": args.angle, "distance_m": args.distance, "noise_condition": args.noise}
     rep = 1
@@ -442,8 +449,9 @@ def main():
                 args.settle_quiet, args.miss_timeout, on_playback_start=on_start,
                 play_file=args.play, play_latency_s=args.play_latency_ms / 1000.0,
                 arm_timeout_s=args.arm_timeout, simulated=args.simulate,
+                measure=not args.no_measure,
             )
-            measured = _ask("Protractor reading in deg (ENTER to skip) > ").strip()
+            measured = "" if args.no_measure else _ask("Protractor reading in deg (ENTER to skip) > ").strip()
             if measured:
                 try:
                     value = float(measured.replace(",", "."))

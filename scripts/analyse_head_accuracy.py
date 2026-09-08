@@ -251,16 +251,25 @@ def main():
     print(f"Trials loaded  : {len(rows)}")
     print(f"Misses         : {len(misses)} ({100.0 * len(misses) / len(rows):.1f}%)"
           f"{' - included' if args.include_misses else ' - excluded from error stats'}")
-    print(f"Protractor     : {len(measured)}/{len(analysed)} trials have a physical measurement")
-    if len(measured) < len(analysed):
-        print("                 trials without one fall back to the commanded servo angle,")
-        print("                 which cannot show mechanical error - report this limitation.")
+    if not measured:
+        print("Measurement    : COMMANDED ANGLES ONLY - no protractor readings.")
+        print("                 'total' below is servo_target - angle_true, i.e. perception +")
+        print("                 mapping. It assumes the servo executes its command exactly, so")
+        print("                 it CANNOT detect a scaling or home-offset fault. State this as a")
+        print("                 limitation, or characterise the servo once and cite the offset.")
+    elif len(measured) < len(analysed):
+        print(f"Protractor     : {len(measured)}/{len(analysed)} trials have a physical measurement")
+        print("                 the rest fall back to the commanded servo angle, which cannot")
+        print("                 show mechanical error - report this limitation.")
+    else:
+        print(f"Protractor     : all {len(measured)} trials physically measured")
 
     print("\n" + "-" * 78)
     print("ERROR DECOMPOSITION (degrees, signed bias / unsigned magnitudes)")
     print("-" * 78)
+    total_label = "total (cmd vs true)" if not measured else "total (head vs true)"
     describe([r["total_error"] for r in analysed if r["total_error"] is not None],
-             "total (head vs true)")
+             total_label)
     describe([r["doa_error"] for r in analysed if r["doa_error"] is not None],
              "  perception (DoA)")
     describe([r["map_error"] for r in analysed if r["map_error"] is not None],
