@@ -166,6 +166,8 @@ def enrich(rows):
         rec["distance_m"] = fnum(row, "distance_m")
         rec["miss"] = (row.get("miss") or "0").strip() in ("1", "true", "True")
         rec["settle_time_s"] = fnum(row, "settle_time_s")
+        rec["settle_from_voice_s"] = fnum(row, "settle_from_voice_s")
+        rec["playback_mode"] = (row.get("playback_mode") or "").strip()
 
         implied = fnum(row, "doa_implied_bearing")
         target = fnum(row, "servo_target_angle")
@@ -254,11 +256,19 @@ def main():
     describe([r["mech_error"] for r in analysed if r["mech_error"] is not None],
              "  actuation (mech)")
 
-    settle = [r["settle_time_s"] for r in analysed if r["settle_time_s"] is not None]
-    if settle:
-        print(f"\nSettle time            n={len(settle):<4} median={median(settle):.3f}s  "
-              f"IQR=[{quantile(settle, .25):.3f},{quantile(settle, .75):.3f}]  "
-              f"mean={mean(settle):.3f}s  max={max(settle):.3f}s")
+    for key, label in (("settle_time_s", "Settle from onset"),
+                       ("settle_from_voice_s", "Settle from 1st voice")):
+        vals = [r[key] for r in analysed if r.get(key) is not None]
+        if vals:
+            print(f"\n{label:22} n={len(vals):<4} median={median(vals):.3f}s  "
+                  f"IQR=[{quantile(vals, .25):.3f},{quantile(vals, .75):.3f}]  "
+                  f"mean={mean(vals):.3f}s  max={max(vals):.3f}s")
+
+    modes = {r["playback_mode"] for r in analysed if r.get("playback_mode")}
+    if "manual" in modes:
+        print("\nNOTE: some trials used manual playback timing, so 'settle from onset'")
+        print("      carries your reaction time. Report 'settle from 1st voice' instead,")
+        print("      or re-run those conditions with --play.")
 
     print("\n" + "-" * 78)
     print("BY CONDITION")
