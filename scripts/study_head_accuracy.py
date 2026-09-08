@@ -42,7 +42,7 @@ CSV_COLUMNS = [
     "head_heading_at_start", "started_at_home",
     "doa_logged_angle", "head_heading_at_doa", "doa_implied_bearing",
     "servo_target_angle", "physical_angle_measured",
-    "moved", "miss", "n_doa_samples", "n_servo_commands", "notes",
+    "moved", "miss", "simulated", "n_doa_samples", "n_servo_commands", "notes",
 ]
 
 
@@ -229,7 +229,8 @@ def wait_until_settled(recorder, deadline_s, quiet_s, arm_timeout_s=None):
 
 
 def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_quiet_s, miss_timeout_s,
-              on_playback_start=None, play_file=None, play_latency_s=0.0, arm_timeout_s=None):
+              on_playback_start=None, play_file=None, play_latency_s=0.0, arm_timeout_s=None,
+              simulated=False):
     print(f"\n--- trial {trial_id}  angle={condition['angle_true']}  "
           f"distance={condition['distance_m']}m  noise={condition['noise_condition']}  rep={rep} ---")
     print("Homing...")
@@ -306,7 +307,7 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         "doa_logged_angle": doa_angle, "head_heading_at_doa": head_at_doa,
         "doa_implied_bearing": implied, "servo_target_angle": servo_target,
         "physical_angle_measured": "",
-        "moved": int(bool(track_moves)), "miss": int(miss),
+        "moved": int(bool(track_moves)), "miss": int(miss), "simulated": int(bool(simulated)),
         "n_doa_samples": len(doa_samples), "n_servo_commands": len(pwm_updates),
         "notes": "",
     }
@@ -314,6 +315,7 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         "trial_id": trial_id, "session": session, "condition": condition, "rep": rep,
         "playback_start_ts": playback_start_ts, "settled": settled, "miss": miss,
         "playback_mode": playback_mode, "play_file": play_file or "",
+        "simulated": bool(simulated),
         "doa_samples": doa_samples, "moves": moves, "pwm_updates": pwm_updates,
     }
 
@@ -438,7 +440,7 @@ def main():
                 recorder, turntable, args.session, trial_id, condition, rep,
                 args.settle_quiet, args.miss_timeout, on_playback_start=on_start,
                 play_file=args.play, play_latency_s=args.play_latency_ms / 1000.0,
-                arm_timeout_s=args.arm_timeout,
+                arm_timeout_s=args.arm_timeout, simulated=args.simulate,
             )
             measured = _ask("Protractor reading in deg (ENTER to skip) > ").strip()
             if measured:
