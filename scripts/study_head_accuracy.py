@@ -475,7 +475,7 @@ def main():
         post_move_quiet_s=args.post_move_quiet,
         min_doa_samples=args.min_doa_samples,
         doa_sample_interval_s=args.doa_sample_interval,
-        sample_window_s=max(1.5, args.doa_sample_interval * 6),
+        sample_window_s=max(2.5, args.doa_sample_interval * 12),
         accept_range=(base_turntable.safe_min_angle, base_turntable.safe_max_angle),
         paused=tracking_paused,
     )
@@ -487,7 +487,8 @@ def main():
     print(f"Post-move deaf period: {args.post_move_quiet:.1f}s")
     print(f"Min DOA samples to move: {args.min_doa_samples}")
     print(f"DOA sample spacing: {args.doa_sample_interval * 1000:.0f}ms "
-          f"(5 samples span {args.doa_sample_interval * 4:.2f}s)")
+          f"(5 samples span {args.doa_sample_interval * 4:.2f}s minimum, "
+          f"up to {max(2.5, args.doa_sample_interval * 12):.1f}s through VAD dropouts)")
     print(f"Accepted bearings: {base_turntable.safe_min_angle:.0f}-"
           f"{base_turntable.safe_max_angle:.0f} deg (others ignored as impossible)")
     print(f"Condition  : angle={args.angle} distance={args.distance}m noise={args.noise}, {args.reps} reps")
