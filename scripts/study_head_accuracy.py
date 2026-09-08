@@ -69,12 +69,13 @@ class TrialRecorder:
                 "doa_angle": round(angle, 2), "head_heading": round(head_heading, 2),
             })
 
-    def add_move(self, kind, target, resulting_heading):
+    def add_move(self, kind, target, resulting_heading, heading_before=None):
         with self._lock:
             self.moves.append({
                 "t": time.monotonic(), "ts": _now_iso(), "kind": kind,
                 "target": None if target is None else round(target, 2),
                 "resulting_heading": round(resulting_heading, 2),
+                "heading_before": None if heading_before is None else round(heading_before, 2),
             })
 
     def add_pwm(self, angle):
@@ -123,12 +124,16 @@ class RecordingTurntable:
         self._recorder = recorder
 
     def rotate_towards(self, target_angle_degrees, ramp_duration_s=None):
+        heading_before = self._turntable.current_heading_degrees
         self._turntable.rotate_towards(target_angle_degrees, ramp_duration_s=ramp_duration_s)
-        self._recorder.add_move("track", target_angle_degrees, self._turntable.current_heading_degrees)
+        self._recorder.add_move("track", target_angle_degrees,
+                                self._turntable.current_heading_degrees, heading_before)
 
     def home(self, ramp_duration_s=None):
+        heading_before = self._turntable.current_heading_degrees
         self._turntable.home(ramp_duration_s=ramp_duration_s)
-        self._recorder.add_move("home", None, self._turntable.current_heading_degrees)
+        self._recorder.add_move("home", None, self._turntable.current_heading_degrees,
+                                heading_before)
 
     def __getattr__(self, name):
         return getattr(self._turntable, name)
@@ -315,7 +320,17 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
     if player is not None and player.poll() is None:
         player.wait()
 
-    if doa_samples:
+    if track_moves:
+        # The reading that actually drove the head, not doa_samples[0] - the
+        # first recorded sample is often one the tracker itself rejected
+        # (out of range, or too short a burst), and reporting that as the
+        # perceived bearing contradicts the servo target on the same row.
+        accepted = track_moves[0]
+        doa_angle = accepted["target"]
+        head_at_doa = accepted["heading_before"]
+        implied = (round(head_at_doa + (doa_angle - 90.0), 2)
+                   if head_at_doa is not None and doa_angle is not None else "")
+    elif doa_samples:
         first = doa_samples[0]
         doa_angle = first["doa_angle"]
         head_at_doa = first["head_heading"]
