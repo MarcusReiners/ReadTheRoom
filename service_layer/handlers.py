@@ -84,7 +84,7 @@ def start_doa_tracking(
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
     post_move_quiet_s: float = 0.6, servo_recentering=None, min_doa_samples: int = 2,
     accept_range=None, paused=None, sample_window_s: float = 0.6,
-    doa_sample_interval_s=None,
+    doa_sample_interval_s=None, doa_onset_skip_s: float = 0.0,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -244,24 +244,33 @@ def start_doa_tracking(
                         # array's own DOA update period are the same estimate
                         # read twice, and a median over duplicates averages
                         # nothing away.
-                        samples = [angle]
+                        # The bearings reported in the first fraction of a
+                        # second after VAD trips are produced before the array
+                        # has locked on, and are routinely impossible (rear
+                        # bearings for a source in front). Including them drags
+                        # the median toward a direction nothing was ever in.
                         step = (doa_sample_interval_s if doa_sample_interval_s
                                 else eye_lead_s / max(1, doa_samples - 1))
+                        if doa_onset_skip_s > 0:
+                            samples = []
+                            time.sleep(doa_onset_skip_s)
+                        else:
+                            samples = [angle]
                         sample_deadline = time.monotonic() + sample_window_s
                         while len(samples) < doa_samples and time.monotonic() < sample_deadline:
                             time.sleep(step)
                             with lock:
                                 if doa.get_voice_active():
                                     samples.append(doa.get_direction_degrees())
-                        if len(samples) < min_doa_samples:
+                        if not samples or len(samples) < min_doa_samples:
                             # VAD dropped again almost immediately: a knock, a
                             # chair, the servo's own settling - not speech. The
                             # single reading taken on such a blip is meaningless
                             # (the array reports a stale/defaulted bearing) and
                             # used to be enough to swing the head.
                             logger.info(
-                                "[DOA] Only %d reading(s) - too short to be speech, ignored.",
-                                len(samples),
+                                "[DOA] Only %d reading(s) after the onset window - "
+                                "too short to be speech, ignored.", len(samples),
                             )
                             time.sleep(poll_interval_s)
                             continue
