@@ -20,6 +20,7 @@ MISS_TIMEOUT_S = 5.0
 ARM_TIMEOUT_S = 30.0
 POST_MOVE_QUIET_S = 1.5
 MIN_DOA_SAMPLES = 3
+DOA_SAMPLE_INTERVAL_S = 0.2
 RESUME_LATENCY_S = 0.35
 HOME_SETTLE_S = 1.5
 HOME_TOLERANCE_DEG = 2.0
@@ -415,6 +416,8 @@ def main():
     parser.add_argument("--simulate", action="store_true", help="no hardware, for rehearsing the procedure")
     parser.add_argument("--play", metavar="WAV",
                         help="stimulus file the script plays itself, so onset is machine-timed")
+    parser.add_argument("--doa-sample-interval", type=float, default=DOA_SAMPLE_INTERVAL_S,
+                        help="seconds between DOA samples; must exceed the array's update period")
     parser.add_argument("--min-doa-samples", type=int, default=MIN_DOA_SAMPLES,
                         help="readings required before the head is allowed to move")
     parser.add_argument("--post-move-quiet", type=float, default=POST_MOVE_QUIET_S,
@@ -471,6 +474,8 @@ def main():
         silence_timeout_s=0,
         post_move_quiet_s=args.post_move_quiet,
         min_doa_samples=args.min_doa_samples,
+        doa_sample_interval_s=args.doa_sample_interval,
+        sample_window_s=max(1.5, args.doa_sample_interval * 6),
         accept_range=(base_turntable.safe_min_angle, base_turntable.safe_max_angle),
         paused=tracking_paused,
     )
@@ -481,6 +486,8 @@ def main():
     print(f"Servo range: {base_turntable.safe_min_angle:.0f}-{base_turntable.safe_max_angle:.0f} deg")
     print(f"Post-move deaf period: {args.post_move_quiet:.1f}s")
     print(f"Min DOA samples to move: {args.min_doa_samples}")
+    print(f"DOA sample spacing: {args.doa_sample_interval * 1000:.0f}ms "
+          f"(5 samples span {args.doa_sample_interval * 4:.2f}s)")
     print(f"Accepted bearings: {base_turntable.safe_min_angle:.0f}-"
           f"{base_turntable.safe_max_angle:.0f} deg (others ignored as impossible)")
     print(f"Condition  : angle={args.angle} distance={args.distance}m noise={args.noise}, {args.reps} reps")
