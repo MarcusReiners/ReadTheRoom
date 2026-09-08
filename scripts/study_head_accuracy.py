@@ -430,6 +430,7 @@ def main():
 
     condition = {"angle_true": args.angle, "distance_m": args.distance, "noise_condition": args.noise}
     rep = 1
+    kept = 0
     try:
         while rep <= args.reps:
             trial_id = next_trial_id(csv_path)
@@ -468,6 +469,7 @@ def main():
             detail["notes"] = note
             append_row(csv_path, row)
             append_detail(jsonl_path, detail)
+            kept += 1
             rep += 1
     except KeyboardInterrupt:
         print("\nInterrupted.")
@@ -478,7 +480,10 @@ def main():
             base_turntable.stop()
         if hasattr(base_doa, "close"):
             base_doa.close()
-        print(f"\nSaved to {csv_path}")
+        if kept:
+            print(f"\nSaved {kept} trial(s) to {csv_path}")
+        else:
+            print("\nNo trials kept - nothing written.")
 
 
 if __name__ == "__main__":
