@@ -165,6 +165,7 @@ def enrich(rows):
         rec["angle_true"] = angle_true
         rec["distance_m"] = fnum(row, "distance_m")
         rec["miss"] = (row.get("miss") or "0").strip() in ("1", "true", "True")
+        rec["simulated"] = (row.get("simulated") or "0").strip() in ("1", "true", "True")
         rec["settle_time_s"] = fnum(row, "settle_time_s")
         rec["settle_from_voice_s"] = fnum(row, "settle_from_voice_s")
         rec["playback_mode"] = (row.get("playback_mode") or "").strip()
@@ -212,6 +213,8 @@ def main():
     parser.add_argument("csv", nargs="*", help="session CSVs (default: study/head_accuracy_*.csv)")
     parser.add_argument("--include-misses", action="store_true",
                         help="keep trials where the head never moved in the error statistics")
+    parser.add_argument("--include-simulated", action="store_true",
+                        help="keep rehearsal trials recorded with --simulate")
     parser.add_argument("--plots", action="store_true", help="write PNG plots next to the CSVs")
     args = parser.parse_args()
 
@@ -226,6 +229,15 @@ def main():
     rows = enrich(load(paths))
     if not rows:
         print("No usable trials found.")
+        return
+
+    simulated = [r for r in rows if r["simulated"]]
+    if simulated and not args.include_simulated:
+        rows = [r for r in rows if not r["simulated"]]
+        print(f"!! Dropped {len(simulated)} SIMULATED trial(s) - rehearsal data, not real "
+              "measurements.\n   Delete those rows, or pass --include-simulated to keep them.\n")
+    if not rows:
+        print("Nothing left after dropping simulated trials.")
         return
 
     misses = [r for r in rows if r["miss"]]
