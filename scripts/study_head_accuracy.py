@@ -512,6 +512,22 @@ def main():
 
     if args.offaxis_gain is None:
         args.offaxis_gain = config.DOA_OFFAXIS_GAIN
+
+    sample_window = max(2.5, args.doa_sample_interval * 12)
+    needed = args.doa_onset_skip + sample_window + 0.4 + args.settle_quiet
+    if args.miss_timeout < needed:
+        # The deadline runs from the array's first voice report, so it has to
+        # outlast the whole detection path - onset skip, sample gathering,
+        # the move itself, and the quiet period that declares it settled.
+        # Shorter, and a slow-but-successful trial is recorded as a miss while
+        # the head visibly turns just after: the latency distribution ends up
+        # censored at the timeout instead of measured.
+        print(f"NOTE raising --miss-timeout from {args.miss_timeout:.1f}s to {needed:.1f}s: "
+              "the detection path")
+        print(f"     (skip {args.doa_onset_skip:.1f} + sampling up to {sample_window:.1f} "
+              f"+ move + quiet {args.settle_quiet:.1f}) cannot finish sooner,")
+        print("     and a shorter deadline records slow successes as misses.")
+        args.miss_timeout = needed
     if args.play:
         if not os.path.isfile(args.play):
             raise SystemExit(f"stimulus file not found: {args.play}")
@@ -583,6 +599,7 @@ def main():
           f"up to {max(2.5, args.doa_sample_interval * 12):.1f}s through VAD dropouts)")
     print(f"Head commits ~{args.doa_onset_skip + args.doa_sample_interval * 4:.2f}s after voice "
           f"starts - stimulus must sustain past that")
+    print(f"Miss timeout: {args.miss_timeout:.1f}s from first voice")
     print(f"Off-axis gain: {args.offaxis_gain:.4f}"
           f"{' (raw, uncorrected)' if args.offaxis_gain == 1.0 else ' (compression corrected)'}")
     print(f"Accepted bearings: {base_turntable.safe_min_angle:.0f}-"
