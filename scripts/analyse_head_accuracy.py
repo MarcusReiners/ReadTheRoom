@@ -435,27 +435,39 @@ def main():
             print("where those factors can actually show.")
         run_kruskal(subset)
 
+    lat = [r for r in analysed if r.get("settle_from_voice_s") is not None]
+    if lat:
+        print("\n" + "-" * 78)
+        print("KRUSKAL-WALLIS on detection latency (settle_from_voice_s, seconds)")
+        print("-" * 78)
+        print("Machine-timed on the Pi: array's first voice report -> head at rest.")
+        run_kruskal(lat, value=lambda r: r.get("settle_from_voice_s"))
+
     if args.plots:
         make_plots(rows, analysed, paths, args.include_misses)
 
     print("\n" + "=" * 78)
 
 
-def run_kruskal(analysed):
+def run_kruskal(analysed, value=None, label="unsigned error |total|"):
+    if value is None:
+        def value(r):
+            return abs(r["total_error"]) if r["total_error"] is not None else None
     for factor in FACTORS:
         if factor == "angle_true" and len({r["angle_true"] for r in analysed}) < 2:
             continue
         buckets = defaultdict(list)
         for r in analysed:
-            if r["total_error"] is not None:
-                buckets[factor_label(r, factor)].append(abs(r["total_error"]))
+            v = value(r)
+            if v is not None:
+                buckets[factor_label(r, factor)].append(v)
         levels = sorted(buckets, key=level_sort_key)
         res = kruskal_wallis([buckets[l] for l in levels])
         print(f"\n{factor}")
         for l in levels:
             v = buckets[l]
-            print(f"   {l:>10}  n={len(v):<3} median|e|={median(v):5.2f}  "
-                  f"IQR=[{quantile(v, .25):.2f},{quantile(v, .75):.2f}]")
+            print(f"   {l:>10}  n={len(v):<3} median={median(v):6.3f}  "
+                  f"IQR=[{quantile(v, .25):.3f},{quantile(v, .75):.3f}]")
         if res is None:
             print("   not enough data for a test")
             continue
