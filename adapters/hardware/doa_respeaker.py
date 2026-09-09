@@ -1,3 +1,6 @@
+import csv
+import logging
+import os
 import statistics
 import struct
 import time
@@ -12,6 +15,8 @@ _RETRY_ATTEMPTS = 3
 _RETRY_DELAY_S = 0.05
 
 # (param_id, cmd_base) pairs, from Seeed's usb_4_mic_array/tuning.py PARAMETERS table.
+logger = logging.getLogger(__name__)
+
 _DOAANGLE_PARAM = (21, 0x00)
 _VOICEACTIVITY_PARAM = (19, 0x20)
 
@@ -46,6 +51,63 @@ def raw_to_target_degrees(raw: float, front_reference_degrees: float,
     return 90.0 + diff
 
 
+def load_calibration(path: str) -> list[tuple[float, float]]:
+    """Reads a doa_angle_response CSV into (reported, true) pairs.
+
+    Several repetitions of the same true angle collapse to their median
+    reported value. The result is sorted by reported angle so it can be
+    interpolated directly; a non-monotonic curve cannot be inverted and is
+    rejected rather than silently producing nonsense.
+    """
+    by_true: dict[float, list[float]] = {}
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            try:
+                t = float(row["true_angle"])
+                r = float(row["reported_angle"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            by_true.setdefault(t, []).append(r)
+    if len(by_true) < 2:
+        raise ValueError(f"{path} has fewer than 2 calibrated angles")
+    pairs = sorted((statistics.median(v), t) for t, v in by_true.items())
+    # Sorting by reported angle makes r monotonic by construction, so the real
+    # check is that TRUE rises with it. If a larger reported bearing maps back
+    # to a smaller true one the response has folded over and no inverse exists.
+    for (r1, t1), (r2, t2) in zip(pairs, pairs[1:]):
+        if r2 == r1:
+            raise ValueError(
+                f"{path}: true {t1:g} and {t2:g} both report {r1:.1f} - "
+                "the curve cannot be inverted"
+            )
+        if t2 <= t1:
+            raise ValueError(
+                f"{path} folds over: reported {r1:.1f} -> true {t1:g} but "
+                f"reported {r2:.1f} -> true {t2:g} - the curve cannot be inverted"
+            )
+    return pairs
+
+
+def apply_calibration(reported: float, table: list[tuple[float, float]]) -> float:
+    """Maps a reported bearing back to the true one by linear interpolation.
+
+    Beyond the calibrated range the slope of the nearest segment is continued,
+    which is a guess - keep the sweep wider than the angles that matter.
+    """
+    if reported <= table[0][0]:
+        (r1, t1), (r2, t2) = table[0], table[1]
+    elif reported >= table[-1][0]:
+        (r1, t1), (r2, t2) = table[-2], table[-1]
+    else:
+        for (r1, t1), (r2, t2) in zip(table, table[1:]):
+            if r1 <= reported <= r2:
+                break
+    span = r2 - r1
+    if span == 0:
+        return t1
+    return t1 + (t2 - t1) * (reported - r1) / span
+
+
 def median_angle(angles: list[float]) -> float:
     """Median of several DOA-convention readings of the same source.
 
@@ -76,7 +138,7 @@ class RespeakerDOAAdapter:
     """
 
     def __init__(self, front_reference_degrees: float = 0.0,
-                 offaxis_gain: float = 1.0) -> None:
+                 offaxis_gain: float = 1.0, calibration_path: str = "") -> None:
         """front_reference_degrees is whatever raw DOA value the array reports
         when a speaker is actually standing straight ahead of the physical
         mount - the array's own 0 has no relation to how it happens to be
@@ -86,6 +148,21 @@ class RespeakerDOAAdapter:
         that value; default 0 is just an unconfigured starting guess."""
         self._front_reference_degrees = front_reference_degrees
         self._offaxis_gain = offaxis_gain
+        # A measured lookup wins over the single gain: the array's angular
+        # response is not a constant factor (verified - a gain fitted at
+        # 45/90/135 mispredicts 60 by 5.6 degrees).
+        self._calibration = None
+        if calibration_path:
+            if not os.path.exists(calibration_path):
+                logger.warning("[DOA] calibration file %s not found - using raw bearings.",
+                               calibration_path)
+            else:
+                try:
+                    self._calibration = load_calibration(calibration_path)
+                    logger.info("[DOA] loaded %d-point angle calibration from %s.",
+                                len(self._calibration), calibration_path)
+                except ValueError as e:
+                    logger.warning("[DOA] calibration unusable (%s) - using raw bearings.", e)
         self._dev = usb.core.find(idVendor=_VENDOR_ID, idProduct=_PRODUCT_ID)
         if self._dev is None:
             raise RuntimeError(
@@ -119,7 +196,10 @@ class RespeakerDOAAdapter:
 
     def get_direction_degrees(self) -> float:
         raw = float(self._read_param(*_DOAANGLE_PARAM))
-        return raw_to_target_degrees(raw, self._front_reference_degrees, self._offaxis_gain)
+        angle = raw_to_target_degrees(raw, self._front_reference_degrees, self._offaxis_gain)
+        if self._calibration is not None:
+            angle = apply_calibration(angle, self._calibration)
+        return angle
 
     def get_voice_active(self) -> bool:
         """Onboard VAD flag - use this to gate on "loud enough"/speech-like sound

@@ -495,6 +495,7 @@ def main() -> None:
         voices=app_settings["voices"],
         active_voice_id=app_settings["active_voice_id"],
         calibration_mode=calibration_mode,
+        study_dir=config.STUDY_DIR,
         composing_mode=composing_mode,
         cancel_current_turn=cancel_current_turn,
         host=config.CHAT_BRIDGE_HOST, port=config.CHAT_BRIDGE_PORT,
@@ -509,12 +510,21 @@ def main() -> None:
     if config.USE_SERVO:
         from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
 
-        doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
+        doa = RespeakerDOAAdapter(
+            front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES,
+            offaxis_gain=config.DOA_OFFAXIS_GAIN,
+            calibration_path=config.DOA_CALIBRATION_PATH,
+        )
         doa_lock = threading.Lock()
 
         assistant_speaking = threading.Event()
         bus.subscribe(SpeechPlaybackStarted, lambda e: assistant_speaking.set())
         bus.subscribe(SpeechPlaybackEnded, lambda e: assistant_speaking.clear())
+
+        # The bridge is built before the array exists, so the guided
+        # calibration gets its handles here.
+        chat_bridge.doa = doa
+        chat_bridge.assistant_speaking = assistant_speaking
 
         start_doa_tracking(
             doa, turntable, face, lock=doa_lock,
