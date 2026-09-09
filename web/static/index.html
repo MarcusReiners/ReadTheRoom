@@ -751,6 +751,22 @@
           </div>
         </div>
 
+        <div class="servo-section">
+          <h2>Hearing Calibration</h2>
+          <div class="servo-wrap">
+            <div class="range-row">
+              <label class="field-label" for="doaCalDistance">Distance</label>
+              <input id="doaCalDistance" type="number" step="0.25" min="0.5" max="4" value="1.25"
+                     aria-label="Calibration distance in metres">
+              <span class="range-sep">m</span>
+              <button id="doaCalStartBtn" class="servo-save-btn" type="button">Start</button>
+              <button id="doaCalCancelBtn" class="servo-save-btn" type="button" hidden>Stop</button>
+            </div>
+            <div id="doaCalStatus" class="radar-status">The head points at each position and talks you through it.</div>
+            <div id="doaCalResults" class="servo-offset" hidden></div>
+          </div>
+        </div>
+
         <div class="assistant-section">
           <h2>Assistant</h2>
           <div class="assistant-wrap">
@@ -1069,6 +1085,9 @@
 
   function handleMessage(data) {
     switch (data.type) {
+      case "doa_calibration":
+        renderDoaCalibration(data.status || {});
+        break;
       case "conversations":
         conversations = data.items || [];
         renderConversationList();
@@ -1673,6 +1692,54 @@
     ws.send(JSON.stringify({ type: "set_volume", value: parseFloat(volumeInputEl.value) }));
   });
 })();
+
+  var doaCalStartBtn = document.getElementById("doaCalStartBtn");
+  var doaCalCancelBtn = document.getElementById("doaCalCancelBtn");
+  var doaCalStatus = document.getElementById("doaCalStatus");
+  var doaCalResults = document.getElementById("doaCalResults");
+  var DOA_CAL_STEPS = {
+    starting: "Starting…",
+    pointing: "Look where the head is pointing",
+    waiting_for_person: "Stand there and say “ready”",
+    homing: "Stay put — the head is looking away",
+    listening: "Say a full sentence now",
+    done: "Finished",
+    unavailable: "Not available on this machine"
+  };
+
+  if (doaCalStartBtn) {
+    doaCalStartBtn.addEventListener("click", function () {
+      var d = parseFloat(document.getElementById("doaCalDistance").value) || 1.25;
+      ws.send(JSON.stringify({ type: "start_doa_calibration", distance_m: d }));
+      doaCalStatus.textContent = "Starting…";
+    });
+  }
+  if (doaCalCancelBtn) {
+    doaCalCancelBtn.addEventListener("click", function () {
+      ws.send(JSON.stringify({ type: "cancel_doa_calibration" }));
+    });
+  }
+
+  function renderDoaCalibration(st) {
+    if (!doaCalStatus) return;
+    var running = !!st.running;
+    doaCalStartBtn.disabled = running;
+    doaCalCancelBtn.hidden = !running;
+    var label = DOA_CAL_STEPS[st.step] || st.step || "";
+    var where = st.angle === null || st.angle === undefined ? "" : " · " + st.angle + "°";
+    var count = st.total ? " (" + st.done + "/" + st.total + ")" : "";
+    doaCalStatus.textContent = st.message ? label + where + count + " — " + st.message
+                                          : label + where + count;
+    if (st.results && st.results.length) {
+      doaCalResults.hidden = false;
+      doaCalResults.textContent = st.results.map(function (r) {
+        return r.reported === "" ? r.angle + "° → missed"
+                                 : r.angle + "° → " + r.reported + "° (" +
+                                   (r.error > 0 ? "+" : "") + r.error + ")";
+      }).join("   ");
+    }
+  }
+
 </script>
 </body>
 </html>

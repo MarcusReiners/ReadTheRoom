@@ -58,7 +58,10 @@ class ChatBridgeAdapter:
         app_settings_path: str = "app_settings.json",
         voices: list | None = None,
         active_voice_id: str | None = None,
+        doa=None,
         calibration_mode: threading.Event | None = None,
+        assistant_speaking: threading.Event | None = None,
+        study_dir: str = "study",
         composing_mode: threading.Event | None = None,
         cancel_current_turn: threading.Event | None = None,
         host: str = "0.0.0.0",
@@ -91,7 +94,11 @@ class ChatBridgeAdapter:
         # eyes. Shared with main.py's construction of both; a fresh Event() here if
         # main.py didn't pass one (USE_SERVO/USE_LED_MATRIX both off) so this class
         # always has something to .set()/.clear() without needing to know why not.
+        self.doa = doa
         self.calibration_mode = calibration_mode if calibration_mode is not None else threading.Event()
+        self.assistant_speaking = assistant_speaking if assistant_speaking is not None else threading.Event()
+        self.study_dir = study_dir
+        self._doa_calibration = None
         # Set for as long as a client has the chat text box focused -
         # vad_input_loop pauses on this too (composing_mode param), so typing
         # a message doesn't also get picked up as a separate spoken turn.
@@ -307,6 +314,17 @@ class ChatBridgeAdapter:
                     self.tts.request_takeover()  # settings tab shouldn't have to wait out an in-progress reply
             else:
                 self.calibration_mode.clear()
+        elif msg_type == "start_doa_calibration":
+            cal = self._ensure_doa_calibration()
+            if cal is None:
+                self._broadcast({"type": "doa_calibration",
+                                 "status": {"running": False, "step": "unavailable",
+                                            "message": "No servo or microphone array on this machine."}})
+            elif not cal.start(distance_m=data.get("distance_m"), angles=data.get("angles")):
+                self._broadcast({"type": "doa_calibration", "status": cal.status()})
+        elif msg_type == "cancel_doa_calibration":
+            if self._doa_calibration is not None:
+                self._doa_calibration.cancel()
         elif msg_type == "set_composing":
             if bool(data.get("value")):
                 self.composing_mode.set()
@@ -490,6 +508,22 @@ class ChatBridgeAdapter:
 
     def _broadcast_voices(self) -> None:
         self._broadcast({"type": "voices", "voices": self.voices, "active_voice_id": self.active_voice_id})
+
+    def _ensure_doa_calibration(self):
+        if self._doa_calibration is not None:
+            return self._doa_calibration
+        doa = getattr(self, "doa", None)
+        if doa is None or self.turntable is None or self.tts is None:
+            return None
+        from service_layer.doa_calibration import DOACalibration
+        self._doa_calibration = DOACalibration(
+            doa=doa, turntable=self.turntable, tts=self.tts,
+            assistant_speaking=self.assistant_speaking,
+            calibration_mode=self.calibration_mode,
+            study_dir=self.study_dir,
+            on_progress=lambda st: self._broadcast({"type": "doa_calibration", "status": st}),
+        )
+        return self._doa_calibration
 
     def _broadcast(self, message: dict) -> None:
         if self._loop is None:
