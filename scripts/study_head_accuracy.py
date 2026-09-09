@@ -22,6 +22,7 @@ POST_MOVE_QUIET_S = 1.5
 MIN_DOA_SAMPLES = 3
 DOA_SAMPLE_INTERVAL_S = 0.25
 DOA_ONSET_SKIP_S = 1.5
+SAMPLE_WINDOW_FLOOR_S = 6.0
 PLAN_ANGLES = [45, 90, 135]
 PLAN_DISTANCES = [0.5, 1.25, 2.5]
 PLAN_NOISES = ["none", "ambient"]
@@ -52,7 +53,7 @@ CSV_COLUMNS = [
     "servo_target_angle", "servo_first_target_angle", "n_track_moves", "physical_angle_measured",
     "moved", "miss", "simulated", "n_doa_samples", "n_servo_commands",
     "cfg_onset_skip_s", "cfg_sample_interval_s", "cfg_min_samples", "cfg_post_move_quiet_s",
-    "cfg_offaxis_gain",
+    "cfg_offaxis_gain", "cfg_sample_window_s",
     "notes",
 ]
 
@@ -427,6 +428,7 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
         "cfg_onset_skip_s": cfg["onset_skip_s"], "cfg_sample_interval_s": cfg["sample_interval_s"],
         "cfg_min_samples": cfg["min_samples"], "cfg_post_move_quiet_s": cfg["post_move_quiet_s"],
         "cfg_offaxis_gain": cfg["offaxis_gain"],
+        "cfg_sample_window_s": cfg["sample_window_s"],
         "notes": "",
     }
     detail = {
@@ -521,7 +523,7 @@ def main():
     if args.offaxis_gain is None:
         args.offaxis_gain = config.DOA_OFFAXIS_GAIN
 
-    sample_window = max(2.5, args.doa_sample_interval * 12)
+    sample_window = max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24)
     needed = args.doa_onset_skip + sample_window + 0.4 + args.settle_quiet
     if args.miss_timeout < needed:
         # The deadline runs from the array's first voice report, so it has to
@@ -589,7 +591,7 @@ def main():
         min_doa_samples=args.min_doa_samples,
         doa_sample_interval_s=args.doa_sample_interval,
         doa_onset_skip_s=args.doa_onset_skip,
-        sample_window_s=max(2.5, args.doa_sample_interval * 12),
+        sample_window_s=max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24),
         accept_range=(base_turntable.safe_min_angle, base_turntable.safe_max_angle),
         paused=tracking_paused,
     )
@@ -604,7 +606,8 @@ def main():
           "(array needs time to converge)")
     print(f"DOA sample spacing: {args.doa_sample_interval * 1000:.0f}ms "
           f"(5 samples span {args.doa_sample_interval * 4:.2f}s minimum, "
-          f"up to {max(2.5, args.doa_sample_interval * 12):.1f}s through VAD dropouts)")
+          f"up to {max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24):.1f}s "
+          "through VAD dropouts)")
     print(f"Head commits ~{args.doa_onset_skip + args.doa_sample_interval * 4:.2f}s after voice "
           f"starts - stimulus must sustain past that")
     print(f"Miss timeout: {args.miss_timeout:.1f}s from first voice")
@@ -631,6 +634,7 @@ def main():
         "min_samples": args.min_doa_samples,
         "post_move_quiet_s": args.post_move_quiet,
         "offaxis_gain": args.offaxis_gain,
+        "sample_window_s": max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24),
         "doa_samples": 5,
     }
     condition = {"angle_true": args.angle, "distance_m": args.distance, "noise_condition": args.noise}
