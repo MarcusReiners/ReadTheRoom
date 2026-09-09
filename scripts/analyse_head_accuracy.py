@@ -256,13 +256,15 @@ def report_gain(analysed):
         for t, b in pts:
             by_angle[t].append(b)
         summary = "  ".join(f"{a:g}->{mean(v):.1f}" for a, v in sorted(by_angle.items()))
-        if fit is None or len({t for t, _ in pts}) < 2:
+        n_angles = len({t for t, _ in pts})
+        thin_fit = "  <-- only %d angles" % n_angles if n_angles < 3 else ""
+        if fit is None or n_angles < 2:
             print(f"{key[0]:>9g} {key[1]:>9} {len(pts):>4} {'-':>9} {'-':>7} "
                   f"{'-':>10} {'-':>8}   {summary}")
             continue
         print(f"{key[0]:>9g} {key[1]:>9} {fit['n']:>4} {fit['b']:>9.3f} "
               f"{1.0 / fit['b'] if fit['b'] else float('nan'):>7.3f} "
-              f"{fit['a']:>10.2f} {fit['r2']:>8.4f}   {summary}")
+              f"{fit['a']:>10.2f} {fit['r2']:>8.4f}   {summary}{thin_fit}")
 
     quiet = [p for (d, n), pts in cells.items() if n == "none" for p in pts]
     if quiet and len({t for t, _ in quiet}) >= 2:
@@ -399,8 +401,9 @@ def main():
     print("BY CONDITION")
     print("-" * 78)
     print(f"{'angle':>6} {'dist':>6} {'noise':>9} {'n':>5} {'bias':>7} {'MAE':>6} "
-          f"{'med|e|':>7} {'SD':>6} {'miss':>6} {'settle':>7}")
+          f"{'med|e|':>7} {'SD':>6} {'miss':>6} {'lat_s':>7}")
     print("n = trials contributing to the error stats (misses excluded)")
+    print("lat_s = median settle_from_voice_s, machine-timed on the Pi")
     cells = defaultdict(list)
     for r in rows:
         cells[(r["angle_true"], r["distance_m"], r["noise_condition"])].append(r)
@@ -408,7 +411,8 @@ def main():
         group = cells[key]
         used = group if args.include_misses else [g for g in group if not g["miss"]]
         errs = [g["total_error"] for g in used if g["total_error"] is not None]
-        st = [g["settle_time_s"] for g in used if g["settle_time_s"] is not None]
+        st = [g["settle_from_voice_s"] for g in used
+              if g.get("settle_from_voice_s") is not None]
         nmiss = sum(1 for g in group if g["miss"])
         thin = " <-- too few" if len(errs) < 3 else ""
         print(f"{key[0]:>6g} {key[1]:>6g} {key[2]:>9} {len(errs):>5} "

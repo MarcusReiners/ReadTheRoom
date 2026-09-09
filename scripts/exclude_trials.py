@@ -53,13 +53,7 @@ def cmd_list(rows, args):
     else:
         print(f"No cell has more than {args.reps} counted trials.\n")
 
-    shown = rows
-    if args.noise:
-        shown = [r for r in shown if r.get("noise_condition") == args.noise]
-    if args.angle is not None:
-        shown = [r for r in shown if r.get("angle_true") == f"{args.angle:g}"]
-    if args.distance is not None:
-        shown = [r for r in shown if r.get("distance_m") == f"{args.distance:g}"]
+    shown = matching(rows, args)
 
     print(f"{'id':>4} {'timestamp':<24} {'ang':>4} {'dist':>5} {'noise':>8} "
           f"{'rep':>3} {'target':>7} {'miss':>4}  flag")
@@ -102,14 +96,22 @@ def cmd_exclude(rows, fieldnames, path, args):
     print("The rows stay in the file - the analyser skips them and reports the count.")
 
 
+def num_eq(raw, wanted):
+    """Compares a CSV field to a number, so 45 matches a stored '45.0'."""
+    try:
+        return abs(float((raw or "").strip()) - wanted) < 1e-9
+    except ValueError:
+        return False
+
+
 def matching(rows, args):
     out = rows
     if args.noise:
-        out = [r for r in out if r.get("noise_condition") == args.noise]
+        out = [r for r in out if (r.get("noise_condition") or "").strip() == args.noise]
     if args.angle is not None:
-        out = [r for r in out if r.get("angle_true") == f"{args.angle:g}"]
+        out = [r for r in out if num_eq(r.get("angle_true"), args.angle)]
     if args.distance is not None:
-        out = [r for r in out if r.get("distance_m") == f"{args.distance:g}"]
+        out = [r for r in out if num_eq(r.get("distance_m"), args.distance)]
     return out
 
 
