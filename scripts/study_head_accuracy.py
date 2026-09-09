@@ -221,6 +221,69 @@ def print_plan(angles, distances, noises, reps):
     print()
 
 
+def print_progress(csv_path, angles, distances, noises, reps):
+    done = {}
+    cfgs = set()
+    simulated = 0
+    if os.path.exists(csv_path):
+        with open(csv_path, newline="") as f:
+            for row in csv.DictReader(f):
+                if (row.get("simulated") or "0").strip() in ("1", "true", "True"):
+                    simulated += 1
+                    continue
+                try:
+                    key = (float(row["angle_true"]), float(row["distance_m"]),
+                           row["noise_condition"].strip())
+                except (KeyError, ValueError):
+                    continue
+                done[key] = done.get(key, 0) + 1
+                cfgs.add(tuple((row.get(k) or "").strip() for k in
+                               ("cfg_onset_skip_s", "cfg_sample_interval_s",
+                                "cfg_min_samples", "cfg_post_move_quiet_s", "cfg_offaxis_gain")))
+
+    conditions = build_conditions(angles, distances, noises)
+    total = len(conditions) * reps
+    collected = sum(min(v, reps) for v in done.values())
+    complete = sum(1 for c in conditions
+                   if done.get((c["angle_true"], c["distance_m"], c["noise_condition"]), 0) >= reps)
+
+    print(f"\nSession file: {csv_path}")
+    if not os.path.exists(csv_path):
+        print("  (does not exist yet - nothing collected)")
+    print(f"\n{'dist':>6} {'angle':>6} {'noise':>9}  {'done':>7}  status")
+    print("-" * 46)
+    remaining = []
+    for c in conditions:
+        key = (c["angle_true"], c["distance_m"], c["noise_condition"])
+        n = done.get(key, 0)
+        if n >= reps:
+            status = "complete"
+        elif n == 0:
+            status = "TODO"
+            remaining.append(c)
+        else:
+            status = f"partial - {reps - n} more"
+            remaining.append(c)
+        print(f"{c['distance_m']:>6g} {c['angle_true']:>6g} {c['noise_condition']:>9}  "
+              f"{n:>3}/{reps:<3}  {status}")
+
+    print("-" * 46)
+    print(f"{collected}/{total} trials, {complete}/{len(conditions)} conditions complete")
+    if simulated:
+        print(f"({simulated} simulated row(s) ignored)")
+    if len(cfgs) > 1:
+        print("\nWARNING: rows were collected under different tracker settings -")
+        print("         run the analyser for the breakdown.")
+    if remaining:
+        c = remaining[0]
+        print(f"\nNext up:\n  --angle {c['angle_true']:g} "
+              f"--distance {c['distance_m']:g} "
+              f"--noise {c['noise_condition']} --reps {reps}")
+    else:
+        print("\nAll conditions complete.")
+    print()
+
+
 def wait_until_settled(recorder, deadline_s, quiet_s, arm_timeout_s=None, progress=False):
     """Waits for the head to react and come to rest.
 
@@ -423,6 +486,8 @@ def main():
     parser.add_argument("--settle-quiet", type=float, default=SETTLE_QUIET_S)
     parser.add_argument("--miss-timeout", type=float, default=MISS_TIMEOUT_S)
     parser.add_argument("--plan", action="store_true", help="print the full run plan and exit")
+    parser.add_argument("--progress", action="store_true",
+                        help="show which conditions of --session are done, and what is left")
     parser.add_argument("--simulate", action="store_true", help="no hardware, for rehearsing the procedure")
     parser.add_argument("--play", metavar="WAV",
                         help="stimulus file the script plays itself, so onset is machine-timed")
@@ -454,6 +519,11 @@ def main():
 
     if args.plan:
         print_plan(PLAN_ANGLES, PLAN_DISTANCES, PLAN_NOISES, args.reps)
+        return
+
+    if args.progress:
+        print_progress(os.path.join(STUDY_DIR, f"head_accuracy_{args.session}.csv"),
+                       PLAN_ANGLES, PLAN_DISTANCES, PLAN_NOISES, args.reps)
         return
 
     if args.angle is None or args.distance is None or args.noise is None:
