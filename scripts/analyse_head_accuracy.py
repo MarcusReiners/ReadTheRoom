@@ -398,8 +398,9 @@ def main():
     print("\n" + "-" * 78)
     print("BY CONDITION")
     print("-" * 78)
-    print(f"{'angle':>6} {'dist':>6} {'noise':>9} {'n':>3} {'bias':>7} {'MAE':>6} "
+    print(f"{'angle':>6} {'dist':>6} {'noise':>9} {'n':>5} {'bias':>7} {'MAE':>6} "
           f"{'med|e|':>7} {'SD':>6} {'miss':>6} {'settle':>7}")
+    print("n = trials contributing to the error stats (misses excluded)")
     cells = defaultdict(list)
     for r in rows:
         cells[(r["angle_true"], r["distance_m"], r["noise_condition"])].append(r)
@@ -409,18 +410,37 @@ def main():
         errs = [g["total_error"] for g in used if g["total_error"] is not None]
         st = [g["settle_time_s"] for g in used if g["settle_time_s"] is not None]
         nmiss = sum(1 for g in group if g["miss"])
-        print(f"{key[0]:>6g} {key[1]:>6g} {key[2]:>9} {len(group):>3} "
+        thin = " <-- too few" if len(errs) < 3 else ""
+        print(f"{key[0]:>6g} {key[1]:>6g} {key[2]:>9} {len(errs):>5} "
               f"{mean(errs) if errs else float('nan'):>+7.2f} "
               f"{mean([abs(e) for e in errs]) if errs else float('nan'):>6.2f} "
               f"{median([abs(e) for e in errs]) if errs else float('nan'):>7.2f} "
               f"{sd(errs):>6.2f} "
               f"{nmiss:>2}/{len(group):<3} "
-              f"{median(st) if st else float('nan'):>7.3f}")
+              f"{median(st) if st else float('nan'):>7.3f}{thin}")
 
-    print("\n" + "-" * 78)
-    print("KRUSKAL-WALLIS on unsigned error |total|")
-    print("-" * 78)
+    for scope, subset in (("ALL ANGLES", analysed),
+                          ("OFF-AXIS ONLY (45 and 135)",
+                           [r for r in analysed if r["angle_true"] != 90.0])):
+        print("\n" + "-" * 78)
+        print(f"KRUSKAL-WALLIS on unsigned error |total| - {scope}")
+        print("-" * 78)
+        if scope.startswith("OFF-AXIS"):
+            print("At 90 deg the compression predicts zero error by construction, so")
+            print("including it dilutes any distance or noise effect. This subset is")
+            print("where those factors can actually show.")
+        run_kruskal(subset)
+
+    if args.plots:
+        make_plots(rows, analysed, paths, args.include_misses)
+
+    print("\n" + "=" * 78)
+
+
+def run_kruskal(analysed):
     for factor in FACTORS:
+        if factor == "angle_true" and len({r["angle_true"] for r in analysed}) < 2:
+            continue
         buckets = defaultdict(list)
         for r in analysed:
             if r["total_error"] is not None:
@@ -448,11 +468,6 @@ def main():
                 padj = min(1.0, pr["p"] * len(pairs))
                 mark = "*" if padj < .05 else "n.s."
                 print(f"      {a:>8} vs {b:<8} p_adj = {padj:.4f} {mark}")
-
-    if args.plots:
-        make_plots(rows, analysed, paths, args.include_misses)
-
-    print("\n" + "=" * 78)
 
 
 def make_plots(rows, analysed, paths, include_misses):
