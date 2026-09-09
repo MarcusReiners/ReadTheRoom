@@ -102,12 +102,32 @@ def cmd_exclude(rows, fieldnames, path, args):
     print("The rows stay in the file - the analyser skips them and reports the count.")
 
 
+def matching(rows, args):
+    out = rows
+    if args.noise:
+        out = [r for r in out if r.get("noise_condition") == args.noise]
+    if args.angle is not None:
+        out = [r for r in out if r.get("angle_true") == f"{args.angle:g}"]
+    if args.distance is not None:
+        out = [r for r in out if r.get("distance_m") == f"{args.distance:g}"]
+    return out
+
+
 def cmd_delete(rows, fieldnames, path, args):
-    ids = {str(i) for i in args.delete}
-    doomed = [r for r in rows if str(r.get("trial_id")) in ids]
-    missing = ids - {str(r.get("trial_id")) for r in doomed}
-    if missing:
-        raise SystemExit(f"no trial with id {', '.join(sorted(missing))} in {path}")
+    if args.delete_matching:
+        if not (args.noise or args.angle is not None or args.distance is not None):
+            raise SystemExit("--delete-matching needs at least one of "
+                             "--noise / --angle / --distance, or it would delete everything.")
+        doomed = matching(rows, args)
+        if not doomed:
+            raise SystemExit("nothing matches those filters.")
+        ids = {str(r.get("trial_id")) for r in doomed}
+    else:
+        ids = {str(i) for i in args.delete}
+        doomed = [r for r in rows if str(r.get("trial_id")) in ids]
+        missing = ids - {str(r.get("trial_id")) for r in doomed}
+        if missing:
+            raise SystemExit(f"no trial with id {', '.join(sorted(missing))} in {path}")
 
     print(f"Deleting {len(doomed)} trial(s):")
     for r in doomed:
@@ -116,7 +136,8 @@ def cmd_delete(rows, fieldnames, path, args):
               f"noise={r.get('noise_condition')} rep={r.get('rep')} "
               f"target={r.get('servo_target_angle')}")
 
-    kept = [r for r in rows if str(r.get("trial_id")) not in ids]
+    doomed_set = {id(r) for r in doomed}
+    kept = [r for r in rows if id(r) not in doomed_set]
     backup = save(path, kept, fieldnames)
     print(f"\n{len(kept)} trial(s) remain. CSV backed up to {os.path.basename(backup)}")
 
@@ -172,6 +193,8 @@ def main():
                         help="trial ids to mark as excluded")
     parser.add_argument("--delete", type=int, nargs="+", metavar="ID",
                         help="permanently remove these trials from the CSV and the trial log")
+    parser.add_argument("--delete-matching", action="store_true",
+                        help="delete every trial matching --noise / --angle / --distance")
     parser.add_argument("--restore", type=int, nargs="+", metavar="ID",
                         help="trial ids to un-exclude")
     parser.add_argument("--reason", default="", help="why they are excluded (required with --exclude)")
@@ -182,7 +205,7 @@ def main():
         raise SystemExit(f"no such session file: {path}")
     rows, fieldnames = load(path)
 
-    if args.delete:
+    if args.delete or args.delete_matching:
         cmd_delete(rows, fieldnames, path, args)
     elif args.exclude:
         if not args.reason:

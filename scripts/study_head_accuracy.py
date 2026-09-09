@@ -472,8 +472,16 @@ def append_detail(jsonl_path, detail):
 def next_trial_id(csv_path):
     if not os.path.exists(csv_path):
         return 1
+    # max+1, not count+1: deleting a row would otherwise hand out an id that
+    # is still in use, and duplicate ids break the link to the trial log.
     with open(csv_path, newline="") as f:
-        return sum(1 for _ in csv.DictReader(f)) + 1
+        ids = []
+        for row in csv.DictReader(f):
+            try:
+                ids.append(int(row.get("trial_id", 0)))
+            except (TypeError, ValueError):
+                continue
+        return (max(ids) + 1) if ids else 1
 
 
 def main():
