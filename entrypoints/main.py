@@ -136,7 +136,12 @@ def _strip_non_speech_annotations(text: str) -> str:
     return re.sub(r"\s+", " ", stripped).strip()
 
 
-def _transcribe_and_enqueue(stt, turn_queue: "queue.PriorityQueue", temp_in: str, log_prefix: str) -> None:
+def _transcribe_and_enqueue(stt, turn_queue: "queue.PriorityQueue", temp_in: str, log_prefix: str,
+                            turn_in_progress: threading.Event | None = None) -> None:
+    # Set before transcription, not after: STT plus the LLM call is several
+    # seconds of silence, and the head must not recenter during it.
+    if turn_in_progress is not None:
+        turn_in_progress.set()
     audio_s = max(0, os.path.getsize(temp_in) - 44) / (config.MIC_RATE * 2)
     t_stt = time.monotonic()
     user_text = stt.transcribe(temp_in)
@@ -152,6 +157,9 @@ def _transcribe_and_enqueue(stt, turn_queue: "queue.PriorityQueue", temp_in: str
 
     if not user_text or len(user_text) < 2:
         logger.warning("%s: nothing recognised.", log_prefix)
+        # Nothing was queued, so nothing will clear this later.
+        if turn_in_progress is not None:
+            turn_in_progress.clear()
         return
 
     logger.info("[%s] Du hast gesagt: '%s'", log_prefix, user_text)
@@ -182,7 +190,7 @@ def console_input_loop(
             logger.error("Recording failed.")
             continue
 
-        _transcribe_and_enqueue(stt, turn_queue, temp_in, "manuell")
+        _transcribe_and_enqueue(stt, turn_queue, temp_in, "manuell", turn_in_progress)
 
 
 def vad_input_loop(
@@ -190,6 +198,7 @@ def vad_input_loop(
     mic_lock: threading.Lock, assistant_speaking: threading.Event,
     poll_interval_s: float = 0.2, trailing_silence_s: float = 0.8, min_voice_polls: int = 2,
     calibration_mode: threading.Event | None = None, composing_mode: threading.Event | None = None,
+    turn_in_progress: threading.Event | None = None,
     servo_recentering: threading.Event | None = None,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
@@ -324,7 +333,7 @@ def vad_input_loop(
             logger.error("VAD-Recording failed.")
             continue
 
-        _transcribe_and_enqueue(stt, turn_queue, temp_in, "VAD")
+        _transcribe_and_enqueue(stt, turn_queue, temp_in, "VAD", turn_in_progress)
 
 
 def handle_turn(
@@ -456,6 +465,12 @@ def main() -> None:
     servo_recentering = threading.Event()
 
     # Set by ChatBridgeAdapter the instant a chat message is typed and sent -
+    # Set from the moment transcription starts until the reply finishes, so
+    # start_doa_tracking() does not recenter the head during the several
+    # seconds of silence that STT and the LLM call occupy - turning away from
+    # the person exactly as it is about to answer them.
+    turn_in_progress = threading.Event()
+
     # see handle_turn()'s cancel_event param. Cleared by the turn loop below
     # just before each handle_turn() call.
     cancel_current_turn = threading.Event()
@@ -529,14 +544,14 @@ def main() -> None:
         start_doa_tracking(
             doa, turntable, face, lock=doa_lock,
             assistant_speaking=assistant_speaking, calibration_mode=calibration_mode,
-            servo_recentering=servo_recentering,
+            servo_recentering=servo_recentering, turn_in_progress=turn_in_progress,
         )
         threading.Thread(
             target=vad_input_loop,
             args=(bus, turn_queue, stt, doa, doa_lock, mic_lock, assistant_speaking),
             kwargs={
                 "calibration_mode": calibration_mode, "composing_mode": composing_mode,
-                "servo_recentering": servo_recentering,
+                "servo_recentering": servo_recentering, "turn_in_progress": turn_in_progress,
             },
             daemon=True,
         ).start()
@@ -555,6 +570,7 @@ def main() -> None:
             while calibration_mode.is_set():
                 time.sleep(0.2)
             cancel_current_turn.clear()
+            turn_in_progress.set()
             try:
                 handle_turn(text, bus, conversation, store, llm, tts, cancel_current_turn)
             except Exception:
@@ -564,6 +580,8 @@ def main() -> None:
                 # with it - or, worse, leave the unit visibly alive and
                 # tracking while silently never answering again.
                 logger.exception("Turn failed - the assistant keeps running.")
+            finally:
+                turn_in_progress.clear()
         except KeyboardInterrupt:
             print("\nBye!")
             stt.stop()

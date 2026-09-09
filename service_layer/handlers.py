@@ -84,7 +84,7 @@ def start_doa_tracking(
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
     post_move_quiet_s: float = 0.6, servo_recentering=None, min_doa_samples: int = 2,
     accept_range=None, paused=None, sample_window_s: float = 0.6,
-    doa_sample_interval_s=None, doa_onset_skip_s: float = 0.0,
+    doa_sample_interval_s=None, doa_onset_skip_s: float = 0.0, turn_in_progress=None,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
@@ -140,6 +140,13 @@ def start_doa_tracking(
     face.animate_eye_direction() - by the time the head physically arrives,
     eyes and head are aligned again instead of the eyes staying cocked to the
     side.
+
+    turn_in_progress: set while a turn is being answered - from the moment
+    transcription starts until the reply finishes. The silence clock keeps
+    running through STT and the LLM call, which is dead air of several
+    seconds, so without this the head recenters just before it speaks -
+    turning away from the person exactly as it answers them. assistant_speaking
+    alone is not enough: it only covers playback, not the thinking before it.
 
     silence_timeout_s: if no voice activity has been picked up for this long,
     the head drifts back to home on its own - it shouldn't stay cocked toward
@@ -313,6 +320,7 @@ def start_doa_tracking(
                         and silence_timeout_s
                         and silence_timeout_s > 0
                         and time.monotonic() - last_active_time >= silence_timeout_s
+                        and not (turn_in_progress is not None and turn_in_progress.is_set())
                     ):
                         logger.info("[DOA] %.0fs of silence - head returning to home.", silence_timeout_s)
                         ramp_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
