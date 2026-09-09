@@ -206,6 +206,73 @@ def describe(errors, label, indent=""):
           f"RMSE={rmse(errors):5.2f}  max={max(absv):5.2f}")
 
 
+def linear_fit(points):
+    n = len(points)
+    if n < 2:
+        return None
+    mx = sum(x for x, _ in points) / n
+    my = sum(y for _, y in points) / n
+    sxx = sum((x - mx) ** 2 for x, _ in points)
+    if sxx == 0:
+        return None
+    b = sum((x - mx) * (y - my) for x, y in points) / sxx
+    a = my - b * mx
+    ss_tot = sum((y - my) ** 2 for _, y in points)
+    ss_res = sum((y - (a + b * x)) ** 2 for x, y in points)
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+    return {"a": a, "b": b, "r2": r2, "n": n}
+
+
+def report_gain(analysed):
+    """Fits reported bearing against true bearing.
+
+    A slope below 1 means the array under-reports how far off-axis a source
+    is, pulling every estimate toward the front.
+    """
+    def bearing(r):
+        for key in ("doa_implied_bearing", "servo_target_angle"):
+            v = fnum(r, key)
+            if v is not None:
+                return v
+        return None
+
+    print("\n" + "-" * 78)
+    print("OFF-AXIS GAIN (reported bearing vs true bearing)")
+    print("-" * 78)
+    print("slope < 1 = the array pulls sources toward the front (angular compression)")
+    print(f"\n{'distance':>9} {'noise':>9} {'n':>4} {'slope k':>9} {'1/k':>7} "
+          f"{'intercept':>10} {'R2':>8}   per-angle means")
+
+    cells = defaultdict(list)
+    for r in analysed:
+        b = bearing(r)
+        if b is not None:
+            cells[(r["distance_m"], r["noise_condition"])].append((r["angle_true"], b))
+
+    for key in sorted(cells):
+        pts = cells[key]
+        fit = linear_fit(pts)
+        by_angle = defaultdict(list)
+        for t, b in pts:
+            by_angle[t].append(b)
+        summary = "  ".join(f"{a:g}->{mean(v):.1f}" for a, v in sorted(by_angle.items()))
+        if fit is None or len({t for t, _ in pts}) < 2:
+            print(f"{key[0]:>9g} {key[1]:>9} {len(pts):>4} {'-':>9} {'-':>7} "
+                  f"{'-':>10} {'-':>8}   {summary}")
+            continue
+        print(f"{key[0]:>9g} {key[1]:>9} {fit['n']:>4} {fit['b']:>9.3f} "
+              f"{1.0 / fit['b'] if fit['b'] else float('nan'):>7.3f} "
+              f"{fit['a']:>10.2f} {fit['r2']:>8.4f}   {summary}")
+
+    quiet = [p for (d, n), pts in cells.items() if n == "none" for p in pts]
+    if quiet and len({t for t, _ in quiet}) >= 2:
+        fit = linear_fit(quiet)
+        print(f"\nPooled over all quiet trials: k = {fit['b']:.3f} "
+              f"(correction 1/k = {1.0 / fit['b']:.3f}), R2 = {fit['r2']:.4f}, n = {fit['n']}")
+        print("Compare k across distances above - if it varies, a single correction")
+        print("constant is wrong and the model needs to be distance-dependent.")
+
+
 def factor_label(rec, factor):
     if factor == "noise_condition":
         return rec.get("noise_condition", "?")
@@ -325,6 +392,8 @@ def main():
         print("\nNOTE: some trials used manual playback timing, so 'settle from onset'")
         print("      carries your reaction time. Report 'settle from 1st voice' instead,")
         print("      or re-run those conditions with --play.")
+
+    report_gain(analysed)
 
     print("\n" + "-" * 78)
     print("BY CONDITION")
