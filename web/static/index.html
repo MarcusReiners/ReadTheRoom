@@ -1691,8 +1691,6 @@
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "set_volume", value: parseFloat(volumeInputEl.value) }));
   });
-})();
-
   var doaCalStartBtn = document.getElementById("doaCalStartBtn");
   var doaCalCancelBtn = document.getElementById("doaCalCancelBtn");
   var doaCalStatus = document.getElementById("doaCalStatus");
@@ -1709,6 +1707,10 @@
 
   if (doaCalStartBtn) {
     doaCalStartBtn.addEventListener("click", function () {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        doaCalStatus.textContent = "Not connected to the assistant.";
+        return;
+      }
       var d = parseFloat(document.getElementById("doaCalDistance").value) || 1.25;
       ws.send(JSON.stringify({ type: "start_doa_calibration", distance_m: d }));
       doaCalStatus.textContent = "Starting…";
@@ -1716,6 +1718,7 @@
   }
   if (doaCalCancelBtn) {
     doaCalCancelBtn.addEventListener("click", function () {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
       ws.send(JSON.stringify({ type: "cancel_doa_calibration" }));
     });
   }
@@ -1739,6 +1742,8 @@
       }).join("   ");
     }
   }
+
+})();
 
 </script>
 </body>
