@@ -166,6 +166,8 @@ def enrich(rows):
         rec["distance_m"] = fnum(row, "distance_m")
         rec["miss"] = (row.get("miss") or "0").strip() in ("1", "true", "True")
         rec["simulated"] = (row.get("simulated") or "0").strip() in ("1", "true", "True")
+        rec["excluded"] = (row.get("excluded") or "0").strip() in ("1", "true", "True")
+        rec["exclude_reason"] = (row.get("exclude_reason") or "").strip()
         rec["cfg"] = tuple((row.get(k) or "").strip() for k in
                            ("cfg_onset_skip_s", "cfg_sample_interval_s",
                             "cfg_min_samples", "cfg_post_move_quiet_s"))
@@ -233,6 +235,19 @@ def main():
     if not rows:
         print("No usable trials found.")
         return
+
+    dropped = [r for r in rows if r["excluded"]]
+    if dropped:
+        rows = [r for r in rows if not r["excluded"]]
+        reasons = {}
+        for r in dropped:
+            reasons.setdefault(r["exclude_reason"] or "(no reason given)", []).append(r)
+        print(f"Excluded {len(dropped)} trial(s) marked by the experimenter:")
+        for reason, rs in reasons.items():
+            ids = ", ".join(str(r.get("trial_id", "?")) for r in rs)
+            print(f"  {len(rs)} trial(s) - {reason}")
+            print(f"      ids: {ids}")
+        print("  State this exclusion and its reason in the write-up.\n")
 
     simulated = [r for r in rows if r["simulated"]]
     if simulated and not args.include_simulated:
