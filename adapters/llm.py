@@ -79,19 +79,21 @@ class LLMGatewayAdapter:
             for delta in self._ask_stream(self.model, self.api_base, user_text, history):
                 emitted_any = True
                 yield delta
-        except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout, _StreamStalled):
+        except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout, _StreamStalled) as e:
             if emitted_any:
-                logger.warning("'%s' aborted mid-stream - no fallback, the reply stays incomplete.",
-                                self.model)
+                logger.warning("'%s' aborted mid-stream (%s) - no fallback, the reply stays incomplete.",
+                                self.model, e)
                 return
             if self.fallback_model:
-                logger.warning("'%s' unreachable or too slow, falling back to '%s'.",
-                                self.model, self.fallback_model)
+                logger.warning("'%s' unreachable or too slow (%s), falling back to '%s'.",
+                                self.model, e, self.fallback_model)
                 try:
                     yield from self._ask_stream(self.fallback_model, self.fallback_api_base, user_text, history)
                     return
-                except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout, _StreamStalled):
-                    pass
+                except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout,
+                        _StreamStalled) as fallback_error:
+                    logger.warning("Fallback '%s' at %s failed too (%s).",
+                                   self.fallback_model, self.fallback_api_base, fallback_error)
             yield _SPOKEN_UNREACHABLE
         except Exception as e:
             if emitted_any:
@@ -142,7 +144,7 @@ class LLMGatewayAdapter:
             try:
                 kind, payload = chunks.get(timeout=wait)
             except queue.Empty:
-                raise _StreamStalled(f"Kein Token von {model} - Stream abgebrochen.")
+                raise _StreamStalled(f"no token from {model} in time - stream aborted")
             if kind == "done":
                 return
             if kind == "error":
@@ -153,8 +155,8 @@ class LLMGatewayAdapter:
                 yield delta
             elif not got_first and time.monotonic() >= first_deadline:
                 raise _StreamStalled(
-                    f"Kein Token von {model} binnen {self.first_token_timeout_s:.0f}s "
-                    "(nur leere Chunks) - Stream abgebrochen."
+                    f"no token from {model} within {self.first_token_timeout_s:.0f}s "
+                    "(only empty chunks) - stream aborted"
                 )
 
     def _ask_stream(
