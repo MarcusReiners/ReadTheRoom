@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import logging
 import math
 import os
 import random
@@ -30,7 +31,7 @@ from service_layer.handlers import register_handlers
 STUDY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "study")
 FN_TARGET = 0.05
 STAY_S = 15.0
-WALK_S = 8.0
+WALK_S = 0.0
 CLEAR_HOLD_S = 2.0
 SPEECH_START_TIMEOUT_S = 20.0
 ENTRY_WINDOW_S = 20.0
@@ -273,10 +274,13 @@ def run_trial(ctx, script_id):
     sc = SCRIPTS[script_id]
     log, zone, sim, stay, bus = ctx["log"], ctx["zone"], ctx["sim"], ctx["stay_s"], ctx["bus"]
     print(f"  You: {sc['tell'].format(stay=stay)}.")
-    if ask("  ENTER, then go to the start mark. The reply starts once the zone is clear "
-           "(q to quit) > ").strip().lower() == "q":
+    if ctx["walk_s"] > 0:
+        prompt = "  ENTER, then go to the start mark. The reply starts once the zone is clear (q to quit) > "
+    else:
+        prompt = "  At the start mark? ENTER to start the reply (q to quit) > "
+    if ask(prompt).strip().lower() == "q":
         raise KeyboardInterrupt
-    if not sim:
+    if not sim and ctx["walk_s"] > 0:
         countdown(ctx["walk_s"], "walk to the start mark")
     if not wait_clear(ctx["guard"], ctx["conversation"]):
         return None
@@ -291,7 +295,7 @@ def run_trial(ctx, script_id):
         print("  the assistant never started speaking - check the TTS provider.")
         ctx["stop_speech"]()
         return None
-    print("  SPEAKING - that is your cue. Perform the script; the rest is automatic.")
+    print("  SPEAKING - GO.")
 
     rev = {}
     if sc["kind"] == "entry":
@@ -299,15 +303,20 @@ def run_trial(ctx, script_id):
             sim.enter(sc.get("sim_speed", 1100.0))
         switch = wait_for(log, "modality", t_arm, lambda e: e["to"] == "web", ENTRY_WINDOW_S)
         if switch is not None:
+            print("  SWITCHED - stay inside.")
+            countdown(stay, "stay inside")
+            print("  >>> LEAVE NOW <<<")
             if sim:
-                countdown(stay, "you stay inside")
                 sim.leave()
-            rev = reversion(log, switch["t"], stay + REVERSION_TIMEOUT_S)
+            rev = reversion(log, time.time(), REVERSION_TIMEOUT_S)
+        else:
+            print(f"  no switch within {ENTRY_WINDOW_S:.0f} s - leave the zone.")
     elif sc["kind"] == "peek":
         if sim:
             sim.peek()
         switch = wait_for(log, "modality", t_arm, lambda e: e["to"] == "web", PEEK_WINDOW_S)
         if switch is not None:
+            print("  SWITCHED - step back out if you have not already.")
             rev = reversion(log, switch["t"], REVERSION_TIMEOUT_S)
     else:
         if sim:
@@ -736,6 +745,13 @@ class SimTTS:
         return True
 
 
+def quiet_console():
+    """Keeps the terminal to the prompts; the log file still gets everything."""
+    for h in logging.getLogger().handlers:
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+            h.setLevel(logging.WARNING)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Study 2: privacy-switch reliability.")
     parser.add_argument("--configuration", default="baseline", help="placement label, e.g. baseline or doorway")
@@ -751,6 +767,7 @@ def main():
                         help="write the sheet for video timings, prefilled with the session's trials")
     parser.add_argument("--import-video", action="store_true", help="merge the filled video sheet")
     parser.add_argument("--simulate", action="store_true", help="no radar or speaker, for rehearsal")
+    parser.add_argument("--verbose", action="store_true", help="show the full event log in the terminal too")
     args = parser.parse_args()
 
     reps = parse_reps(args.reps)
@@ -772,6 +789,8 @@ def main():
         return
 
     logging_setup.configure_logging(config)
+    if not args.verbose:
+        quiet_console()
     bus = EventBus()
     log = EventLog()
     attach_recorder(bus, log)
