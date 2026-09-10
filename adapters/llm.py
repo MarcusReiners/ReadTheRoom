@@ -1,7 +1,9 @@
 import logging
 import queue
+import sys
 import threading
 import time
+import traceback
 from typing import Iterator, Optional
 
 import litellm
@@ -11,6 +13,23 @@ from domain.conversation import SYSTEM_PROMPT
 litellm.drop_params = True
 
 logger = logging.getLogger(__name__)
+
+_MAX_STACK_DUMPS = 3
+_stack_dumps = 0
+
+
+def _log_thread_stacks(reason: str) -> None:
+    """Logs where every thread currently is, to find what an LLM request waits on."""
+    global _stack_dumps
+    if _stack_dumps >= _MAX_STACK_DUMPS:
+        return
+    _stack_dumps += 1
+    names = {t.ident: t.name for t in threading.enumerate()}
+    parts = [f"[LLM] {reason} - where every thread is right now:"]
+    for ident, frame in sys._current_frames().items():
+        parts.append(f"--- {names.get(ident, ident)}")
+        parts.append("".join(traceback.format_stack(frame, limit=14)).rstrip())
+    logger.warning("\n".join(parts))
 
 # Spoken aloud, so: short, plain, no punctuation salad, and English to match
 # the assistant's locked reply language. Anything diagnostic belongs in the
@@ -75,14 +94,20 @@ class LLMGatewayAdapter:
                           messages=[{"role": "user", "content": "Hi"}], max_tokens=5, timeout=60)
             if self.reasoning_effort:
                 kwargs["reasoning_effort"] = self.reasoning_effort
+            watchdog = threading.Timer(10.0, _log_thread_stacks,
+                                       args=("warm-up request still running after 10s",))
+            watchdog.daemon = True
+            watchdog.start()
             try:
                 for _ in litellm.completion(**kwargs):
                     pass
                 logger.info("[LLM] warm-up request done after %.1fs.", time.monotonic() - start)
             except Exception as e:
                 logger.warning("[LLM] warm-up request failed after %.1fs: %s", time.monotonic() - start, e)
+            finally:
+                watchdog.cancel()
 
-        threading.Thread(target=run, daemon=True).start()
+        threading.Thread(target=run, daemon=True, name="llm-warm-up").start()
 
     def ask_stream(self, user_text: str, history: Optional[list[dict]] = None) -> Iterator[str]:
         # Tracks whether the primary model already emitted anything before
@@ -147,13 +172,14 @@ class LLMGatewayAdapter:
                 chunks.put(("error", e))
 
         started = time.monotonic()
-        threading.Thread(target=worker, daemon=True).start()
+        threading.Thread(target=worker, daemon=True, name="llm-stream").start()
 
         model = completion_kwargs.get("model")
         opened_after: float | None = None
         empty_chunks = 0
 
         def stalled() -> _StreamStalled:
+            _log_thread_stacks(f"no text from {model} yet")
             elapsed = time.monotonic() - started
             if got_first:
                 return _StreamStalled(f"{model} went quiet for {self.stall_timeout_s:.0f}s mid-reply")
