@@ -461,6 +461,7 @@ def main() -> None:
         system_prompt=app_settings["system_prompt"],
         reasoning_effort=app_settings["reasoning_effort"],
         max_tokens=config.LLM_MAX_TOKENS,
+        ollama_api_base=config.OLLAMA_API_BASE,
     )
     llm.warm_up()
 

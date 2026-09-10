@@ -116,6 +116,7 @@ All settings live in [config.py](config.py) and are read from environment variab
 | `ELEVENLABS_TTS_LANGUAGE_CODE` | TTS output language, ISO 639-1 (`en`, `de`) — keep it consistent with what the system prompt tells the model to reply in, or the voice mispronounces its own output |
 | `OPENAI_API_KEY`, `GEMINI_API_KEY` | Read by LiteLLM when `LLM_MODEL` starts with `openai/` / `gemini/` |
 | `LLM_MODEL`, `LLM_API_BASE` | Primary LLM (LiteLLM model string + optional server address) |
+| `OLLAMA_API_BASE` | Address of the Ollama server used whenever the model is an `ollama_chat/...` one, e.g. `http://<mac-ip>:11434` - lets the web app switch between a cloud model and the local one without a restart |
 | `LLM_FALLBACK_MODEL`, `LLM_FALLBACK_API_BASE` | Optional local/LAN Ollama fallback if the primary LLM is unreachable (off unless `LLM_FALLBACK_MODEL` is set, e.g. `ollama_chat/qwen3.5:9b`) |
 | `LLM_REASONING_EFFORT` | How much the model may "think" before answering: `minimal`/`none`/`disable`/`low`/`medium`/`high`, or empty for the provider's default. Thinking is pure dead air here — nothing can be spoken until the first real token. Note Gemini 3.x cannot disable it fully; `disable` lands on its lowest level. Also editable from the web app |
 | `LLM_MAX_TOKENS` | Ceiling on reply length (default 500). Thinking tokens count against it |
