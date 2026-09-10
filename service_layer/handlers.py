@@ -7,9 +7,11 @@ from domain.conversation import ConversationState
 from domain.events import (
     ListeningStateChanged,
     ModalitySwitched,
-    PersonCountChanged,
+    PersonEnteredRoom,
+    PersonLeftRoom,
     SpeechPlaybackEnded,
     SpeechPlaybackStarted,
+    SpeechTranscribed,
 )
 from service_layer.bus import EventBus
 from adapters.tts.base import StreamingTTSAdapter
@@ -24,24 +26,100 @@ TIE_LED_IDLE_PERIOD_MS = 3000
 TIE_LED_LISTENING_PERIOD_MS = 900
 
 
+class PrivacyGuard:
+    """Moves spoken answers to the chat when someone new walks in.
+
+    Decided by who crosses the zone boundary, not by how many people the radar
+    currently sees - the LD2450 loses still, seated people, so a headcount
+    both misses the user and, worse, hides a newcomer behind them.
+
+    - Someone talking to the assistant is taken as proof that a conversation
+      partner is present, tracked or not. If nobody was seen entering first,
+      they had been there all along, and an open conversation is their choice.
+    - Anyone crossing IN while a partner is present is a visitor: speech stops.
+    - Anyone crossing IN with no conversation going is harmless - they become
+      the partner if they start talking.
+    - Someone crossing OUT while visitors are present is taken to be a visitor;
+      speech returns once the last one has left.
+    - Someone crossing OUT with no visitors may be the partner. If no
+      conversation follows within departure_grace_s, the partner is assumed
+      gone; until then, newcomers are still treated as visitors.
+    """
+
+    def __init__(self, bus: EventBus, conversation: ConversationState, tts: StreamingTTSAdapter,
+                 departure_grace_s: float = 60.0) -> None:
+        self.bus = bus
+        self.conversation = conversation
+        self.tts = tts
+        self.departure_grace_s = departure_grace_s
+        self.partner_present = False
+        self.visitors = 0
+        self._departure_since: float | None = None
+        self._lock = threading.Lock()
+        bus.subscribe(SpeechTranscribed, self._on_turn)
+        bus.subscribe(PersonEnteredRoom, self._on_entered)
+        bus.subscribe(PersonLeftRoom, self._on_left)
+
+    def _expire_departure(self, now: float) -> None:
+        if self._departure_since is not None and now - self._departure_since >= self.departure_grace_s:
+            self._departure_since = None
+            self.partner_present = False
+            logger.info("[Privacy] nobody spoke since someone left - assuming the user left.")
+
+    def _on_turn(self, event: SpeechTranscribed) -> None:
+        if getattr(event, "source", "voice") != "voice":
+            return
+        with self._lock:
+            self._expire_departure(time.monotonic())
+            if not self.partner_present:
+                logger.info("[Privacy] conversation partner present (someone spoke to the assistant).")
+            self.partner_present = True
+            self._departure_since = None
+
+    def _on_entered(self, event: PersonEnteredRoom) -> None:
+        with self._lock:
+            self._expire_departure(time.monotonic())
+            if not self.partner_present:
+                logger.info("[Privacy] someone entered (%s), no conversation running - nothing to protect.",
+                            event.via)
+                return
+            self.visitors += 1
+            switch = self.conversation.confidential and self.conversation.modality == "voice"
+            visitors = self.visitors
+        logger.info("[Privacy] visitor entered (%s) - %d visitor(s) present.", event.via, visitors)
+        if switch:
+            self.conversation.switch_modality("web")
+            self.bus.publish(ModalitySwitched(to_modality="web", reason="person_entered"))
+            logger.info("Modality switched to 'web' (someone entered during a conversation)")
+            if self.tts.request_takeover():
+                logger.info("Speech interrupted (a person entered the room).")
+
+    def _on_left(self, event: PersonLeftRoom) -> None:
+        back = False
+        with self._lock:
+            now = time.monotonic()
+            self._expire_departure(now)
+            if self.visitors > 0:
+                self.visitors -= 1
+                back = self.visitors == 0 and self.conversation.modality == "web"
+                logger.info("[Privacy] visitor left - %d still present.", self.visitors)
+            elif self.partner_present:
+                self._departure_since = now
+                logger.info("[Privacy] someone left with no visitors present - the user, unless "
+                            "the conversation continues within %.0fs.", self.departure_grace_s)
+        if back:
+            self.conversation.switch_modality("voice")
+            self.bus.publish(ModalitySwitched(to_modality="voice", reason="alone_again"))
+            logger.info("Modality switched back to 'voice' (visitors gone)")
+
+
 def register_handlers(
     bus: EventBus,
     conversation: ConversationState,
     tts: StreamingTTSAdapter,
-) -> None:
-    def on_person_count_changed(event: PersonCountChanged) -> None:
-        if event.count > 1 and conversation.confidential and conversation.modality == "voice":
-            conversation.switch_modality("web")
-            bus.publish(ModalitySwitched(to_modality="web", reason="person_entered"))
-            logger.info("Modality switched to 'web' (PersonCount=%s)", event.count)
-            if tts.request_takeover():
-                logger.info("Speech interrupted (a person entered the room).")
-        elif event.count <= 1 and conversation.modality == "web":
-            conversation.switch_modality("voice")
-            bus.publish(ModalitySwitched(to_modality="voice", reason="alone_again"))
-            logger.info("Modalitätswechsel zurück zu 'voice' (wieder allein)")
-
-    bus.subscribe(PersonCountChanged, on_person_count_changed)
+    departure_grace_s: float = 60.0,
+) -> PrivacyGuard:
+    return PrivacyGuard(bus, conversation, tts, departure_grace_s=departure_grace_s)
 
 
 def _tie_led_command(mode: str, period_ms: int | None = None) -> dict:

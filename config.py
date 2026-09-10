@@ -157,6 +157,17 @@ STUDY_DIR = _env("STUDY_DIR", os.path.join(os.path.dirname(os.path.abspath(__fil
 # --- -> USB serial into the Pi; see mmWave/ and mmWaveBridge/) -------------
 # RADAR_PROVIDER: ld2450 | dummy
 RADAR_PROVIDER = _env("RADAR_PROVIDER", "ld2450")
+# Privacy switch. Decided by who crosses the zone boundary, not by how many
+# people the radar currently sees: the LD2450 loses still, seated people, so
+# the user's presence is taken from the conversation itself.
+# A departed user is assumed after someone leaves and no conversation follows
+# for this long; until then anyone entering is still treated as a visitor.
+PRIVACY_DEPARTURE_GRACE_S = float(_env("PRIVACY_DEPARTURE_GRACE_S", "60"))
+# Hysteresis around the zone edge: a track must be this far inside to count as
+# in, and this far outside to count as out, so jitter at the boundary cannot
+# fire entries and exits back and forth.
+RADAR_ENTRY_MARGIN_MM = float(_env("RADAR_ENTRY_MARGIN_MM", "100"))
+RADAR_EXIT_MARGIN_MM = float(_env("RADAR_EXIT_MARGIN_MM", "100"))
 RADAR_SERIAL_PORT = _env("RADAR_SERIAL_PORT", "/dev/ttyUSB0")
 RADAR_SERIAL_BAUD = int(_env("RADAR_SERIAL_BAUD", "115200"))
 

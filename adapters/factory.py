@@ -89,6 +89,8 @@ def build_radar(cfg, bus: EventBus):
             bus=bus,
             serial_port=cfg.RADAR_SERIAL_PORT,
             baud_rate=cfg.RADAR_SERIAL_BAUD,
+            entry_margin_mm=cfg.RADAR_ENTRY_MARGIN_MM,
+            exit_margin_mm=cfg.RADAR_EXIT_MARGIN_MM,
         )
     if cfg.RADAR_PROVIDER == "dummy":
         from adapters.hardware.radar_ld2450 import DummyRadarAdapter

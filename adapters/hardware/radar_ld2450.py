@@ -1,20 +1,39 @@
 import json
 import logging
+import math
 import threading
 import time
 
 import serial
 
-from domain.events import PersonCountChanged, RadarTargetsUpdated
+from domain.events import PersonCountChanged, PersonEnteredRoom, PersonLeftRoom, RadarTargetsUpdated
 from service_layer.bus import EventBus
 
 logger = logging.getLogger(__name__)
+
+TRACK_GAP_S = 1.0
+MAX_TRACK_JUMP_MM = 800.0
+APPEAR_EDGE_MM = 600.0
+APPEAR_SPEED_MMS = 150.0
+APPEAR_INWARD_MM = 80.0
+APPEAR_WINDOW_S = 0.6
+
+
+def zone_signed_distance(x: float, y: float, zone: dict) -> float | None:
+    """Distance to the zone rectangle's edge: positive outside, negative inside."""
+    if not zone or not zone.get("valid") or x is None or y is None:
+        return None
+    x0, x1 = sorted((zone["min_x_mm"], zone["max_x_mm"]))
+    y0, y1 = sorted((zone["min_y_mm"], zone["max_y_mm"]))
+    if x0 <= x <= x1 and y0 <= y <= y1:
+        return -min(x - x0, x1 - x, y - y0, y1 - y)
+    return math.hypot(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
 
 
 class DummyRadarAdapter:
     def __init__(self, bus: EventBus) -> None:
         self.bus = bus
-        self._person_count = 1
+        self._person_count = 0
 
     def start(self) -> None:
         self.bus.publish(PersonCountChanged(count=self._person_count))
@@ -23,12 +42,15 @@ class DummyRadarAdapter:
     def person_count(self) -> int:
         return self._person_count
 
-    def simulate_second_person_enters(self) -> None:
-        self._person_count = 2
+    def simulate_person_enters(self) -> None:
+        self._person_count += 1
         self.bus.publish(PersonCountChanged(count=self._person_count))
+        self.bus.publish(PersonEnteredRoom(person_id=self._person_count, x_mm=0.0, y_mm=0.0))
 
-    def simulate_second_person_leaves(self) -> None:
-        self._person_count = 1
+    def simulate_person_leaves(self) -> None:
+        if self._person_count > 0:
+            self.bus.publish(PersonLeftRoom(person_id=self._person_count))
+        self._person_count = max(0, self._person_count - 1)
         self.bus.publish(PersonCountChanged(count=self._person_count))
 
     def get_zone(self) -> dict:
@@ -58,6 +80,8 @@ class RadarLD2450Adapter:
         serial_port: str,
         baud_rate: int = 115200,
         drop_hold_s: float = 3.0,
+        entry_margin_mm: float = 100.0,
+        exit_margin_mm: float = 100.0,
     ) -> None:
         """drop_hold_s: how long a *decrease* in person count has to hold
         steady before it's believed. Increases are published immediately.
@@ -76,7 +100,11 @@ class RadarLD2450Adapter:
         self._serial_port = serial_port
         self._baud_rate = baud_rate
         self._drop_hold_s = drop_hold_s
-        self._person_count = 1
+        self._person_count = 0
+        self._entry_margin_mm = entry_margin_mm
+        self._exit_margin_mm = exit_margin_mm
+        self._tracks: dict = {}
+        self._warned_zone_mode = None
         # Candidate lower count waiting out drop_hold_s before being believed.
         self._pending_lower_count: int | None = None
         self._pending_since = 0.0
@@ -175,13 +203,71 @@ class RadarLD2450Adapter:
             # restart the clock rather than inheriting the old deadline.
             self._pending_lower_count = count
             self._pending_since = now
-            logger.debug("[Radar] Rueckgang auf %d beobachtet, warte %.1fs ab.", count, self._drop_hold_s)
+            logger.debug("[Radar] count dropped to %d, holding %.1fs before accepting it.", count, self._drop_hold_s)
             return
 
         if now - self._pending_since >= self._drop_hold_s:
             self._pending_lower_count = None
             self._person_count = count
             self.bus.publish(PersonCountChanged(count=count))
+
+    def _check_zone_mode(self, zone: dict) -> None:
+        mode = zone.get("mode", 0)
+        if mode != self._warned_zone_mode and mode not in (0, None):
+            logger.warning(
+                "[Radar] zone enforced by the sensor (mode %s): people outside the zone are not "
+                "reported, so nobody can be seen crossing into it. Set 'Enforced by' to Software.",
+                mode,
+            )
+        self._warned_zone_mode = mode
+
+    def _update_crossings(self, targets: list, zone: dict, now: float) -> None:
+        """Publishes PersonEnteredRoom / PersonLeftRoom when a track crosses the
+        zone edge. Only movement across the boundary counts: someone sitting
+        inside - tracked, lost and re-acquired - never generates an event."""
+        if not zone or not zone.get("valid"):
+            return
+        seen = set()
+        for target in targets:
+            tid, x, y = target.get("id"), target.get("x_mm"), target.get("y_mm")
+            if tid is None or x is None or y is None:
+                continue
+            seen.add(tid)
+            d = zone_signed_distance(x, y, zone)
+            if d <= -self._entry_margin_mm:
+                side = "in"
+            elif d >= self._exit_margin_mm:
+                side = "out"
+            else:
+                side = None
+            prev = self._tracks.get(tid)
+            continuous = (prev is not None and now - prev["t"] <= TRACK_GAP_S
+                          and math.hypot(x - prev["x"], y - prev["y"]) <= MAX_TRACK_JUMP_MM)
+            prev_side = prev["side"] if continuous else None
+            pending = prev.get("pending") if continuous else None
+            new_side = side or prev_side
+            depth = -d
+            if new_side == "in" and prev_side != "in":
+                if prev_side == "out":
+                    self.bus.publish(PersonEnteredRoom(person_id=tid, x_mm=x, y_mm=y, via="crossing"))
+                elif abs(target.get("speed_mms") or 0) >= APPEAR_SPEED_MMS and d >= -APPEAR_EDGE_MM:
+                    # First seen already inside, moving, near the edge: either
+                    # someone who came in faster than the radar caught them
+                    # outside, or the seated user getting up to leave. Only the
+                    # direction tells them apart, so wait to see it.
+                    pending = {"depth": depth, "t": now}
+            elif new_side == "out" and prev_side == "in":
+                self.bus.publish(PersonLeftRoom(person_id=tid))
+                pending = None
+            if pending is not None and new_side == "in":
+                if depth - pending["depth"] >= APPEAR_INWARD_MM:
+                    self.bus.publish(PersonEnteredRoom(person_id=tid, x_mm=x, y_mm=y, via="appeared"))
+                    pending = None
+                elif pending["depth"] - depth >= APPEAR_INWARD_MM or now - pending["t"] > APPEAR_WINDOW_S:
+                    pending = None
+            self._tracks[tid] = {"t": now, "x": x, "y": y, "side": new_side, "pending": pending}
+        for tid in [t for t, tr in self._tracks.items() if t not in seen and now - tr["t"] > TRACK_GAP_S]:
+            del self._tracks[tid]
 
     def _handle_status(self, data: dict) -> None:
         targets = data.get("targets", [])
@@ -192,6 +278,8 @@ class RadarLD2450Adapter:
         zone = data.get("zone")
         if zone is not None:
             self._latest_zone = zone
+            self._check_zone_mode(zone)
+        self._update_crossings(targets, self._latest_zone, time.monotonic())
 
         calibrating = bool(data.get("calibrating", False))
         calibration = {"calibrating": calibrating}
