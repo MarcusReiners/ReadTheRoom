@@ -74,9 +74,27 @@ def main():
         play(low)
         print("  OUT")
 
+    trace = "--trace" in sys.argv
+    start = time.monotonic()
+
+    def on_frame(e):
+        state["frames"] += 1
+        if not trace or not state.get("ready"):
+            return
+        zone = radar.get_zone()
+        for t in e.targets:
+            d = zone_signed_distance(t.get("x_mm"), t.get("y_mm"), zone)
+            if d is None:
+                continue
+            side = ("in" if d <= -config.RADAR_ENTRY_MARGIN_MM
+                    else "out" if d >= config.RADAR_EXIT_MARGIN_MM else "edge")
+            print(f"  {time.monotonic() - start:6.1f}s  id {t.get('id')}  x={t.get('x_mm'):6.0f}  "
+                  f"y={t.get('y_mm'):6.0f}  speed={t.get('speed_mms') or 0:5.0f}  "
+                  f"edge distance={d:6.0f} mm  {side}")
+
     bus.subscribe(PersonEnteredRoom, on_enter)
     bus.subscribe(PersonLeftRoom, on_leave)
-    bus.subscribe(RadarTargetsUpdated, lambda e: state.__setitem__("frames", state["frames"] + 1))
+    bus.subscribe(RadarTargetsUpdated, on_frame)
     radar.start()
 
     deadline = time.monotonic() + 15.0
@@ -96,6 +114,7 @@ def main():
           f"an exit {config.RADAR_EXIT_MARGIN_MM:.0f} mm outside it.")
     print("\nWalk slowly through the doorway: HIGH beep = entry, LOW beep = exit.")
     print("Tape the floor where the high beep sounds. Repeat a few times. Ctrl+C to quit.\n")
+    state["ready"] = True
     try:
         while True:
             time.sleep(0.5)
