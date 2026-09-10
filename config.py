@@ -54,7 +54,7 @@ ELEVENLABS_TTS_LANGUAGE_CODE = _env("ELEVENLABS_TTS_LANGUAGE_CODE", "en")
 # --- LLM (via LiteLLM, provider swap = change the model string) --------
 LLM_MODEL = _env("LLM_MODEL", "openai/gpt-4o-mini")
 LLM_API_BASE = _env_opt("LLM_API_BASE")
-LLM_FALLBACK_MODEL = _env_opt("LLM_FALLBACK_MODEL") or "ollama_chat/qwen3.5:9b"
+LLM_FALLBACK_MODEL = _env_opt("LLM_FALLBACK_MODEL")
 # How much the model is allowed to "think" before answering. Empty = leave the
 # provider's default alone (Gemini's is thinking ON). Accepted by LiteLLM:
 # minimal | none | disable | low | medium | high.
