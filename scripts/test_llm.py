@@ -95,6 +95,10 @@ def main():
     if effort != "minimal":
         run("3 same as 2, thinking minimal", dict(base, messages=system_msg + history + question,
                                                   reasoning_effort="minimal"))
+    run("4 the app's warm-up request (Hi, max 5 tokens)",
+        dict(base, messages=[{"role": "user", "content": "Hi"}], max_tokens=5, timeout=60))
+    run("5 same as 2, with the app's 15 s timeout",
+        dict(base, messages=system_msg + history + question, timeout=15))
 
 
 if __name__ == "__main__":
