@@ -83,16 +83,21 @@ def main():
           f"max_tokens {config.LLM_MAX_TOKENS}, system prompt {len(system)} chars, "
           f"history {len(history)} messages")
 
-    base = dict(model=model, api_base=config.LLM_API_BASE, stream=True,
-                max_tokens=config.LLM_MAX_TOKENS, timeout=LIMIT_S)
-    if effort:
-        base["reasoning_effort"] = effort
+    local = model.startswith("ollama")
+    base = dict(model=model, stream=True, max_tokens=config.LLM_MAX_TOKENS, timeout=LIMIT_S)
+    if local:
+        base.update(api_base=config.OLLAMA_API_BASE, extra_body={"think": False})
+        print(f"Ollama server {config.OLLAMA_API_BASE}")
+    else:
+        base["api_base"] = config.LLM_API_BASE
+        if effort:
+            base["reasoning_effort"] = effort
     system_msg = [{"role": "system", "content": system}]
     question = [{"role": "user", "content": "How is it going?"}]
 
     run("1 system prompt only", dict(base, messages=system_msg + question))
     run("2 system prompt + history (what the app sends)", dict(base, messages=system_msg + history + question))
-    if effort != "minimal":
+    if not local and effort != "minimal":
         run("3 same as 2, thinking minimal", dict(base, messages=system_msg + history + question,
                                                   reasoning_effort="minimal"))
     run("4 the app's warm-up request (Hi, max 5 tokens)",

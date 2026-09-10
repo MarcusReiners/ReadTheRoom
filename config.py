@@ -66,7 +66,8 @@ LLM_FALLBACK_MODEL = _env_opt("LLM_FALLBACK_MODEL")
 # so on those the floor is "minimal", not zero.
 LLM_REASONING_EFFORT = _env("LLM_REASONING_EFFORT", "")
 LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "500"))
-LLM_FALLBACK_API_BASE = _env_opt("LLM_FALLBACK_API_BASE") or "http://192.168.178.37:11434"
+OLLAMA_API_BASE = _env_opt("OLLAMA_API_BASE") or "http://192.168.178.37:11434"
+LLM_FALLBACK_API_BASE = _env_opt("LLM_FALLBACK_API_BASE") or OLLAMA_API_BASE
 
 # --- Local model fallback paths -----------------------------------------
 WHISPER_MODEL = _env(

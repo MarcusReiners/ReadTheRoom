@@ -66,9 +66,11 @@ class LLMGatewayAdapter:
         max_tokens: int = 500,
         first_token_timeout_s: float = 20.0,
         stall_timeout_s: float = 30.0,
+        ollama_api_base: Optional[str] = None,
     ) -> None:
         self.model = model
         self.api_base = api_base
+        self.ollama_api_base = ollama_api_base
         self.fallback_model = fallback_model
         self.fallback_api_base = fallback_api_base
         # Instance attribute (not the module-level SYSTEM_PROMPT) so the web
@@ -85,15 +87,32 @@ class LLMGatewayAdapter:
         self.first_token_timeout_s = first_token_timeout_s
         self.stall_timeout_s = stall_timeout_s
 
+    def _provider_kwargs(self, model: str, api_base: Optional[str] = None) -> dict:
+        """The server address and the settings that differ per provider.
+
+        Ollama models get their own address, so the web app can switch between
+        a cloud model and the local one without a restart and without cloud
+        requests being sent to the Ollama server. Ollama also gets qwen's
+        "think" preamble switched off through its native field, which other
+        providers reject (Gemini hard-errors on it); reasoning_effort is left
+        out there so the two cannot conflict.
+        """
+        if model.startswith("ollama"):
+            return {"api_base": api_base or self.ollama_api_base or self.api_base,
+                    "extra_body": {"think": False}, "keep_alive": "24h"}
+        kwargs = {"api_base": api_base or self.api_base}
+        if self.reasoning_effort:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        return kwargs
+
     def warm_up(self) -> None:
         """Sends one tiny request in the background at startup, so litellm's
-        one-off first-call setup is not paid inside the first turn's deadline."""
+        one-off first-call setup (and loading a local model) is not paid inside
+        the first turn's deadline."""
         def run() -> None:
             start = time.monotonic()
-            kwargs = dict(model=self.model, api_base=self.api_base, stream=True,
-                          messages=[{"role": "user", "content": "Hi"}], max_tokens=5, timeout=60)
-            if self.reasoning_effort:
-                kwargs["reasoning_effort"] = self.reasoning_effort
+            kwargs = dict(model=self.model, stream=True, messages=[{"role": "user", "content": "Hi"}],
+                          max_tokens=5, timeout=60, **self._provider_kwargs(self.model))
             watchdog = threading.Timer(10.0, _log_thread_stacks,
                                        args=("warm-up request still running after 10s",))
             watchdog.daemon = True
@@ -119,7 +138,7 @@ class LLMGatewayAdapter:
         # end the turn rather than silently double it.
         emitted_any = False
         try:
-            for delta in self._ask_stream(self.model, self.api_base, user_text, history):
+            for delta in self._ask_stream(self.model, None, user_text, history):
                 emitted_any = True
                 yield delta
         except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout, _StreamStalled) as e:
@@ -231,7 +250,6 @@ class LLMGatewayAdapter:
 
         completion_kwargs = dict(
             model=model,
-            api_base=api_base,
             messages=messages,
             stream=True,
             # High enough that a "thinking" model (e.g. Gemini's flash
@@ -245,17 +263,8 @@ class LLMGatewayAdapter:
             # fail fast - this raises Timeout instead, which now also
             # triggers the fallback model the same way a connection error does.
             timeout=15,
+            **self._provider_kwargs(model, api_base),
         )
-        if self.reasoning_effort:
-            # Only sent when explicitly configured - omitting it leaves the
-            # provider default alone rather than silently picking one.
-            completion_kwargs["reasoning_effort"] = self.reasoning_effort
-        if model.startswith("ollama"):
-            # Ollama-specific: disables qwen3's "think" preamble via its
-            # native REST field. Other providers reject unknown fields
-            # (Gemini hard-errors on this), so it must not be sent to them.
-            completion_kwargs["extra_body"] = {"think": False}
-            completion_kwargs["keep_alive"] = "24h"
 
         t_start = time.monotonic()
         t_first = None
