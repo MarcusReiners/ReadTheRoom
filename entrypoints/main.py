@@ -462,6 +462,7 @@ def main() -> None:
         reasoning_effort=app_settings["reasoning_effort"],
         max_tokens=config.LLM_MAX_TOKENS,
     )
+    llm.warm_up()
 
     radar = build_radar(config, bus)
     # build_turntable() already applies the saved safe range (see

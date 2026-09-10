@@ -66,6 +66,24 @@ class LLMGatewayAdapter:
         self.first_token_timeout_s = first_token_timeout_s
         self.stall_timeout_s = stall_timeout_s
 
+    def warm_up(self) -> None:
+        """Sends one tiny request in the background at startup, so litellm's
+        one-off first-call setup is not paid inside the first turn's deadline."""
+        def run() -> None:
+            start = time.monotonic()
+            kwargs = dict(model=self.model, api_base=self.api_base, stream=True,
+                          messages=[{"role": "user", "content": "Hi"}], max_tokens=5, timeout=60)
+            if self.reasoning_effort:
+                kwargs["reasoning_effort"] = self.reasoning_effort
+            try:
+                for _ in litellm.completion(**kwargs):
+                    pass
+                logger.info("[LLM] warm-up request done after %.1fs.", time.monotonic() - start)
+            except Exception as e:
+                logger.warning("[LLM] warm-up request failed after %.1fs: %s", time.monotonic() - start, e)
+
+        threading.Thread(target=run, daemon=True).start()
+
     def ask_stream(self, user_text: str, history: Optional[list[dict]] = None) -> Iterator[str]:
         # Tracks whether the primary model already emitted anything before
         # failing. A timeout can fire mid-stream, not just while connecting,
@@ -120,21 +138,38 @@ class LLMGatewayAdapter:
 
         def worker() -> None:
             try:
-                for chunk in litellm.completion(**completion_kwargs):
+                stream = litellm.completion(**completion_kwargs)
+                chunks.put(("opened", time.monotonic()))
+                for chunk in stream:
                     chunks.put(("chunk", chunk))
                 chunks.put(("done", None))
             except Exception as e:  # re-raised on the consumer side below
                 chunks.put(("error", e))
 
+        started = time.monotonic()
         threading.Thread(target=worker, daemon=True).start()
 
         model = completion_kwargs.get("model")
+        opened_after: float | None = None
+        empty_chunks = 0
+
+        def stalled() -> _StreamStalled:
+            elapsed = time.monotonic() - started
+            if got_first:
+                return _StreamStalled(f"{model} went quiet for {self.stall_timeout_s:.0f}s mid-reply")
+            if opened_after is None:
+                return _StreamStalled(f"{model} had not even answered the request after {elapsed:.0f}s")
+            return _StreamStalled(
+                f"{model} answered the request after {opened_after:.1f}s but sent no text "
+                f"within {elapsed:.0f}s ({empty_chunks} empty chunks)"
+            )
+
         # The first-token limit is an ABSOLUTE deadline, not a per-chunk one.
         # A per-chunk timeout is restarted by every arriving chunk - including
         # content-free keepalives - so a provider that streams empty chunks
         # while producing nothing would hold the turn open indefinitely and
         # never trip it. Only real content resets the clock.
-        first_deadline = time.monotonic() + self.first_token_timeout_s
+        first_deadline = started + self.first_token_timeout_s
         got_first = False
         while True:
             if got_first:
@@ -144,7 +179,10 @@ class LLMGatewayAdapter:
             try:
                 kind, payload = chunks.get(timeout=wait)
             except queue.Empty:
-                raise _StreamStalled(f"no token from {model} in time - stream aborted")
+                raise stalled()
+            if kind == "opened":
+                opened_after = payload - started
+                continue
             if kind == "done":
                 return
             if kind == "error":
@@ -153,11 +191,10 @@ class LLMGatewayAdapter:
             if delta:
                 got_first = True
                 yield delta
-            elif not got_first and time.monotonic() >= first_deadline:
-                raise _StreamStalled(
-                    f"no token from {model} within {self.first_token_timeout_s:.0f}s "
-                    "(only empty chunks) - stream aborted"
-                )
+            else:
+                empty_chunks += 1
+                if not got_first and time.monotonic() >= first_deadline:
+                    raise stalled()
 
     def _ask_stream(
         self, model: str, api_base: Optional[str], user_text: str, history: Optional[list[dict]],
