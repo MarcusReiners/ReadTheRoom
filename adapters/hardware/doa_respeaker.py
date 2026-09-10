@@ -13,12 +13,20 @@ _PRODUCT_ID = 0x0018
 _TIMEOUT_MS = 100000
 _RETRY_ATTEMPTS = 3
 _RETRY_DELAY_S = 0.05
+_RECONNECT_MIN_S = 2.0
+_RECONNECT_MAX_S = 30.0
+_STILL_DOWN_LOG_S = 60.0
 
 # (param_id, cmd_base) pairs, from Seeed's usb_4_mic_array/tuning.py PARAMETERS table.
 logger = logging.getLogger(__name__)
 
 _DOAANGLE_PARAM = (21, 0x00)
 _VOICEACTIVITY_PARAM = (19, 0x20)
+
+
+class DOAUnavailable(RuntimeError):
+    """The array stopped answering. The adapter keeps trying to get it back
+    on its own, so callers should just wait and poll again."""
 
 
 def raw_to_target_degrees(raw: float, front_reference_degrees: float,
@@ -166,12 +174,27 @@ class RespeakerDOAAdapter:
         self._dev = usb.core.find(idVendor=_VENDOR_ID, idProduct=_PRODUCT_ID)
         if self._dev is None:
             raise RuntimeError(
-                "ReSpeaker Mic Array (USB 2886:0018) nicht gefunden. "
-                "USB-Verbindung und udev-Regel pruefen."
+                "ReSpeaker Mic Array (USB 2886:0018) not found. "
+                "Check the USB cable and the udev rule."
             )
+        self._down_since: float | None = None
+        self._next_attempt = 0.0
+        self._backoff_s = _RECONNECT_MIN_S
+        self._last_down_log = 0.0
+        self._last_error = ""
+
+    def _transfer(self, param_id: int, cmd_base: int) -> int:
+        cmd = 0x80 | cmd_base | 0x40  # read + int type, per Seeed protocol
+        response = self._dev.ctrl_transfer(
+            usb.util.CTRL_IN | usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_RECIPIENT_DEVICE,
+            0, cmd, param_id, 8, _TIMEOUT_MS,
+        )
+        value, _ = struct.unpack("ii", response.tobytes())
+        return value
 
     def _read_param(self, param_id: int, cmd_base: int) -> int:
-        cmd = 0x80 | cmd_base | 0x40  # read + int type, per Seeed protocol
+        if self._down_since is not None:
+            self._recover()
         # Back-to-back control transfers from two polling loops (DOA tracking
         # and VAD-triggered recording) occasionally stall this endpoint with a
         # transient USBError (Pipe error) - usually clears itself on the very
@@ -179,20 +202,67 @@ class RespeakerDOAAdapter:
         last_error: usb.core.USBError | None = None
         for attempt in range(_RETRY_ATTEMPTS):
             try:
-                response = self._dev.ctrl_transfer(
-                    usb.util.CTRL_IN | usb.util.CTRL_TYPE_VENDOR | usb.util.CTRL_RECIPIENT_DEVICE,
-                    0, cmd, param_id, 8, _TIMEOUT_MS,
-                )
-                break
+                return self._transfer(param_id, cmd_base)
             except usb.core.USBError as e:
                 last_error = e
                 if attempt < _RETRY_ATTEMPTS - 1:
                     time.sleep(_RETRY_DELAY_S)
-        else:
-            raise last_error
+        self._mark_down(last_error)
+        raise DOAUnavailable(str(last_error)) from last_error
 
-        value, _ = struct.unpack("ii", response.tobytes())
-        return value
+    def _mark_down(self, error: Exception) -> None:
+        now = time.monotonic()
+        self._down_since = now
+        self._next_attempt = now
+        self._backoff_s = _RECONNECT_MIN_S
+        self._last_down_log = now
+        self._last_error = str(error)
+        logger.warning(
+            "[DOA] ReSpeaker stopped answering (%s) - voice input and head tracking "
+            "pause until it is back. Reconnecting in the background.", error,
+        )
+
+    def _recover(self) -> None:
+        """One reconnect attempt per backoff step, otherwise DOAUnavailable at once.
+
+        A stall that survives the short retry does not clear by itself: the
+        array keeps refusing every request until it is reset. So each attempt
+        re-finds the device (its handle is stale if it dropped off the bus and
+        came back), probes it, and if it still refuses, resets its USB port so
+        the next attempt meets a freshly enumerated device. Probing before
+        resetting matters - resetting on every attempt would never leave the
+        device time to come back up.
+        """
+        now = time.monotonic()
+        if now - self._last_down_log >= _STILL_DOWN_LOG_S:
+            self._last_down_log = now
+            logger.warning("[DOA] ReSpeaker still not answering after %.0f s (%s).",
+                           now - self._down_since, self._last_error)
+        if now < self._next_attempt:
+            raise DOAUnavailable(self._last_error)
+        self._next_attempt = now + self._backoff_s
+        self._backoff_s = min(self._backoff_s * 2, _RECONNECT_MAX_S)
+
+        try:
+            usb.util.dispose_resources(self._dev)
+        except usb.core.USBError:
+            pass
+        dev = usb.core.find(idVendor=_VENDOR_ID, idProduct=_PRODUCT_ID)
+        if dev is None:
+            self._last_error = "not on the USB bus - check the cable and the power supply"
+            raise DOAUnavailable(self._last_error)
+        self._dev = dev
+        try:
+            self._transfer(*_VOICEACTIVITY_PARAM)
+        except usb.core.USBError as e:
+            self._last_error = str(e)
+            try:
+                dev.reset()
+            except usb.core.USBError:
+                pass
+            raise DOAUnavailable(self._last_error) from e
+        logger.info("[DOA] ReSpeaker answering again after %.0f s.", now - self._down_since)
+        self._down_since = None
 
     def get_direction_degrees(self) -> float:
         raw = float(self._read_param(*_DOAANGLE_PARAM))

@@ -193,6 +193,17 @@ def console_input_loop(
         _transcribe_and_enqueue(stt, turn_queue, temp_in, "manuell", turn_in_progress)
 
 
+def _restart_on_error(loop, name: str):
+    def run(*args, **kwargs):
+        while True:
+            try:
+                return loop(*args, **kwargs)
+            except Exception:
+                logger.exception("%s crashed - restarting it.", name)
+                time.sleep(1.0)
+    return run
+
+
 def vad_input_loop(
     bus: EventBus, turn_queue: "queue.PriorityQueue", stt, doa, doa_lock: threading.Lock,
     mic_lock: threading.Lock, assistant_speaking: threading.Event,
@@ -247,6 +258,8 @@ def vad_input_loop(
     trailing_silence_s deliberately isn't too short either: cutting off after
     a shorter gap clips natural mid-sentence pauses (thinking, a breath).
     """
+    from adapters.hardware.doa_respeaker import DOAUnavailable
+
     while True:
         if (
             assistant_speaking.is_set()
@@ -257,8 +270,12 @@ def vad_input_loop(
             time.sleep(poll_interval_s)
             continue
 
-        with doa_lock:
-            active = doa.get_voice_active()
+        try:
+            with doa_lock:
+                active = doa.get_voice_active()
+        except DOAUnavailable:
+            time.sleep(1.0)
+            continue
         if not active:
             time.sleep(poll_interval_s)
             continue
@@ -300,8 +317,12 @@ def vad_input_loop(
                 if composing_mode is not None and composing_mode.is_set():
                     abort_reason = "Nutzer tippt im Chat"
                     break
-                with doa_lock:
-                    still_active = doa.get_voice_active()
+                try:
+                    with doa_lock:
+                        still_active = doa.get_voice_active()
+                except DOAUnavailable:
+                    abort_reason = "mic array stopped answering"
+                    break
                 if still_active:
                     voice_polls += 1
                     last_active_time = time.monotonic()
@@ -548,7 +569,7 @@ def main() -> None:
             servo_recentering=servo_recentering, turn_in_progress=turn_in_progress,
         )
         threading.Thread(
-            target=vad_input_loop,
+            target=_restart_on_error(vad_input_loop, "[VAD] input loop"),
             args=(bus, turn_queue, stt, doa, doa_lock, mic_lock, assistant_speaking),
             kwargs={
                 "calibration_mode": calibration_mode, "composing_mode": composing_mode,

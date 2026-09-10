@@ -23,8 +23,11 @@ def zone_signed_distance(x: float, y: float, zone: dict) -> float | None:
     """Distance to the zone rectangle's edge: positive outside, negative inside."""
     if not zone or not zone.get("valid") or x is None or y is None:
         return None
-    x0, x1 = sorted((zone["min_x_mm"], zone["max_x_mm"]))
-    y0, y1 = sorted((zone["min_y_mm"], zone["max_y_mm"]))
+    try:
+        x0, x1 = sorted((zone["min_x_mm"], zone["max_x_mm"]))
+        y0, y1 = sorted((zone["min_y_mm"], zone["max_y_mm"]))
+    except (KeyError, TypeError):
+        return None
     if x0 <= x <= x1 and y0 <= y <= y1:
         return -min(x - x0, x1 - x, y - y0, y1 - y)
     return math.hypot(max(x0 - x, 0.0, x - x1), max(y0 - y, 0.0, y - y1))
@@ -105,6 +108,7 @@ class RadarLD2450Adapter:
         self._exit_margin_mm = exit_margin_mm
         self._tracks: dict = {}
         self._warned_zone_mode = None
+        self._last_packet_error = 0.0
         # Candidate lower count waiting out drop_hold_s before being believed.
         self._pending_lower_count: int | None = None
         self._pending_since = 0.0
@@ -182,7 +186,16 @@ class RadarLD2450Adapter:
                 data = json.loads(line.decode("utf-8", errors="ignore").strip())
             except ValueError:
                 continue
-            self._handle_status(data)
+            try:
+                self._handle_status(data)
+            except Exception:
+                # One odd packet must not end the read loop: _read_loop only
+                # recovers from serial errors, so anything raised here used to
+                # stop radar input for good, silently, until a restart.
+                now = time.monotonic()
+                if now - self._last_packet_error > 10.0:
+                    self._last_packet_error = now
+                    logger.exception("[Radar] could not process a packet, skipping it: %r", line[:200])
 
     def _update_person_count(self, count: int) -> None:
         if count == self._person_count:
@@ -234,6 +247,8 @@ class RadarLD2450Adapter:
                 continue
             seen.add(tid)
             d = zone_signed_distance(x, y, zone)
+            if d is None:
+                continue
             if d <= -self._entry_margin_mm:
                 side = "in"
             elif d >= self._exit_margin_mm:
@@ -270,7 +285,9 @@ class RadarLD2450Adapter:
             del self._tracks[tid]
 
     def _handle_status(self, data: dict) -> None:
-        targets = data.get("targets", [])
+        if not isinstance(data, dict):
+            return
+        targets = [t for t in (data.get("targets") or []) if isinstance(t, dict)]
         self.bus.publish(RadarTargetsUpdated(targets=targets))
 
         self._update_person_count(sum(1 for t in targets if t.get("in_zone", True)))

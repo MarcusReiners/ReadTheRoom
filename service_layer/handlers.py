@@ -250,7 +250,7 @@ def start_doa_tracking(
     # Imported here rather than at module scope: doa_respeaker pulls in
     # usb.core, and handlers.py is imported unconditionally by main.py even
     # when USE_SERVO is off (or on a dev machine with no pyusb at all).
-    from adapters.hardware.doa_respeaker import median_angle
+    from adapters.hardware.doa_respeaker import DOAUnavailable, median_angle
 
     lock = lock or contextlib.nullcontext()
     moving_until = 0.0
@@ -262,6 +262,7 @@ def start_doa_tracking(
         was_speaking = False
         was_calibrating = False
         at_home = True
+        last_error_log = 0.0
         while True:
             try:
                 speaking = assistant_speaking is not None and assistant_speaking.is_set()
@@ -412,8 +413,13 @@ def start_doa_tracking(
                         # own noise during this recenter would keep resetting
                         # the silence clock and the head would never settle.
                         last_active_time = time.monotonic()
+            except DOAUnavailable:
+                time.sleep(1.0)
             except Exception:
-                logger.exception("[DOA] Error while reading or driving - the tracking thread does NOT exit.")
+                now = time.monotonic()
+                if now - last_error_log >= 10.0:
+                    last_error_log = now
+                    logger.exception("[DOA] Error while reading or driving - the tracking thread does NOT exit.")
             time.sleep(poll_interval_s)
 
     threading.Thread(target=_tracking_loop, daemon=True).start()
