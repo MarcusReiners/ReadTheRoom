@@ -16,6 +16,10 @@ class PersonEnteredRoom(Event):
     person_id: int
     x_mm: float
     y_mm: float
+    # "crossing": tracked outside, then inside. "appeared": first seen inside,
+    # already moving and close to the edge - someone who came in faster than
+    # the radar picked them up outside.
+    via: str = "crossing"
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,9 @@ class SpeechTranscribed(Event):
     # user message in place rather than adding a new one - see
     # ConversationStore.replace_or_add_user_message().
     replaced: bool = False
+    # "voice" or "chat". Only a spoken turn proves that someone is physically
+    # in the room talking to the assistant.
+    source: str = "voice"
 
 
 @dataclass(frozen=True)

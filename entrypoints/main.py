@@ -162,7 +162,7 @@ def _transcribe_and_enqueue(stt, turn_queue: "queue.PriorityQueue", temp_in: str
             turn_in_progress.clear()
         return
 
-    logger.info("[%s] Du hast gesagt: '%s'", log_prefix, user_text)
+    logger.info("[%s] You said: '%s'", log_prefix, user_text)
     _enqueue_turn(turn_queue, PRIORITY_VOICE, user_text)
 
 
@@ -338,7 +338,7 @@ def vad_input_loop(
 
 def handle_turn(
     text: str, bus: EventBus, conversation: ConversationState, store: ConversationStore,
-    llm, tts, cancel_event: threading.Event | None = None,
+    llm, tts, cancel_event: threading.Event | None = None, source: str = "voice",
 ) -> None:
     """cancel_event: set by ChatBridgeAdapter the instant a chat message is
     typed and sent, so a still-in-progress voice-triggered reply gets cut off
@@ -351,7 +351,8 @@ def handle_turn(
     history = store.get_history(conversation_id)
 
     replaced = store.replace_or_add_user_message(conversation_id, text)
-    bus.publish(SpeechTranscribed(text=text, conversation_id=conversation_id, replaced=replaced))
+    bus.publish(SpeechTranscribed(text=text, conversation_id=conversation_id, replaced=replaced,
+                                  source=source))
 
     # No recentering here on purpose: the head should stay exactly where DOA
     # tracking last left it (facing whoever just spoke) all the way through
@@ -496,7 +497,7 @@ def main() -> None:
     else:
         face = DummyFaceDisplayAdapter(bus=bus)
 
-    register_handlers(bus, conversation, tts)
+    register_handlers(bus, conversation, tts, departure_grace_s=config.PRIVACY_DEPARTURE_GRACE_S)
 
     chat_bridge = ChatBridgeAdapter(
         bus, conversation, store, turn_queue,
@@ -572,7 +573,8 @@ def main() -> None:
             cancel_current_turn.clear()
             turn_in_progress.set()
             try:
-                handle_turn(text, bus, conversation, store, llm, tts, cancel_current_turn)
+                handle_turn(text, bus, conversation, store, llm, tts, cancel_current_turn,
+                            source="chat" if _priority == PRIORITY_CHAT else "voice")
             except Exception:
                 # One failed turn must not end the loop. Everything else
                 # (radar, DOA tracking, the web app) runs on daemon threads,
