@@ -17,6 +17,10 @@ APPEAR_EDGE_MM = 600.0
 APPEAR_SPEED_MMS = 150.0
 APPEAR_INWARD_MM = 80.0
 APPEAR_WINDOW_S = 0.6
+SILENCE_WARN_S = 3.0
+MODULE_SILENT_MS = 2000
+DIAG_WINDOW_S = 10.0
+SEND_FAIL_WARN = 10
 
 
 def zone_signed_distance(x: float, y: float, zone: dict) -> float | None:
@@ -107,8 +111,15 @@ class RadarLD2450Adapter:
         self._entry_margin_mm = entry_margin_mm
         self._exit_margin_mm = exit_margin_mm
         self._tracks: dict = {}
+        self._next_track_id = 0
         self._warned_zone_mode = None
         self._last_packet_error = 0.0
+        self._last_data: float | None = None
+        self._silent_warned = False
+        self._module_silent_warned = False
+        self._sensor: dict = {}
+        self._bridge_dropped = 0
+        self._diag_mark: tuple | None = None
         # Candidate lower count waiting out drop_hold_s before being believed.
         self._pending_lower_count: int | None = None
         self._pending_since = 0.0
@@ -138,6 +149,9 @@ class RadarLD2450Adapter:
 
     def get_calibration_status(self) -> dict:
         return dict(self._latest_calibration)
+
+    def get_diagnostics(self) -> dict:
+        return dict(self._sensor, bridge_dropped=self._bridge_dropped)
 
     def send_command(self, command: dict) -> None:
         with self._write_lock:
@@ -178,24 +192,94 @@ class RadarLD2450Adapter:
                         self._serial = None
 
     def _consume(self, ser: "serial.Serial") -> None:
+        """Reads in chunks and splits lines itself: pyserial's readline() reads
+        one byte per call, which at radar rate cost a large share of a CPU
+        core and let the Pi fall behind the bridge."""
+        pending = b""
+        started = time.monotonic()
         while not self._stop.is_set():
-            line = ser.readline()
-            if not line:
-                continue
-            try:
-                data = json.loads(line.decode("utf-8", errors="ignore").strip())
-            except ValueError:
-                continue
-            try:
-                self._handle_status(data)
-            except Exception:
-                # One odd packet must not end the read loop: _read_loop only
-                # recovers from serial errors, so anything raised here used to
-                # stop radar input for good, silently, until a restart.
-                now = time.monotonic()
-                if now - self._last_packet_error > 10.0:
-                    self._last_packet_error = now
-                    logger.exception("[Radar] could not process a packet, skipping it: %r", line[:200])
+            chunk = ser.read(ser.in_waiting or 1)
+            if chunk:
+                pending += chunk
+                *lines, pending = pending.split(b"\n")
+                if len(pending) > 8192:
+                    pending = b""
+                for line in lines:
+                    self._consume_line(line)
+            self._check_silence(time.monotonic(), started)
+
+    def _consume_line(self, line: bytes) -> None:
+        try:
+            data = json.loads(line.decode("utf-8", errors="ignore").strip())
+        except ValueError:
+            return
+        if not isinstance(data, dict):
+            return
+        if self._silent_warned:
+            self._silent_warned = False
+            logger.info("[Radar] data from the bridge is arriving again.")
+        self._last_data = time.monotonic()
+        try:
+            self._handle_status(data)
+        except Exception:
+            # One odd packet must not end the read loop: _read_loop only
+            # recovers from serial errors, so anything raised here used to
+            # stop radar input for good, silently, until a restart.
+            now = time.monotonic()
+            if now - self._last_packet_error > 10.0:
+                self._last_packet_error = now
+                logger.exception("[Radar] could not process a packet, skipping it: %r", line[:200])
+
+    def _check_silence(self, now: float, started: float) -> None:
+        last = self._last_data if self._last_data is not None else started
+        if not self._silent_warned and now - last >= SILENCE_WARN_S:
+            self._silent_warned = True
+            logger.warning(
+                "[Radar] no data from the bridge for %.0f s - is the sensor unit's power bank on "
+                "and the sensor in radio range? (It sends at least once a second.)", now - last,
+            )
+
+    def _check_sensor_health(self, sensor: dict, dropped, now: float) -> None:
+        """Turns the diagnostics the sensor and bridge firmware append to each
+        line into log warnings, so a failing link shows up in the log instead
+        of only as unreliable tracking."""
+        self._sensor = dict(sensor)
+        if isinstance(dropped, int):
+            self._bridge_dropped = dropped
+        fps, age = sensor.get("fps"), sensor.get("frame_age_ms")
+        if fps == 0 and isinstance(age, int) and age >= MODULE_SILENT_MS:
+            if not self._module_silent_warned:
+                self._module_silent_warned = True
+                logger.warning(
+                    "[Radar] the sensor unit runs but the LD2450 delivers no frames (last one %.0f s ago) "
+                    "- check the wires between the LD2450 and the XIAO.", age / 1000,
+                )
+        elif isinstance(fps, int) and fps > 0 and self._module_silent_warned:
+            self._module_silent_warned = False
+            logger.info("[Radar] LD2450 frames are arriving again (%d/s).", fps)
+
+        failures = sensor.get("send_failures")
+        if not isinstance(failures, int):
+            return
+        if self._diag_mark is None:
+            self._diag_mark = (now, failures, self._bridge_dropped)
+            return
+        t0, failures0, dropped0 = self._diag_mark
+        if now - t0 < DIAG_WINDOW_S:
+            return
+        lost = (failures - failures0) % 65536
+        dropped_lines = self._bridge_dropped - dropped0
+        if lost >= SEND_FAIL_WARN:
+            logger.warning(
+                "[Radar] the radio link lost %d packets in the last %.0f s - move the sensor closer "
+                "to the assistant or check the power bank.", lost, now - t0,
+            )
+        if dropped_lines > 0:
+            logger.warning(
+                "[Radar] the bridge dropped %d lines in the last %.0f s because the Pi read too slowly.",
+                dropped_lines, now - t0,
+            )
+        self._diag_mark = (now, failures, self._bridge_dropped)
 
     def _update_person_count(self, count: int) -> None:
         if count == self._person_count:
@@ -240,15 +324,18 @@ class RadarLD2450Adapter:
         inside - tracked, lost and re-acquired - never generates an event."""
         if not zone or not zone.get("valid"):
             return
-        seen = set()
+        points = []
         for target in targets:
-            tid, x, y = target.get("id"), target.get("x_mm"), target.get("y_mm")
-            if tid is None or x is None or y is None:
+            x, y = target.get("x_mm"), target.get("y_mm")
+            if x is None or y is None:
                 continue
-            seen.add(tid)
             d = zone_signed_distance(x, y, zone)
-            if d is None:
-                continue
+            if d is not None:
+                points.append((target, x, y, d))
+        track_ids = self._associate([(x, y) for _, x, y, _ in points], now)
+        seen = set()
+        for (target, x, y, d), tid in zip(points, track_ids):
+            seen.add(tid)
             if d <= -self._entry_margin_mm:
                 side = "in"
             elif d >= self._exit_margin_mm:
@@ -256,8 +343,7 @@ class RadarLD2450Adapter:
             else:
                 side = None
             prev = self._tracks.get(tid)
-            continuous = (prev is not None and now - prev["t"] <= TRACK_GAP_S
-                          and math.hypot(x - prev["x"], y - prev["y"]) <= MAX_TRACK_JUMP_MM)
+            continuous = prev is not None
             prev_side = prev["side"] if continuous else None
             pending = prev.get("pending") if continuous else None
             new_side = side or prev_side
@@ -284,9 +370,42 @@ class RadarLD2450Adapter:
         for tid in [t for t, tr in self._tracks.items() if t not in seen and now - tr["t"] > TRACK_GAP_S]:
             del self._tracks[tid]
 
+    def _associate(self, points: list, now: float) -> list:
+        """Gives each reported target the id of the nearest recent track.
+
+        The LD2450's three slots are not identities: when people cross paths
+        or one drops out, the module can report a person in a different slot.
+        Keyed by slot, that read as one track jumping across the room and
+        could fake an entry or exit with two people present. Matching is
+        greedy, closest pairs first, within MAX_TRACK_JUMP_MM of a track seen
+        in the last TRACK_GAP_S; anything unmatched starts a new track.
+        """
+        live = {tid: tr for tid, tr in self._tracks.items() if now - tr["t"] <= TRACK_GAP_S}
+        pairs = sorted(
+            (math.hypot(x - tr["x"], y - tr["y"]), i, tid)
+            for i, (x, y) in enumerate(points)
+            for tid, tr in live.items()
+        )
+        ids: list = [None] * len(points)
+        used = set()
+        for dist, i, tid in pairs:
+            if dist > MAX_TRACK_JUMP_MM:
+                break
+            if ids[i] is None and tid not in used:
+                ids[i] = tid
+                used.add(tid)
+        for i, tid in enumerate(ids):
+            if tid is None:
+                self._next_track_id += 1
+                ids[i] = self._next_track_id
+        return ids
+
     def _handle_status(self, data: dict) -> None:
         if not isinstance(data, dict):
             return
+        sensor = data.get("sensor")
+        if isinstance(sensor, dict):
+            self._check_sensor_health(sensor, data.get("bridge_dropped"), time.monotonic())
         targets = [t for t in (data.get("targets") or []) if isinstance(t, dict)]
         self.bus.publish(RadarTargetsUpdated(targets=targets))
 

@@ -185,6 +185,9 @@ Other scripts, roughly in the order you'd reach for them:
 | `print_radar.py` | Radar/ESP-NOW link only: prints incoming targets and person counts |
 | `check_stale_targets.py` | Reports how long radar targets sit frozen, to check whether the firmware's ghost filter is erasing real, motionless people |
 | `raw_serial_monitor.py` | Raw bytes off the bridge's serial port, bypassing JSON parsing — for diagnosing a link that "connects" but yields nothing usable |
+| `bridge_check.py` | Radar link check without opening the case: counts packets, blinks the tie LED (proves the bridge reads USB), restarts the bridge over USB and listens again |
+| `find_zone_edge.py` | Beeps on zone entry/exit to tape the floor at the real trigger point; `--trace` prints every frame with its distance to the zone edge |
+| `test_llm.py` / `probe_gemini.sh` | LLM latency: the app's exact request with per-chunk timing, and a plain-curl IPv4 vs IPv6 comparison for Gemini |
 | `test_tie_led.py` | Exercises the 7-LED tie strip on the bridge ESP32 |
 | `simulate_doa.py` | Replays DOA angles through the same conversion the live adapter uses, no hardware needed |
 | `study_head_accuracy.py` | Runs Study 1 (head-orientation accuracy), logging every trial — see [study/README.md](study/README.md) |
