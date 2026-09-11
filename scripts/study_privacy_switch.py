@@ -535,6 +535,37 @@ def import_video(csv_path, video_path):
           f"{1000 * output_latency:.0f} ms - applied when mapping video times onto the Pi clock.")
 
 
+def list_trials(csv_path):
+    rows = load_rows(csv_path)
+    if not rows:
+        print(f"No trials in {csv_path}")
+        return
+    print(f"\n{csv_path}")
+    for r in rows:
+        print(f"  #{r.get('trial_id'):>3}  {r.get('configuration', ''):10} {r.get('script_id')} "
+              f"{SCRIPTS.get(r.get('script_id'), {}).get('name', ''):20} {r.get('classification', ''):3} "
+              f"back to voice: {r.get('reverted') or '-':2} quieter: {r.get('ducked') or '-':2} "
+              f"{repr(r.get('notes'))[:40] if r.get('notes') else ''}")
+    print()
+
+
+def drop_trials(csv_path, jsonl_path, spec):
+    ids = {s.strip() for s in spec.split(",") if s.strip()}
+    rows = load_rows(csv_path)
+    keep = [r for r in rows if r.get("trial_id") not in ids]
+    gone = [r.get("trial_id") for r in rows if r.get("trial_id") in ids]
+    if not gone:
+        print(f"No trial with id {', '.join(sorted(ids))} in {csv_path}")
+        return
+    write_rows(csv_path, keep)
+    if os.path.exists(jsonl_path):
+        with open(jsonl_path) as f:
+            lines = [ln for ln in f if ln.strip() and str(json.loads(ln).get("trial_id")) not in ids]
+        with open(jsonl_path, "w") as f:
+            f.writelines(lines)
+    print(f"Removed trial(s) {', '.join(gone)} - {len(keep)} left in {csv_path}")
+
+
 def parse_reps(spec):
     if not spec:
         return dict(DEFAULT_REPS)
@@ -854,6 +885,8 @@ def main():
     parser.add_argument("--walk", type=float, default=WALK_S, help="seconds to reach the start mark")
     parser.add_argument("--progress", action="store_true")
     parser.add_argument("--report", action="store_true")
+    parser.add_argument("--list", action="store_true", help="list the trials saved in this session")
+    parser.add_argument("--drop", default="", help="remove trials by id from the sheet and log, e.g. 2 or 2,5")
     parser.add_argument("--video-template", action="store_true",
                         help="write the sheet for video timings, prefilled with the session's trials")
     parser.add_argument("--import-video", action="store_true", help="merge the filled video sheet")
@@ -866,6 +899,12 @@ def main():
     csv_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}.csv")
     jsonl_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}_trials.jsonl")
     video_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}_video.csv")
+    if args.list:
+        list_trials(csv_path)
+        return
+    if args.drop:
+        drop_trials(csv_path, jsonl_path, args.drop)
+        return
     if args.progress:
         print_progress(csv_path, args.configuration, reps)
         return
