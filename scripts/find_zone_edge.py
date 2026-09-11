@@ -76,19 +76,27 @@ def main():
 
     trace = "--trace" in sys.argv
     start = time.monotonic()
+    last_seen, last_print = {}, {}
 
     def on_frame(e):
         state["frames"] += 1
         if not trace or not state.get("ready"):
             return
+        now = time.monotonic()
         zone = radar.get_zone()
         for t in e.targets:
             d = zone_signed_distance(t.get("x_mm"), t.get("y_mm"), zone)
             if d is None:
                 continue
+            slot = t.get("id")
+            first = now - last_seen.get(slot, -99.0) > 1.0
+            last_seen[slot] = now
+            if not first and now - last_print.get(slot, -99.0) < 0.25:
+                continue
+            last_print[slot] = now
             side = ("in" if d <= -config.RADAR_ENTRY_MARGIN_MM
                     else "out" if d >= config.RADAR_EXIT_MARGIN_MM else "edge")
-            print(f"  {time.monotonic() - start:6.1f}s  id {t.get('id')}  x={t.get('x_mm'):6.0f}  "
+            print(f"  {now - start:6.1f}s {'FIRST' if first else '     '} id {slot}  x={t.get('x_mm'):6.0f}  "
                   f"y={t.get('y_mm'):6.0f}  speed={t.get('speed_mms') or 0:5.0f}  "
                   f"edge distance={d:6.0f} mm  {side}")
 
