@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Radar Replay</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --panel: #ffffff;
+    --panel-2: #f4f4f5;
+    --text: #18181b;
+    --muted: #71717a;
+    --border: #e4e4e7;
+    --accent: #18181b;
+    --accent-text: #ffffff;
+    --danger: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0b0c;
+      --panel: #18181b;
+      --panel-2: #212124;
+      --text: #f4f4f5;
+      --muted: #a1a1aa;
+      --border: #2c2c30;
+      --accent: #f4f4f5;
+      --accent-text: #0b0b0c;
+      --danger: #f87171;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0b0c;
+    --panel: #18181b;
+    --panel-2: #212124;
+    --text: #f4f4f5;
+    --muted: #a1a1aa;
+    --border: #2c2c30;
+    --accent: #f4f4f5;
+    --accent-text: #0b0b0c;
+    --danger: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  }
+  .app {
+    display: grid;
+    grid-template-columns: minmax(280px, 340px) 1fr;
+    min-height: 100vh;
+  }
+  aside {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 20px 20px 32px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+  }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+  .lede { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  section { display: flex; flex-direction: column; gap: 8px; }
+  h2 {
+    margin: 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  h2 span { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  label { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+  input[type="number"], select {
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: var(--panel-2);
+    color: var(--text);
+  }
+  input[type="number"] { width: 90px; }
+  select { width: 100%; }
+  input[type="file"] { font-size: 12px; max-width: 100%; }
+  button, .download {
+    font: inherit;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+  }
+  button.primary, .download { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button:focus-visible, select:focus-visible, input:focus-visible, .download:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .hint { margin: 0; font-size: 12px; color: var(--muted); }
+  .hint.error { color: var(--danger); }
+  video { width: 100%; border-radius: 8px; background: #000; }
+  main {
+    padding: 20px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    min-width: 0;
+  }
+  canvas {
+    max-width: 100%;
+    height: auto;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #000;
+  }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside>
+    <div>
+      <h1>Radar replay</h1>
+      <p class="lede">Rebuilds the web app's radar view from a study trial log and puts it next to your camera video, then exports both as one clip.</p>
+    </div>
+
+    <section>
+      <h2>1 · Trial log</h2>
+      <input type="file" id="logInput" accept=".jsonl,.json,.txt">
+      <select id="trialSelect" disabled><option>Load privacy_switch_*_trials.jsonl</option></select>
+      <p id="trialInfo" class="hint"></p>
+    </section>
+
+    <section>
+      <h2>2 · Camera video <span>(optional)</span></h2>
+      <input type="file" id="videoInput" accept="video/*">
+      <video id="video" controls playsinline preload="auto" hidden></video>
+    </section>
+
+    <section>
+      <h2>3 · Sync</h2>
+      <p class="hint">Pause the video exactly at the assistant's first audible word, then set it.</p>
+      <button id="markBtn" type="button" disabled>Set from video position</button>
+      <label>First word at <input id="offsetInput" type="number" step="0.05" value="0"> s in the video</label>
+      <div class="row">
+        <button type="button" data-nudge="-0.1">−0.1 s</button>
+        <button type="button" data-nudge="-0.02">−0.02 s</button>
+        <button type="button" data-nudge="0.02">+0.02 s</button>
+        <button type="button" data-nudge="0.1">+0.1 s</button>
+      </div>
+      <label>Speaker delay <input id="latencyInput" type="number" step="0.05" value="0.3"> s</label>
+      <p class="hint">Time between the Pi logging the start of speech and it being audible (audio buffer).</p>
+    </section>
+
+    <section>
+      <h2>4 · Look</h2>
+      <label><input type="checkbox" id="darkToggle" checked> Dark radar view</label>
+      <label><input type="checkbox" id="captionsToggle" checked> Captions (title, status, events, counter)</label>
+      <label><input type="checkbox" id="beepToggle" checked> Sync beep at the first word</label>
+      <p class="hint">A short tone in the clip's audio exactly where the assistant's first word is heard - line it up with the first word in the camera audio.</p>
+      <label>Door zone (mm)</label>
+      <div class="row">
+        <input id="doorMinX" type="number" step="10" placeholder="min x" aria-label="Door zone min x">
+        <input id="doorMaxX" type="number" step="10" placeholder="max x" aria-label="Door zone max x">
+        <input id="doorMinY" type="number" step="10" placeholder="min y" aria-label="Door zone min y">
+        <input id="doorMaxY" type="number" step="10" placeholder="max y" aria-label="Door zone max y">
+      </div>
+      <p id="doorHint" class="hint">Filled in from the log when it has one; enter it by hand for older logs.</p>
+      <label>Height <select id="heightSelect" style="width:auto"><option value="1080">1080 px</option><option value="720">720 px</option></select></label>
+      <label>Lead-in <input id="leadInput" type="number" step="0.5" value="2"> s before speech</label>
+    </section>
+
+    <section>
+      <h2>5 · Play and export</h2>
+      <div class="row">
+        <button id="playBtn" type="button" disabled>Play</button>
+        <button id="recordBtn" class="primary" type="button" disabled>Record clip</button>
+      </div>
+      <p id="recStatus" class="hint"></p>
+      <a id="downloadLink" class="download" hidden>Download clip</a>
+    </section>
+  </aside>
+  <main>
+    <canvas id="stage" width="960" height="540"></canvas>
+  </main>
+</div>
+
+<script id="core">
+const RADAR = { VB_W: 340, VB_H: 300, SX: 170, SY: 280, MAX_RANGE: 6000, MAX_R: 250, FOV: 60, RINGS: [2000, 4000, 6000] };
+const SCALE = RADAR.MAX_R / RADAR.MAX_RANGE;
+const DOT_SMOOTHING = 0.35;
+const DOT_TRANSITION_S = 0.25;
+const FONT = '-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif';
+
+const THEMES = {
+  light: { bg: "#fafafa", panel: "#ffffff", text: "#18181b", muted: "#71717a", border: "#e4e4e7",
+           accent: "#18181b", line: "#d4d4d8", fov: "#f6f6f7", dot: "#18181b", door: "#b45309", ok: "#16a34a" },
+  dark:  { bg: "#0b0b0c", panel: "#18181b", text: "#f4f4f5", muted: "#a1a1aa", border: "#2c2c30",
+           accent: "#f4f4f5", line: "#3f3f46", fov: "#1c1c1f", dot: "#f4f4f5", door: "#f59e0b", ok: "#4ade80" },
+};
+
+const SCRIPT_NAMES = {
+  A: "Direct entry", B: "Passer-by", C: "Passer-by, far", D: "Peek at the door", E: "Slow entry", F: "Fast entry",
+};
+
+function outcomeText(row) {
+  if (!row) return "";
+  const c = row.classification;
+  if (row.script_id === "D") return row.ducked === "Y" ? "Voice quieter, no switch" : "No switch";
+  if (c === "TP") return row.reverted === "Y" ? "Switched to chat, back to speaking after leaving" : "Switched to chat";
+  if (c === "FN") return "Entry missed";
+  if (c === "FP") return "Switched without an entry";
+  return row.ducked === "Y" ? "No switch, voice briefly quieter" : "No switch";
+}
+
+function parseLog(text) {
+  const trials = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch (e) { continue; }
+    if (!rec || !Array.isArray(rec.events)) continue;
+    const events = rec.events.filter((e) => typeof e.t === "number").sort((a, b) => a.t - b.t);
+    const frames = events.filter((e) => e.kind === "frame");
+    const others = events.filter((e) => e.kind !== "frame");
+    const speech = others.find((e) => e.kind === "speech_start");
+    const t0 = speech ? speech.t : (frames[0] ? frames[0].t : 0);
+    const last = Math.max(frames.length ? frames[frames.length - 1].t : t0, others.length ? others[others.length - 1].t : t0);
+    // Same two stages as the web app: a low-pass on each reading, then a
+    // 0.25 s glide that starts from wherever the dot is displayed right now
+    // (a CSS transition restarting mid-way), not from the previous reading.
+    const smoothed = new Map();
+    let shown = new Map();
+    const steps = frames.map((f) => {
+      const present = new Set();
+      const dots = (f.targets || []).filter((d) => typeof d.x === "number" && typeof d.y === "number").map((d) => {
+        present.add(d.id);
+        const prev = smoothed.get(d.id);
+        const s = prev ? { x: prev.x + DOT_SMOOTHING * (d.x - prev.x), y: prev.y + DOT_SMOOTHING * (d.y - prev.y) }
+                       : { x: d.x, y: d.y };
+        smoothed.set(d.id, s);
+        const was = shown.get(d.id);
+        let fx = s.x, fy = s.y;
+        if (was) {
+          const k = Math.min(1, (f.t - was.t) / DOT_TRANSITION_S);
+          fx = was.fx + (was.x - was.fx) * k;
+          fy = was.fy + (was.y - was.fy) * k;
+        }
+        return { id: d.id, x: s.x, y: s.y, fx, fy, z: d.z !== false };
+      });
+      for (const id of [...smoothed.keys()]) if (!present.has(id)) smoothed.delete(id);
+      shown = new Map(dots.map((d) => [d.id, { ...d, t: f.t }]));
+      return { t: f.t, dots };
+    });
+    trials.push({
+      id: rec.trial_id, script: rec.row ? rec.row.script_id : "?", row: rec.row || null,
+      zone: rec.zone || null, door: rec.door_zone || null,
+      t0, tStart: frames.length ? frames[0].t : t0, tEnd: last,
+      steps, events: others,
+    });
+  }
+  return trials;
+}
+
+function stepIndexAt(steps, t) {
+  let lo = 0, hi = steps.length - 1, found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (steps[mid].t <= t) { found = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return found;
+}
+
+function dotsAt(trial, t) {
+  const i = stepIndexAt(trial.steps, t);
+  if (i < 0) return [];
+  const cur = trial.steps[i];
+  const f = Math.max(0, Math.min(1, (t - cur.t) / DOT_TRANSITION_S));
+  return cur.dots.map((d) => ({ id: d.id, z: d.z, x: d.fx + (d.x - d.fx) * f, y: d.fy + (d.y - d.fy) * f }));
+}
+
+function eventLabel(e) {
+  switch (e.kind) {
+    case "speech_start": return "Assistant starts speaking";
+    case "door": return "Someone at the door";
+    case "duck": return e.active ? "Voice quieter" : "Voice back to normal";
+    case "enter": return e.via === "door" ? "Entered through the door" : "Entered the room";
+    case "modality": return e.to === "web" ? "Switched to chat" : "Back to speaking";
+    case "takeover": return e.effective ? "Speech cut off" : null;
+    case "door_cleared": return e.outcome === "gone" ? "Left the doorway" : null;
+    case "leave": return "Left the room";
+    case "speech_end": return e.completed ? "Reply finished" : null;
+    default: return null;
+  }
+}
+
+function stateAt(trial, t) {
+  let speaking = false, modality = "voice", ducked = false;
+  const feed = [];
+  for (const e of trial.events) {
+    if (e.t > t) break;
+    if (e.kind === "speech_start") speaking = true;
+    if (e.kind === "speech_end" || (e.kind === "takeover" && e.effective)) speaking = false;
+    if (e.kind === "modality") modality = e.to;
+    if (e.kind === "duck") ducked = !!e.active;
+    const label = eventLabel(e);
+    if (label) feed.push({ t: e.t, label });
+  }
+  let status, tone;
+  if (modality === "web") { status = "Chat only – person in room"; tone = "muted"; }
+  else if (speaking && ducked) { status = "Speaking quietly – someone at the door"; tone = "door"; }
+  else if (speaking) { status = "Speaking"; tone = "ok"; }
+  else { status = "Listening"; tone = "muted"; }
+  return { status, tone, feed };
+}
+
+function layout(height, videoAspect, captions = true) {
+  const H = Math.round(height / 2) * 2;
+  const panelW = Math.round((H * (captions ? 0.9 : RADAR.VB_W / RADAR.VB_H)) / 2) * 2;
+  const videoW = videoAspect ? Math.round((H * videoAspect) / 2) * 2 : 0;
+  return { W: videoW + panelW, H, video: { x: 0, y: 0, w: videoW, h: H }, panel: { x: videoW, y: 0, w: panelW, h: H } };
+}
+
+function polarPoint(angleDeg, rangeMm) {
+  const a = (angleDeg * Math.PI) / 180;
+  return { x: RADAR.SX + rangeMm * Math.sin(a) * SCALE, y: RADAR.SY - rangeMm * Math.cos(a) * SCALE };
+}
+
+function mmPoint(x, y) {
+  return { x: RADAR.SX + x * SCALE, y: RADAR.SY - y * SCALE };
+}
+
+function withAlpha(hex, alpha) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+function drawZoneRect(ctx, zone, fill, stroke, dash) {
+  if (!zone || zone.valid === false || zone.min_x_mm == null) return;
+  const p1 = mmPoint(zone.min_x_mm, zone.max_y_mm);
+  const p2 = mmPoint(zone.max_x_mm, zone.min_y_mm);
+  const x = Math.min(p1.x, p2.x), y = Math.min(p1.y, p2.y);
+  const w = Math.abs(p2.x - p1.x), h = Math.abs(p2.y - p1.y);
+  ctx.fillStyle = fill;
+  ctx.fillRect(x, y, w, h);
+  ctx.setLineDash(dash || []);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = stroke;
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+}
+
+function drawRadar(ctx, trial, t, th, box) {
+  const s = Math.min(box.w / RADAR.VB_W, box.h / RADAR.VB_H);
+  ctx.save();
+  ctx.translate(box.x + (box.w - RADAR.VB_W * s) / 2, box.y + (box.h - RADAR.VB_H * s) / 2);
+  ctx.scale(s, s);
+  ctx.beginPath();
+  ctx.rect(0, 0, RADAR.VB_W, RADAR.VB_H);
+  ctx.clip();
+
+  const left = polarPoint(-RADAR.FOV, RADAR.MAX_RANGE);
+  const right = polarPoint(RADAR.FOV, RADAR.MAX_RANGE);
+  const start = ((-RADAR.FOV - 90) * Math.PI) / 180;
+  const end = ((RADAR.FOV - 90) * Math.PI) / 180;
+  ctx.beginPath();
+  ctx.moveTo(RADAR.SX, RADAR.SY);
+  ctx.lineTo(left.x, left.y);
+  ctx.arc(RADAR.SX, RADAR.SY, RADAR.MAX_R, start, end, false);
+  ctx.closePath();
+  ctx.fillStyle = th.fov;
+  ctx.fill();
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = th.line;
+  for (const r of RADAR.RINGS) {
+    ctx.beginPath();
+    ctx.arc(RADAR.SX, RADAR.SY, r * SCALE, start, end, false);
+    ctx.stroke();
+    const top = polarPoint(0, r);
+    ctx.fillStyle = th.muted;
+    ctx.font = `9px ${FONT}`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(`${r / 1000}m`, top.x + 4, top.y - 3);
+  }
+  for (const p of [left, right]) {
+    ctx.beginPath();
+    ctx.moveTo(RADAR.SX, RADAR.SY);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+  }
+
+  drawZoneRect(ctx, trial.zone, withAlpha(th.accent, 0.12), th.accent);
+  drawZoneRect(ctx, trial.door, withAlpha(th.door, 0.16), th.door, [5, 3]);
+
+  ctx.fillStyle = th.text;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(RADAR.SX - 10, RADAR.SY - 4, 20, 8, 2); else ctx.rect(RADAR.SX - 10, RADAR.SY - 4, 20, 8);
+  ctx.fill();
+  ctx.fillStyle = th.muted;
+  ctx.font = `9px ${FONT}`;
+  ctx.textAlign = "center";
+  ctx.fillText("Sensor", RADAR.SX, RADAR.SY + 16);
+
+  for (const d of dotsAt(trial, t)) {
+    const p = mmPoint(d.x, d.y);
+    ctx.globalAlpha = d.z ? 1 : 0.55;
+    ctx.fillStyle = d.z ? th.dot : th.muted;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function fmtRel(sec) {
+  const sign = sec < 0 ? "−" : "+";
+  return `${sign}${Math.abs(sec).toFixed(1)} s`;
+}
+
+function drawPanel(ctx, trial, t, th, box, captions = true) {
+  const H = box.h, pad = Math.round(H * 0.045);
+  ctx.fillStyle = th.bg;
+  ctx.fillRect(box.x, box.y, box.w, box.h);
+  if (!captions) {
+    drawRadar(ctx, trial, t, th, { x: box.x + pad * 0.5, y: box.y + pad * 0.5, w: box.w - pad, h: box.h - pad });
+    return;
+  }
+  const x0 = box.x + pad, x1 = box.x + box.w - pad;
+
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+  ctx.fillStyle = th.text;
+  ctx.font = `600 ${Math.round(H * 0.036)}px ${FONT}`;
+  ctx.fillText(SCRIPT_NAMES[trial.script] || `Script ${trial.script}`, x0, box.y + pad + H * 0.03);
+  ctx.fillStyle = th.muted;
+  ctx.font = `${Math.round(H * 0.022)}px ${FONT}`;
+  ctx.fillText(`Trial ${trial.id} · ${outcomeText(trial.row)}`, x0, box.y + pad + H * 0.068);
+
+  ctx.textAlign = "right";
+  ctx.fillStyle = th.text;
+  ctx.font = `500 ${Math.round(H * 0.03)}px ui-monospace, Menlo, monospace`;
+  ctx.fillText(fmtRel(t - trial.t0), x1, box.y + pad + H * 0.03);
+  ctx.fillStyle = th.muted;
+  ctx.font = `${Math.round(H * 0.018)}px ${FONT}`;
+  ctx.fillText("from first word", x1, box.y + pad + H * 0.058);
+
+  const radarBox = { x: box.x + pad * 0.5, y: box.y + H * 0.14, w: box.w - pad, h: H * 0.6 };
+  ctx.fillStyle = th.panel;
+  ctx.strokeStyle = th.border;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(radarBox.x, radarBox.y, radarBox.w, radarBox.h, H * 0.018); else ctx.rect(radarBox.x, radarBox.y, radarBox.w, radarBox.h);
+  ctx.fill();
+  ctx.stroke();
+  drawRadar(ctx, trial, t, th, { x: radarBox.x + pad * 0.3, y: radarBox.y + pad * 0.3, w: radarBox.w - pad * 0.6, h: radarBox.h - pad * 0.6 });
+
+  const st = stateAt(trial, t);
+  const toneColor = st.tone === "ok" ? th.ok : st.tone === "door" ? th.door : th.muted;
+  const sy = box.y + H * 0.8;
+  ctx.fillStyle = toneColor;
+  ctx.beginPath();
+  ctx.arc(x0 + H * 0.012, sy - H * 0.011, H * 0.011, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.textAlign = "left";
+  ctx.fillStyle = th.text;
+  ctx.font = `600 ${Math.round(H * 0.03)}px ${FONT}`;
+  ctx.fillText(st.status, x0 + H * 0.035, sy);
+
+  const recent = st.feed.slice(-3);
+  ctx.font = `${Math.round(H * 0.022)}px ${FONT}`;
+  recent.forEach((item, k) => {
+    const y = sy + H * 0.05 + k * H * 0.036;
+    const fresh = t - item.t < 2;
+    ctx.fillStyle = fresh ? th.text : th.muted;
+    ctx.textAlign = "left";
+    ctx.fillText(item.label, x0, y);
+    ctx.textAlign = "right";
+    ctx.fillStyle = th.muted;
+    ctx.font = `${Math.round(H * 0.02)}px ui-monospace, Menlo, monospace`;
+    ctx.fillText(fmtRel(item.t - trial.t0), x1, y);
+    ctx.font = `${Math.round(H * 0.022)}px ${FONT}`;
+  });
+}
+
+function drawComposite(ctx, trial, t, th, lay, video, captions = true) {
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, lay.W, lay.H);
+  if (lay.video.w > 0) {
+    if (video && video.readyState >= 2) {
+      ctx.drawImage(video, lay.video.x, lay.video.y, lay.video.w, lay.video.h);
+    } else {
+      ctx.fillStyle = "#111";
+      ctx.fillRect(lay.video.x, lay.video.y, lay.video.w, lay.video.h);
+    }
+  }
+  drawPanel(ctx, trial, t, th, lay.panel, captions);
+}
+
+if (typeof module !== "undefined") {
+  module.exports = { parseLog, dotsAt, stateAt, layout, drawComposite, eventLabel, outcomeText, THEMES };
+}
+</script>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const stage = $("stage"), ctx = stage.getContext("2d");
+  const video = $("video");
+  let trials = [], trial = null, playing = false, recorder = null, clockStart = 0, clockT = 0;
+  let audioCtx = null, audioDest = null;
+
+  function theme() { return $("darkToggle").checked ? THEMES.dark : THEMES.light; }
+  function offset() { return parseFloat($("offsetInput").value) || 0; }
+  function latency() { return parseFloat($("latencyInput").value) || 0; }
+  function lead() { return Math.max(0, parseFloat($("leadInput").value) || 0); }
+  function hasVideo() { return !!video.src && video.videoWidth > 0; }
+  function trialTimeFromVideo(v) { return trial.t0 + latency() + (v - offset()); }
+  function videoTimeFromTrial(t) { return offset() + (t - trial.t0 - latency()); }
+  function clipStart() { return Math.max(trial.tStart, trial.t0 - lead()); }
+  function clipEnd() { return trial.tEnd + 1.5; }
+
+  function captions() { return $("captionsToggle").checked; }
+
+  function currentLayout() {
+    return layout(parseInt($("heightSelect").value, 10), hasVideo() ? video.videoWidth / video.videoHeight : 0, captions());
+  }
+
+  const DOOR_FIELDS = ["doorMinX", "doorMaxX", "doorMinY", "doorMaxY"];
+  function doorFromFields() {
+    const v = DOOR_FIELDS.map((id) => parseFloat($(id).value));
+    if (v.some((n) => !Number.isFinite(n)) || v[1] <= v[0] || v[3] <= v[2]) return null;
+    return { valid: true, min_x_mm: v[0], max_x_mm: v[1], min_y_mm: v[2], max_y_mm: v[3] };
+  }
+  function fillDoorFields(door) {
+    const v = [door.min_x_mm, door.max_x_mm, door.min_y_mm, door.max_y_mm];
+    DOOR_FIELDS.forEach((id, i) => { $(id).value = v[i]; });
+  }
+
+  function render(t) {
+    if (!trial) return;
+    const lay = currentLayout();
+    if (stage.width !== lay.W || stage.height !== lay.H) { stage.width = lay.W; stage.height = lay.H; }
+    drawComposite(ctx, trial, t, theme(), lay, hasVideo() ? video : null, captions());
+  }
+
+  function previewTime() {
+    if (!trial) return 0;
+    return hasVideo() ? trialTimeFromVideo(video.currentTime) : (clockT || trial.t0);
+  }
+
+  function refreshControls() {
+    const ready = !!trial;
+    $("playBtn").disabled = !ready;
+    $("recordBtn").disabled = !ready || recorder !== null;
+    $("markBtn").disabled = !hasVideo();
+  }
+
+  $("logInput").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    trials = parseLog(await file.text());
+    const sel = $("trialSelect");
+    sel.innerHTML = "";
+    if (!trials.length) {
+      sel.innerHTML = "<option>No trials found in this file</option>";
+      sel.disabled = true;
+      $("trialInfo").textContent = "Is it the *_trials.jsonl file from the study folder?";
+      $("trialInfo").classList.add("error");
+      return;
+    }
+    $("trialInfo").classList.remove("error");
+    trials.forEach((tr, i) => {
+      const o = document.createElement("option");
+      o.value = i;
+      o.textContent = `Trial ${tr.id} · ${tr.script} ${SCRIPT_NAMES[tr.script] || ""} · ${tr.row ? tr.row.classification : ""}`;
+      sel.appendChild(o);
+    });
+    sel.disabled = false;
+    selectTrial(0);
+  });
+
+  function selectTrial(i) {
+    trial = trials[i];
+    clockT = trial.t0;
+    const dur = (trial.tEnd - trial.tStart).toFixed(1);
+    if (trial.door && trial.door.valid !== false && trial.door.min_x_mm != null) {
+      trial.doorFromLog = true;
+      fillDoorFields(trial.door);
+      $("doorHint").textContent = "From the log.";
+    } else {
+      trial.door = doorFromFields();
+      $("doorHint").textContent = trial.door ? "Entered by hand - applies to every trial without one."
+                                             : "Not in this log - enter it by hand to draw it.";
+    }
+    $("trialInfo").textContent = `${trial.steps.length} radar frames over ${dur} s · ${outcomeText(trial.row)}`;
+    refreshControls();
+    render(previewTime());
+  }
+  DOOR_FIELDS.forEach((id) => $(id).addEventListener("change", () => {
+    if (!trial) return;
+    trial.door = doorFromFields();
+    trial.doorFromLog = false;
+    $("doorHint").textContent = trial.door ? "Entered by hand - applies to every trial without one."
+                                           : "Enter all four values (min below max) to draw it.";
+    render(previewTime());
+  }));
+  $("trialSelect").addEventListener("change", (e) => selectTrial(parseInt(e.target.value, 10)));
+
+  $("videoInput").addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    video.src = URL.createObjectURL(file);
+    video.hidden = false;
+    video.addEventListener("loadeddata", () => { refreshControls(); render(previewTime()); }, { once: true });
+  });
+  for (const ev of ["seeked", "timeupdate"]) video.addEventListener(ev, () => { if (!playing) render(previewTime()); });
+
+  $("markBtn").addEventListener("click", () => {
+    $("offsetInput").value = video.currentTime.toFixed(2);
+    render(previewTime());
+  });
+  document.querySelectorAll("[data-nudge]").forEach((b) => b.addEventListener("click", () => {
+    $("offsetInput").value = (offset() + parseFloat(b.dataset.nudge)).toFixed(2);
+    render(previewTime());
+  }));
+  for (const id of ["offsetInput", "latencyInput", "darkToggle", "heightSelect", "leadInput", "captionsToggle"]) {
+    $(id).addEventListener("change", () => render(previewTime()));
+  }
+
+  let videoWired = false;
+  function ensureAudio() {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!audioCtx) {
+      audioCtx = new AC();
+      audioDest = audioCtx.createMediaStreamDestination();
+    }
+    if (hasVideo() && !videoWired) {
+      const src = audioCtx.createMediaElementSource(video);
+      src.connect(audioDest);
+      src.connect(audioCtx.destination);
+      videoWired = true;
+    }
+  }
+
+  function scheduleBeep(delaySeconds) {
+    if (!audioCtx || !$("beepToggle").checked || delaySeconds < 0) return;
+    const start = audioCtx.currentTime + delaySeconds;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = 1000;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.5, start + 0.005);
+    gain.gain.setValueAtTime(0.5, start + 0.075);
+    gain.gain.linearRampToValueAtTime(0, start + 0.08);
+    osc.connect(gain);
+    gain.connect(audioDest);
+    gain.connect(audioCtx.destination);
+    osc.start(start);
+    osc.stop(start + 0.1);
+  }
+
+  function seekVideo(v) {
+    return new Promise((resolve) => {
+      if (Math.abs(video.currentTime - v) < 0.01) { resolve(); return; }
+      const done = () => { clearTimeout(timer); resolve(); };
+      const timer = setTimeout(done, 1500);
+      video.addEventListener("seeked", done, { once: true });
+      video.currentTime = v;
+    });
+  }
+
+  function stopPlayback() {
+    playing = false;
+    video.pause();
+    $("playBtn").textContent = "Play";
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }
+
+  async function startPlayback() {
+    if (!trial) return;
+    playing = true;
+    $("playBtn").textContent = "Stop";
+    const tEnd = clipEnd();
+    ensureAudio();
+    if (audioCtx && audioCtx.state === "suspended") await audioCtx.resume();
+    const firstWord = trial.t0 + latency();
+    if (hasVideo()) {
+      const v0 = Math.max(0, videoTimeFromTrial(clipStart()));
+      await seekVideo(v0);
+      await video.play();
+      scheduleBeep(videoTimeFromTrial(firstWord) - v0);
+    } else {
+      clockStart = performance.now() - (clipStart() - trial.t0) * 1000;
+      scheduleBeep(firstWord - clipStart());
+    }
+    const tick = () => {
+      if (!playing) return;
+      const t = hasVideo() ? trialTimeFromVideo(video.currentTime) : trial.t0 + (performance.now() - clockStart) / 1000;
+      clockT = t;
+      render(t);
+      if (t >= tEnd || (hasVideo() && video.ended)) { stopPlayback(); return; }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  $("playBtn").addEventListener("click", () => (playing ? stopPlayback() : startPlayback()));
+
+  function pickMime() {
+    const options = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"];
+    return options.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
+  }
+
+  $("recordBtn").addEventListener("click", async () => {
+    if (!trial || !window.MediaRecorder || !stage.captureStream) {
+      $("recStatus").textContent = "This browser cannot record the canvas - try a current Safari or Chrome.";
+      $("recStatus").classList.add("error");
+      return;
+    }
+    render(clipStart());
+    ensureAudio();
+    const tracks = [...stage.captureStream(30).getVideoTracks()];
+    if (audioDest) tracks.push(...audioDest.stream.getAudioTracks());
+    const mime = pickMime();
+    const chunks = [];
+    recorder = new MediaRecorder(new MediaStream(tracks), mime ? { mimeType: mime, videoBitsPerSecond: 12000000 } : {});
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      const type = recorder.mimeType || mime || "video/webm";
+      const ext = type.includes("mp4") ? "mp4" : "webm";
+      const link = $("downloadLink");
+      link.href = URL.createObjectURL(new Blob(chunks, { type }));
+      link.download = `trial${trial.id}_${trial.script}_${hasVideo() ? "side_by_side" : "radar"}.${ext}`;
+      link.hidden = false;
+      $("recStatus").classList.remove("error");
+      $("recStatus").textContent = `Recorded ${ext.toUpperCase()} - click to save.`;
+      recorder = null;
+      refreshControls();
+    };
+    $("downloadLink").hidden = true;
+    $("recStatus").classList.remove("error");
+    $("recStatus").textContent = "Recording in real time…";
+    recorder.start(250);
+    refreshControls();
+    await startPlayback();
+  });
+
+  refreshControls();
+})();
+</script>
+</body>
+</html>

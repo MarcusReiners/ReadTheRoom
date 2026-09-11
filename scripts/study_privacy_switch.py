@@ -8,6 +8,7 @@ import random
 import sys
 import threading
 import time
+import wave
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,10 +29,12 @@ from domain.events import (
     SpeechTranscribed,
     VoiceDucked,
 )
+from adapters.tts.base import StreamingTTSAdapter
 from service_layer.bus import EventBus
 from service_layer.handlers import register_handlers
 
 STUDY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "study")
+REPLY_AUDIO = os.path.join(STUDY_DIR, "private_reply.wav")
 FN_TARGET = 0.05
 STAY_S = 15.0
 WALK_S = 0.0
@@ -587,7 +590,9 @@ def done_counts(rows, configuration):
     return counts
 
 
-def next_script(reps, counts, rng):
+def next_script(reps, counts, rng, fixed_order=False):
+    if fixed_order:
+        return next((k for k, n in reps.items() if counts.get(k, 0) < n), None)
     bag = [k for k, n in reps.items() for _ in range(max(0, n - counts.get(k, 0)))]
     return rng.choice(bag) if bag else None
 
@@ -838,6 +843,38 @@ class SimScene:
             time.sleep(dt)
 
 
+class FileTTS(StreamingTTSAdapter):
+    """Plays the pre-rendered private message (study/private_reply.wav) through
+    the assistant's normal audio path - same buffering, volume, quieter voice
+    and takeover as the live voice. Identical in every trial, and it spends no
+    TTS credits: 93 trials of the full message would need ~90,000 characters."""
+
+    def __init__(self, bus, path, speaker_device):
+        super().__init__(bus=bus, speaker_device=speaker_device)
+        with wave.open(path, "rb") as w:
+            if w.getnchannels() != 1 or w.getsampwidth() != 2:
+                raise SystemExit(f"{path} must be 16-bit mono PCM")
+            self._rate = w.getframerate()
+            self._pcm = w.readframes(w.getnframes())
+        self.duration_s = len(self._pcm) / 2 / self._rate
+        self._played = False
+
+    @property
+    def sample_rate(self):
+        return self._rate
+
+    def speak_stream(self, text_chunks):
+        self._played = False
+        return super().speak_stream(text_chunks)
+
+    def _synthesize_chunks(self, sentence):
+        if self._played:
+            return
+        self._played = True
+        for i in range(0, len(self._pcm), 8192):
+            yield self._pcm[i:i + 8192]
+
+
 class SimTTS:
     def __init__(self, bus):
         self.bus = bus
@@ -891,6 +928,11 @@ def main():
                         help="write the sheet for video timings, prefilled with the session's trials")
     parser.add_argument("--import-video", action="store_true", help="merge the filled video sheet")
     parser.add_argument("--simulate", action="store_true", help="no radar or speaker, for rehearsal")
+    parser.add_argument("--fixed-order", action="store_true",
+                        help="run the scripts in the order given in --reps instead of randomly (demo takes)")
+    parser.add_argument("--recording", action="store_true",
+                        help="play study/private_reply.wav instead of speaking the message with the live TTS "
+                             "provider - identical in every trial, no TTS credits; keep one choice per session")
     parser.add_argument("--verbose", action="store_true", help="show the full event log in the terminal too")
     args = parser.parse_args()
 
@@ -943,11 +985,16 @@ def main():
         settings = load_app_settings(config.APP_SETTINGS_PATH, defaults={
             "voices": [{"id": "default", "voice_id": config.ELEVENLABS_VOICE_ID}],
             "active_voice_id": "default", "volume": 1.0})
-        tts = build_tts(config, bus)
-        voice = next((v for v in settings["voices"] if v["id"] == settings["active_voice_id"]),
-                     settings["voices"][0])
-        if hasattr(tts, "voice_id"):
-            tts.voice_id = voice["voice_id"]
+        if args.recording:
+            if not os.path.exists(REPLY_AUDIO):
+                raise SystemExit(f"--recording needs {REPLY_AUDIO}")
+            tts = FileTTS(bus, REPLY_AUDIO, config.SPEAKER_DEVICE)
+        else:
+            tts = build_tts(config, bus)
+            voice = next((v for v in settings["voices"] if v["id"] == settings["active_voice_id"]),
+                         settings["voices"][0])
+            if hasattr(tts, "voice_id"):
+                tts.voice_id = voice["voice_id"]
         if hasattr(tts, "set_volume"):
             tts.set_volume(settings.get("volume", 1.0))
         if hasattr(tts, "duck_gain"):
@@ -994,6 +1041,11 @@ def main():
     print(f"Zone       : x {zone['min_x_mm']}..{zone['max_x_mm']} mm, y {zone['min_y_mm']}..{zone['max_y_mm']} mm")
     print(f"Edge band  : in at {config.RADAR_ENTRY_MARGIN_MM:.0f} mm inside, out at "
           f"{config.RADAR_EXIT_MARGIN_MM:.0f} mm outside the zone edge")
+    if isinstance(tts, FileTTS):
+        print(f"Voice      : recording {os.path.relpath(REPLY_AUDIO)} ({tts.duration_s:.0f} s), "
+              f"identical in every trial")
+    elif not args.simulate:
+        print(f"Voice      : live {config.TTS_PROVIDER} TTS")
     if door_zone.get("valid"):
         print(f"Door zone  : x {door_zone['min_x_mm']}..{door_zone['max_x_mm']} mm, "
               f"y {door_zone['min_y_mm']}..{door_zone['max_y_mm']} mm - entries decided there, "
@@ -1004,7 +1056,7 @@ def main():
     kept = 0
     try:
         while True:
-            script_id = next_script(reps, counts, rng)
+            script_id = next_script(reps, counts, rng, args.fixed_order)
             if script_id is None:
                 print("\nAll planned trials for this configuration are done.")
                 break
@@ -1030,7 +1082,7 @@ def main():
             append(csv_path, row)
             with open(jsonl_path, "a") as f:
                 f.write(json.dumps({"trial_id": trial_id, "seed": seed, "row": row, "zone": zone,
-                                    **detail}) + "\n")
+                                    "door_zone": door_zone, **detail}) + "\n")
             counts[script_id] = counts.get(script_id, 0) + 1
             kept += 1
     except KeyboardInterrupt:
