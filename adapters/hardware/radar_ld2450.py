@@ -26,6 +26,8 @@ APPEAR_INWARD_MM = 80.0
 APPEAR_WINDOW_S = 0.6
 DOOR_OUTSIDE_S = 1.0
 LEAVING_SPEED_MMS = 150.0
+EXIT_SPEED_MMS = 500.0
+RECEDE_WINDOW_S = 0.5
 SILENCE_WARN_S = 3.0
 MODULE_SILENT_MS = 2000
 DIAG_WINDOW_S = 10.0
@@ -430,13 +432,20 @@ class RadarLD2450Adapter:
                  door_near_mm of the door zone, too fast for the radar.
         peek:    at the door, then gone again without coming in (DoorCleared
                  "gone"); PersonAtDoor/DoorCleared drive the quieter voice.
-        left:    from the room into the door zone, then gone or outside.
+        left:    from the room into the door zone, then gone or outside -
+                 and moving away from the sensor at EXIT_SPEED_MMS or more
+                 somewhere on the way, from RECEDE_WINDOW_S before reaching
+                 the door zone on. The LD2450 can leave a person's slot drifting
+                 back towards the door while the person, standing still, is
+                 picked up again as a new target; that drift reports almost
+                 no speed, a real exit reports about 1 m/s.
         Movement anywhere else - someone getting up, a reflection near a wall -
         cannot produce an entry or an exit.
         """
         seen = set()
         for (target, x, y, d_room), tid in zip(points, track_ids):
             seen.add(tid)
+            speed = target.get("speed_mms") or 0
             prev = self._tracks.get(tid)
             prev_region = prev.get("region") if prev else None
             region = self._region(x, y, d_room, prev_region)
@@ -447,7 +456,6 @@ class RadarLD2450Adapter:
                 # brand-new track at or near the door. The radar's own speed
                 # tells the two cases apart: positive is moving away from the
                 # sensor, i.e. out of the room it sits in.
-                speed = target.get("speed_mms") or 0
                 if region == "door":
                     if prev is None and speed >= LEAVING_SPEED_MMS:
                         tr["in_room"] = True
@@ -461,7 +469,11 @@ class RadarLD2450Adapter:
             else:
                 tr = prev
                 if region != prev_region:
-                    self._door_transition(tid, tr, region, x, y)
+                    self._door_transition(tid, tr, region, x, y, now)
+            if speed >= EXIT_SPEED_MMS:
+                tr["recede_t"] = now
+                if tr.get("leaving"):
+                    tr["receded"] = True
             if region == "outside":
                 tr["outside_since"] = tr.get("outside_since") or now
                 if now - tr["outside_since"] >= DOOR_OUTSIDE_S:
@@ -477,9 +489,11 @@ class RadarLD2450Adapter:
         tr["at_door"] = True
         self.bus.publish(PersonAtDoor(person_id=tid, x_mm=x, y_mm=y))
 
-    def _door_transition(self, tid: int, tr: dict, region: str, x: float, y: float) -> None:
+    def _door_transition(self, tid: int, tr: dict, region: str, x: float, y: float, now: float) -> None:
         if region == "door":
             if tr.get("in_room"):
+                if not tr.get("leaving"):
+                    tr["receded"] = now - tr.get("recede_t", -math.inf) <= RECEDE_WINDOW_S
                 tr["leaving"] = True
             elif not tr.get("at_door"):
                 self._announce_at_door(tid, tr, x, y)
@@ -489,18 +503,25 @@ class RadarLD2450Adapter:
                 self.bus.publish(PersonEnteredRoom(person_id=tid, x_mm=x, y_mm=y, via="door"))
                 self.bus.publish(DoorCleared(person_id=tid, outcome="entered"))
             tr["leaving"] = False
+            tr["receded"] = False
             tr["in_room"] = True
 
     def _finish_door_track(self, tid: int, tr: dict) -> None:
         """The person is gone from view (or has been outside the zones for a
-        while): a pending peek or a pending exit is final now."""
+        while): a pending peek or a pending exit is final now. An exit that
+        never moved away from the sensor is dropped and the track still
+        counts as inside, so drifting back in is not a second entry."""
         if tr.get("at_door"):
             tr["at_door"] = False
             self.bus.publish(DoorCleared(person_id=tid, outcome="gone"))
         if tr.get("leaving"):
             tr["leaving"] = False
-            tr["in_room"] = False
-            self.bus.publish(PersonLeftRoom(person_id=tid))
+            if tr.get("receded"):
+                tr["in_room"] = False
+                self.bus.publish(PersonLeftRoom(person_id=tid))
+            else:
+                logger.info("[Radar] track %s went out through the door zone without moving away from the "
+                            "sensor - taken for a reflection, not an exit.", tid)
 
     def _associate(self, points: list, now: float) -> list:
         """Gives each reported target the id of the nearest recent track.
