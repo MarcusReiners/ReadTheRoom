@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 # here, so this module stays a storage concern only.
 _SCALAR_KEYS = (
     "system_prompt", "llm_model", "reasoning_effort", "stt_language_code",
-    "volume", "servo_min_angle", "servo_max_angle",
+    "volume", "servo_min_angle", "servo_max_angle", "door_zone",
 )
 
 
@@ -70,6 +70,17 @@ def load_servo_range(path: str, default_min: float, default_max: float) -> tuple
     if min_angle is None or max_angle is None or max_angle <= min_angle:
         return default_min, default_max
     return float(min_angle), float(max_angle)
+
+
+def load_door_zone(path: str) -> dict | None:
+    """The door zone drawn in the web app, for every consumer of build_radar()
+    - the main app and the study/zone scripts alike."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+    zone = data.get("door_zone")
+    return zone if isinstance(zone, dict) else None
 
 
 def save_app_settings(path: str, settings: dict) -> None:

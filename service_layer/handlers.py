@@ -5,13 +5,16 @@ import time
 
 from domain.conversation import ConversationState
 from domain.events import (
+    DoorCleared,
     ListeningStateChanged,
     ModalitySwitched,
+    PersonAtDoor,
     PersonEnteredRoom,
     PersonLeftRoom,
     SpeechPlaybackEnded,
     SpeechPlaybackStarted,
     SpeechTranscribed,
+    VoiceDucked,
 )
 from service_layer.bus import EventBus
 from adapters.tts.base import StreamingTTSAdapter
@@ -44,21 +47,85 @@ class PrivacyGuard:
     - Someone crossing OUT with no visitors may be the partner. If no
       conversation follows within departure_grace_s, the partner is assumed
       gone; until then, newcomers are still treated as visitors.
+    - With a door zone: someone standing in it while a conversation runs
+      makes the voice quieter at once - they may only be looking in, so it
+      is not worth cutting the answer off. It returns to normal
+      door_clear_hold_s after the door zone is empty; walking on in is an
+      entry like any other.
     """
 
     def __init__(self, bus: EventBus, conversation: ConversationState, tts: StreamingTTSAdapter,
-                 departure_grace_s: float = 60.0) -> None:
+                 departure_grace_s: float = 60.0, door_clear_hold_s: float = 1.5) -> None:
         self.bus = bus
         self.conversation = conversation
         self.tts = tts
         self.departure_grace_s = departure_grace_s
+        self.door_clear_hold_s = door_clear_hold_s
         self.partner_present = False
         self.visitors = 0
         self._departure_since: float | None = None
+        self._at_door: set = set()
+        self._ducked = False
+        self._unduck_timer: threading.Timer | None = None
         self._lock = threading.Lock()
         bus.subscribe(SpeechTranscribed, self._on_turn)
         bus.subscribe(PersonEnteredRoom, self._on_entered)
         bus.subscribe(PersonLeftRoom, self._on_left)
+        bus.subscribe(PersonAtDoor, self._on_at_door)
+        bus.subscribe(DoorCleared, self._on_door_cleared)
+
+    @property
+    def people_at_door(self) -> int:
+        return len(self._at_door)
+
+    @property
+    def ducked(self) -> bool:
+        return self._ducked
+
+    def _set_duck(self, active: bool, reason: str) -> None:
+        with self._lock:
+            if active == self._ducked:
+                return
+            self._ducked = active
+        set_duck = getattr(self.tts, "set_duck", None)
+        if set_duck is not None:
+            set_duck(active)
+        self.bus.publish(VoiceDucked(active=active, reason=reason))
+        logger.info("[Privacy] voice %s (%s).", "quieter" if active else "back to normal volume", reason)
+
+    def _cancel_unduck(self) -> None:
+        if self._unduck_timer is not None:
+            self._unduck_timer.cancel()
+            self._unduck_timer = None
+
+    def _on_at_door(self, event: PersonAtDoor) -> None:
+        with self._lock:
+            self._expire_departure(time.monotonic())
+            self._at_door.add(event.person_id)
+            self._cancel_unduck()
+            protect = (self.partner_present and self.conversation.confidential
+                       and self.conversation.modality == "voice")
+        if protect:
+            self._set_duck(True, "someone at the door")
+        else:
+            logger.info("[Privacy] someone at the door, no conversation running - nothing to protect.")
+
+    def _on_door_cleared(self, event: DoorCleared) -> None:
+        with self._lock:
+            self._at_door.discard(event.person_id)
+            if self._at_door or not self._ducked:
+                return
+            self._cancel_unduck()
+            self._unduck_timer = threading.Timer(self.door_clear_hold_s, self._unduck_if_clear)
+            self._unduck_timer.daemon = True
+            self._unduck_timer.start()
+
+    def _unduck_if_clear(self) -> None:
+        with self._lock:
+            self._unduck_timer = None
+            clear = not self._at_door
+        if clear:
+            self._set_duck(False, "door clear")
 
     def _expire_departure(self, now: float) -> None:
         if self._departure_since is not None and now - self._departure_since >= self.departure_grace_s:
@@ -118,8 +185,10 @@ def register_handlers(
     conversation: ConversationState,
     tts: StreamingTTSAdapter,
     departure_grace_s: float = 60.0,
+    door_clear_hold_s: float = 1.5,
 ) -> PrivacyGuard:
-    return PrivacyGuard(bus, conversation, tts, departure_grace_s=departure_grace_s)
+    return PrivacyGuard(bus, conversation, tts, departure_grace_s=departure_grace_s,
+                        door_clear_hold_s=door_clear_hold_s)
 
 
 def _tie_led_command(mode: str, period_ms: int | None = None) -> dict:

@@ -453,6 +453,8 @@ def main() -> None:
         tts.voice_id = active_voice["voice_id"]
     if hasattr(tts, "set_volume"):
         tts.set_volume(app_settings["volume"])
+    if hasattr(tts, "duck_gain"):
+        tts.duck_gain = config.TTS_DUCK_GAIN
     llm = LLMGatewayAdapter(
         model=app_settings["llm_model"],
         api_base=config.LLM_API_BASE,
@@ -520,7 +522,8 @@ def main() -> None:
     else:
         face = DummyFaceDisplayAdapter(bus=bus)
 
-    register_handlers(bus, conversation, tts, departure_grace_s=config.PRIVACY_DEPARTURE_GRACE_S)
+    register_handlers(bus, conversation, tts, departure_grace_s=config.PRIVACY_DEPARTURE_GRACE_S,
+                      door_clear_hold_s=config.PRIVACY_DOOR_CLEAR_HOLD_S)
 
     chat_bridge = ChatBridgeAdapter(
         bus, conversation, store, turn_queue,

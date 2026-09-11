@@ -84,14 +84,18 @@ def build_turntable(cfg, move_to_home_on_start: bool = True):
 
 def build_radar(cfg, bus: EventBus):
     if cfg.RADAR_PROVIDER == "ld2450":
+        from adapters.app_settings import load_door_zone
         from adapters.hardware.radar_ld2450 import RadarLD2450Adapter
-        return RadarLD2450Adapter(
+        radar = RadarLD2450Adapter(
             bus=bus,
             serial_port=cfg.RADAR_SERIAL_PORT,
             baud_rate=cfg.RADAR_SERIAL_BAUD,
             entry_margin_mm=cfg.RADAR_ENTRY_MARGIN_MM,
             exit_margin_mm=cfg.RADAR_EXIT_MARGIN_MM,
+            door_near_mm=cfg.RADAR_DOOR_NEAR_MM,
         )
+        radar.set_door_zone(load_door_zone(cfg.APP_SETTINGS_PATH))
+        return radar
     if cfg.RADAR_PROVIDER == "dummy":
         from adapters.hardware.radar_ld2450 import DummyRadarAdapter
         return DummyRadarAdapter(bus=bus)

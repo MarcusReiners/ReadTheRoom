@@ -6,7 +6,14 @@ import time
 
 import serial
 
-from domain.events import PersonCountChanged, PersonEnteredRoom, PersonLeftRoom, RadarTargetsUpdated
+from domain.events import (
+    DoorCleared,
+    PersonAtDoor,
+    PersonCountChanged,
+    PersonEnteredRoom,
+    PersonLeftRoom,
+    RadarTargetsUpdated,
+)
 from service_layer.bus import EventBus
 
 logger = logging.getLogger(__name__)
@@ -17,6 +24,7 @@ APPEAR_EDGE_MM = 600.0
 APPEAR_SPEED_MMS = 150.0
 APPEAR_INWARD_MM = 80.0
 APPEAR_WINDOW_S = 0.6
+DOOR_OUTSIDE_S = 1.0
 SILENCE_WARN_S = 3.0
 MODULE_SILENT_MS = 2000
 DIAG_WINDOW_S = 10.0
@@ -89,6 +97,7 @@ class RadarLD2450Adapter:
         drop_hold_s: float = 3.0,
         entry_margin_mm: float = 100.0,
         exit_margin_mm: float = 100.0,
+        door_near_mm: float = 800.0,
     ) -> None:
         """drop_hold_s: how long a *decrease* in person count has to hold
         steady before it's believed. Increases are published immediately.
@@ -110,6 +119,8 @@ class RadarLD2450Adapter:
         self._person_count = 0
         self._entry_margin_mm = entry_margin_mm
         self._exit_margin_mm = exit_margin_mm
+        self._door_near_mm = door_near_mm
+        self._door_zone: dict = {"valid": False}
         self._tracks: dict = {}
         self._next_track_id = 0
         self._warned_zone_mode = None
@@ -152,6 +163,28 @@ class RadarLD2450Adapter:
 
     def get_diagnostics(self) -> dict:
         return dict(self._sensor, bridge_dropped=self._bridge_dropped)
+
+    def get_door_zone(self) -> dict:
+        return dict(self._door_zone)
+
+    def set_door_zone(self, zone: dict | None) -> dict:
+        """Accepts {"min_x_mm", "max_x_mm", "min_y_mm", "max_y_mm"} or None to
+        remove it. Lives only on the Pi: the sensor keeps just the room zone."""
+        cleaned = {"valid": False}
+        if isinstance(zone, dict) and zone.get("valid", True):
+            try:
+                x0, x1 = sorted((float(zone["min_x_mm"]), float(zone["max_x_mm"])))
+                y0, y1 = sorted((float(zone["min_y_mm"]), float(zone["max_y_mm"])))
+            except (KeyError, TypeError, ValueError):
+                x0 = x1 = y0 = y1 = 0.0
+            if x1 - x0 >= 100 and y1 - y0 >= 100:
+                cleaned = {"valid": True, "min_x_mm": round(x0), "max_x_mm": round(x1),
+                           "min_y_mm": round(y0), "max_y_mm": round(y1)}
+        self._door_zone = cleaned
+        for track in self._tracks.values():
+            track.pop("region", None)
+        logger.info("[Radar] door zone %s.", "set" if cleaned["valid"] else "removed")
+        return dict(cleaned)
 
     def send_command(self, command: dict) -> None:
         with self._write_lock:
@@ -333,6 +366,9 @@ class RadarLD2450Adapter:
             if d is not None:
                 points.append((target, x, y, d))
         track_ids = self._associate([(x, y) for _, x, y, _ in points], now)
+        if self._door_zone.get("valid"):
+            self._update_door_tracks(points, track_ids, now)
+            return
         seen = set()
         for (target, x, y, d), tid in zip(points, track_ids):
             seen.add(tid)
@@ -344,7 +380,7 @@ class RadarLD2450Adapter:
                 side = None
             prev = self._tracks.get(tid)
             continuous = prev is not None
-            prev_side = prev["side"] if continuous else None
+            prev_side = prev.get("side") if continuous else None
             pending = prev.get("pending") if continuous else None
             new_side = side or prev_side
             depth = -d
@@ -369,6 +405,85 @@ class RadarLD2450Adapter:
             self._tracks[tid] = {"t": now, "x": x, "y": y, "side": new_side, "pending": pending}
         for tid in [t for t, tr in self._tracks.items() if t not in seen and now - tr["t"] > TRACK_GAP_S]:
             del self._tracks[tid]
+
+    def _region(self, x: float, y: float, d_room: float, prev_region: str | None) -> str:
+        """"door", "room" (the room zone minus the door zone) or "outside",
+        with the same hysteresis as the room edge so jitter cannot flip it."""
+        d_door = zone_signed_distance(x, y, self._door_zone)
+        if d_door is not None and d_door <= (self._exit_margin_mm if prev_region == "door" else 0.0):
+            return "door"
+        limit = self._exit_margin_mm if prev_region == "room" else -self._entry_margin_mm
+        return "room" if d_room <= limit else "outside"
+
+    def _update_door_tracks(self, points: list, track_ids: list, now: float) -> None:
+        """Entries and exits decided at the door zone only.
+
+        entered: first seen at the door (or coming to it from outside), then
+                 into the room - or first picked up inside within
+                 door_near_mm of the door zone, too fast for the radar.
+        peek:    at the door, then gone again without coming in (DoorCleared
+                 "gone"); PersonAtDoor/DoorCleared drive the quieter voice.
+        left:    from the room into the door zone, then gone or outside.
+        Movement anywhere else - someone getting up, a reflection near a wall -
+        cannot produce an entry or an exit.
+        """
+        seen = set()
+        for (target, x, y, d_room), tid in zip(points, track_ids):
+            seen.add(tid)
+            prev = self._tracks.get(tid)
+            prev_region = prev.get("region") if prev else None
+            region = self._region(x, y, d_room, prev_region)
+            if prev is None or "region" not in prev:
+                tr = {"at_door": False, "in_room": region == "room", "leaving": False, "outside_since": None}
+                if region == "door":
+                    self._announce_at_door(tid, tr, x, y)
+                elif region == "room" and prev is None:
+                    d_door = zone_signed_distance(x, y, self._door_zone)
+                    if d_door is not None and d_door <= self._door_near_mm:
+                        self.bus.publish(PersonEnteredRoom(person_id=tid, x_mm=x, y_mm=y, via="near-door"))
+            else:
+                tr = prev
+                if region != prev_region:
+                    self._door_transition(tid, tr, region, x, y)
+            if region == "outside":
+                tr["outside_since"] = tr.get("outside_since") or now
+                if now - tr["outside_since"] >= DOOR_OUTSIDE_S:
+                    self._finish_door_track(tid, tr)
+            else:
+                tr["outside_since"] = None
+            tr.update(t=now, x=x, y=y, region=region)
+            self._tracks[tid] = tr
+        for tid in [t for t, tr in self._tracks.items() if t not in seen and now - tr["t"] > TRACK_GAP_S]:
+            self._finish_door_track(tid, self._tracks.pop(tid))
+
+    def _announce_at_door(self, tid: int, tr: dict, x: float, y: float) -> None:
+        tr["at_door"] = True
+        self.bus.publish(PersonAtDoor(person_id=tid, x_mm=x, y_mm=y))
+
+    def _door_transition(self, tid: int, tr: dict, region: str, x: float, y: float) -> None:
+        if region == "door":
+            if tr.get("in_room"):
+                tr["leaving"] = True
+            elif not tr.get("at_door"):
+                self._announce_at_door(tid, tr, x, y)
+        elif region == "room":
+            if tr.get("at_door"):
+                tr["at_door"] = False
+                self.bus.publish(PersonEnteredRoom(person_id=tid, x_mm=x, y_mm=y, via="door"))
+                self.bus.publish(DoorCleared(person_id=tid, outcome="entered"))
+            tr["leaving"] = False
+            tr["in_room"] = True
+
+    def _finish_door_track(self, tid: int, tr: dict) -> None:
+        """The person is gone from view (or has been outside the zones for a
+        while): a pending peek or a pending exit is final now."""
+        if tr.get("at_door"):
+            tr["at_door"] = False
+            self.bus.publish(DoorCleared(person_id=tid, outcome="gone"))
+        if tr.get("leaving"):
+            tr["leaving"] = False
+            tr["in_room"] = False
+            self.bus.publish(PersonLeftRoom(person_id=tid))
 
     def _associate(self, points: list, now: float) -> list:
         """Gives each reported target the id of the nearest recent track.

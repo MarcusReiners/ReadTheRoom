@@ -169,6 +169,16 @@ PRIVACY_DEPARTURE_GRACE_S = float(_env("PRIVACY_DEPARTURE_GRACE_S", "60"))
 # fire entries and exits back and forth.
 RADAR_ENTRY_MARGIN_MM = float(_env("RADAR_ENTRY_MARGIN_MM", "100"))
 RADAR_EXIT_MARGIN_MM = float(_env("RADAR_EXIT_MARGIN_MM", "100"))
+# With a door zone drawn in the web app, entries and exits are decided only
+# there. Someone first picked up inside the room within this distance of the
+# door zone (the radar was too slow to catch them in it) still counts as
+# having come through the door.
+RADAR_DOOR_NEAR_MM = float(_env("RADAR_DOOR_NEAR_MM", "800"))
+# While someone stands in the door zone during a conversation the voice drops
+# to this fraction of its volume (0.35 is about -9 dB), and returns this long
+# after the door zone is empty again.
+TTS_DUCK_GAIN = float(_env("TTS_DUCK_GAIN", "0.35"))
+PRIVACY_DOOR_CLEAR_HOLD_S = float(_env("PRIVACY_DOOR_CLEAR_HOLD_S", "1.5"))
 RADAR_SERIAL_PORT = _env("RADAR_SERIAL_PORT", "/dev/ttyUSB0")
 RADAR_SERIAL_BAUD = int(_env("RADAR_SERIAL_BAUD", "115200"))
 

@@ -17,13 +17,16 @@ import logging_setup
 from adapters.hardware.radar_ld2450 import zone_signed_distance
 from domain.conversation import ConversationState
 from domain.events import (
+    DoorCleared,
     ModalitySwitched,
+    PersonAtDoor,
     PersonEnteredRoom,
     PersonLeftRoom,
     RadarTargetsUpdated,
     SpeechPlaybackEnded,
     SpeechPlaybackStarted,
     SpeechTranscribed,
+    VoiceDucked,
 )
 from service_layer.bus import EventBus
 from service_layer.handlers import register_handlers
@@ -40,18 +43,22 @@ PASS_WINDOW_S = 15.0
 REVERSION_TIMEOUT_S = 60.0
 SPEED_WINDOW_S = 0.6
 
+# should: the answer must move to the chat. should_duck: the voice must get
+# quieter without a switch (a peek), must not change (a passer-by), or is not
+# judged (entries - they pass the door zone on the way in, so a brief dip
+# before the switch is expected either way).
 SCRIPTS = {
-    "A": {"name": "direct entry, stay", "kind": "entry", "should": True,
+    "A": {"name": "direct entry, stay", "kind": "entry", "should": True, "should_duck": None,
           "tell": "walk in at NORMAL pace, stay inside ~{stay:.0f} s, then leave", "sim_speed": 1100.0},
-    "B": {"name": "passer-by, near", "kind": "pass", "should": False,
-          "tell": "walk past along the NEAR line, close to the threshold, WITHOUT entering", "sim_dist": 150.0},
-    "C": {"name": "passer-by, far", "kind": "pass", "should": False,
+    "B": {"name": "passer-by, near", "kind": "pass", "should": False, "should_duck": False,
+          "tell": "walk past the open door, close to it, WITHOUT stepping into the doorway", "sim_dist": 150.0},
+    "C": {"name": "passer-by, far", "kind": "pass", "should": False, "should_duck": False,
           "tell": "walk past along the FAR line, WITHOUT entering", "sim_dist": 700.0},
-    "D": {"name": "peek and leave", "kind": "peek", "should": True,
-          "tell": "step or lean just inside for 1-2 s, then withdraw at once"},
-    "E": {"name": "slow entry", "kind": "entry", "should": True,
+    "D": {"name": "peek at the door", "kind": "peek", "should": False, "should_duck": True,
+          "tell": "stop IN THE DOORWAY for ~3 s as if looking in - do NOT step into the room - then leave"},
+    "E": {"name": "slow entry", "kind": "entry", "should": True, "should_duck": None,
           "tell": "walk in SLOWLY, stay inside ~{stay:.0f} s, then leave", "sim_speed": 500.0},
-    "F": {"name": "fast entry", "kind": "entry", "should": True,
+    "F": {"name": "fast entry", "kind": "entry", "should": True, "should_duck": None,
           "tell": "walk in FAST or jog in, stay inside ~{stay:.0f} s, then leave", "sim_speed": 2300.0},
 }
 DEFAULT_REPS = {"A": 30, "B": 20, "D": 18, "F": 25}
@@ -78,7 +85,9 @@ CSV_COLUMNS = [
     "entry_to_switch_ms", "switch_to_takeover_ms",
     "reverted", "reversion_latency_s", "reversion_latency_source", "exit_detection_lag_s",
     "output_latency_ms", "detect_depth_mm", "mover_speed_mms", "max_in_zone",
-    "min_outside_dist_mm", "n_radar_frames", "zone_valid", "zone_mode", "notes",
+    "min_outside_dist_mm", "n_radar_frames", "zone_valid", "zone_mode",
+    "door_zone", "door_detected_ts", "duck_ts", "unduck_ts", "door_to_duck_ms", "duck_hold_s",
+    "should_duck", "ducked", "duck_correct", "door_outcome", "notes",
 ]
 VIDEO_COLUMNS = ["trial_id", "script_id", "classification",
                  "reply_onset_s", "crossing_in_s", "audible_stop_s", "crossing_out_s", "notes"]
@@ -120,6 +129,12 @@ def attach_recorder(bus, log):
                   lambda e: log.add(e.timestamp.timestamp(), "speech_start"))
     bus.subscribe(SpeechPlaybackEnded,
                   lambda e: log.add(e.timestamp.timestamp(), "speech_end", completed=e.completed))
+    bus.subscribe(PersonAtDoor,
+                  lambda e: log.add(e.timestamp.timestamp(), "door", id=e.person_id, x=e.x_mm, y=e.y_mm))
+    bus.subscribe(DoorCleared,
+                  lambda e: log.add(e.timestamp.timestamp(), "door_cleared", id=e.person_id, outcome=e.outcome))
+    bus.subscribe(VoiceDucked,
+                  lambda e: log.add(e.timestamp.timestamp(), "duck", active=e.active, reason=e.reason))
     bus.subscribe(RadarTargetsUpdated,
                   lambda e: log.add(e.timestamp.timestamp(), "frame", targets=[
                       {"id": t.get("id"), "x": t.get("x_mm"), "y": t.get("y_mm"),
@@ -178,14 +193,16 @@ def countdown(seconds, label):
 
 
 def wait_clear(guard, conversation, hold_s=CLEAR_HOLD_S, timeout_s=180.0):
-    """No visitor inside and speech mode, for hold_s without interruption -
-    so walking out to the start mark cannot leak a switch into the trial."""
+    """No visitor inside, nobody at the door, normal volume and speech mode,
+    for hold_s without interruption - so walking out to the start mark cannot
+    leak a switch or a lowered voice into the trial."""
     deadline = time.monotonic() + timeout_s
     since = None
     shown = None
     while time.monotonic() < deadline:
         visitors, mode = guard.visitors, conversation.modality
-        if visitors == 0 and mode == "voice":
+        at_door, ducked = guard.people_at_door, guard.ducked
+        if visitors == 0 and mode == "voice" and not at_door and not ducked:
             since = since or time.monotonic()
             if time.monotonic() - since >= hold_s:
                 if shown:
@@ -194,7 +211,8 @@ def wait_clear(guard, conversation, hold_s=CLEAR_HOLD_S, timeout_s=180.0):
                 return True
         else:
             since = None
-        line = f"  waiting until nobody counts as a visitor (now {visitors}, {mode})"
+        line = (f"  waiting until nobody counts as a visitor (now {visitors}, {mode}"
+                f"{', someone at the door' if at_door else ''}{', voice lowered' if ducked else ''})")
         if line != shown:
             sys.stdout.write("\r" + line.ljust(71))
             sys.stdout.flush()
@@ -254,8 +272,19 @@ def analyse(log, zone, t_arm):
     take = first(events, "takeover", switch["t"] if switch else t_arm, lambda e: e["effective"])
     depth, speed, est_s = mover_at_entry(frames, enter, zone) if enter else (None, None, None)
     est_latency = round(switch["t"] - (enter["t"] - est_s), 3) if switch and enter and est_s is not None else ""
+    door = first(events, "door", t_arm)
+    duck = first(events, "duck", t_arm, lambda e: e["active"])
+    unduck = first(events, "duck", duck["t"], lambda e: not e["active"]) if duck else None
+    cleared = first(events, "door_cleared", door["t"], lambda e: e["id"] == door["id"]) if door else None
     return {
-        "enter": enter, "switch": switch,
+        "enter": enter, "switch": switch, "duck": duck,
+        "door_detected_ts": iso(door["t"]) if door else "",
+        "duck_ts": iso(duck["t"]) if duck else "",
+        "unduck_ts": iso(unduck["t"]) if unduck else "",
+        "door_to_duck_ms": "" if not (door and duck) else round((duck["t"] - door["t"]) * 1000, 1),
+        "duck_hold_s": "" if not (duck and unduck) else round(unduck["t"] - duck["t"], 3),
+        "ducked": "Y" if duck else "N",
+        "door_outcome": cleared["outcome"] if cleared else ("still at door" if door else ""),
         "entry_detected_ts": iso(enter["t"]) if enter else "",
         "entry_via": enter["via"] if enter else "",
         "modality_switch_ts": iso(switch["t"]) if switch else "",
@@ -318,6 +347,10 @@ def run_trial(ctx, script_id):
         if switch is not None:
             print("  SWITCHED - step back out if you have not already.")
             rev = reversion(log, switch["t"], REVERSION_TIMEOUT_S)
+        else:
+            duck = first(log.snapshot(), "duck", t_arm, lambda e: e["active"])
+            if duck is not None:
+                wait_for(log, "duck", duck["t"], lambda e: not e["active"], REVERSION_TIMEOUT_S)
     else:
         if sim:
             sim.passby(sc.get("sim_dist", 150.0))
@@ -331,10 +364,16 @@ def run_trial(ctx, script_id):
     a = analyse(log, zone, t_arm)
     switched = a["switch"] is not None
     should = sc["should"]
+    should_duck = sc["should_duck"]
     if sc["kind"] == "peek":
-        crossed = ask("  Did you actually cross the tape? [Y/n] > ").strip().lower()
-        should = crossed not in ("n", "no")
-    row = {"script_id": script_id, "speech_start_ts": iso(start["t"])}
+        stepped = ask("  Did you step past the doorway into the room after all? [y/N] > ").strip().lower()
+        if stepped in ("y", "yes"):
+            should, should_duck = True, None
+    row = {"script_id": script_id, "speech_start_ts": iso(start["t"]),
+           "door_zone": "Y" if ctx["door_zone"].get("valid") else "N",
+           "should_duck": "" if should_duck is None else ("Y" if should_duck else "N")}
+    if should_duck is not None:
+        row["duck_correct"] = "Y" if (a["duck"] is not None) == should_duck else "N"
     if sc["kind"] == "pass":
         frames = [e for e in log.snapshot() if e["kind"] == "frame" and e["t"] >= t_arm]
         outside = [zone_signed_distance(t["x"], t["y"], zone) for f in frames for t in f["targets"]]
@@ -342,7 +381,7 @@ def run_trial(ctx, script_id):
         row["min_outside_dist_mm"] = round(min(outside), 1) if outside else ""
 
     cls = ("TP" if switched else "FN") if should else ("FP" if switched else "TN")
-    row.update({k: v for k, v in a.items() if k not in ("enter", "switch")})
+    row.update({k: v for k, v in a.items() if k not in ("enter", "switch", "duck")})
     row.update(rev)
     row.update({"ground_truth_should_switch": "Y" if should else "N",
                 "switched": "Y" if switched else "N", "classification": cls})
@@ -363,8 +402,17 @@ def run_trial(ctx, script_id):
         print("  - MISSED: you entered but the assistant kept talking.")
     elif cls == "FP":
         print("  - SPURIOUS: it switched although you did not enter.")
+    elif sc["kind"] == "peek":
+        if a["duck"] is not None:
+            print(f"  - correct: no switch, voice quieter {row['door_to_duck_ms']} ms after you were seen "
+                  f"at the door, normal again {row['duck_hold_s'] or '?'} s later.")
+        elif row.get("door_detected_ts"):
+            print("  - no switch, but the voice did NOT get quieter although you were seen at the door.")
+        else:
+            print("  - no switch, but the radar never saw you at the door - is the door zone over the doorway?")
     else:
-        print(f"  - correctly stayed in voice. Closest approach: {row.get('min_outside_dist_mm') or '?'} mm")
+        print(f"  - correctly stayed in voice. Closest approach: {row.get('min_outside_dist_mm') or '?'} mm"
+              + ("   (but the voice got quieter)" if a["duck"] is not None else ""))
     return row, {"t_arm": t_arm, "events": log.snapshot()}
 
 
@@ -507,7 +555,16 @@ def next_trial_id(rows):
 
 
 def append(path, row):
+    """A sheet written before the door-zone columns existed is rewritten with
+    the current columns first; appending blindly would shift every value
+    after the old last column."""
     new = not os.path.exists(path)
+    if not new:
+        with open(path, newline="") as f:
+            header = next(csv.reader(f), [])
+        if header != CSV_COLUMNS:
+            write_rows(path, load_rows(path) + [row])
+            return
     with open(path, "a", newline="") as f:
         w = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         if new:
@@ -636,12 +693,28 @@ def print_report(path):
         else:
             print("  no reversion data")
 
+        judged = [r for r in rs if r.get("should_duck") in ("Y", "N")]
+        if judged or any(r.get("ducked") == "Y" for r in rs):
+            print("\n  quieter voice (door zone)")
+            peeks = [r for r in judged if r["should_duck"] == "Y"]
+            passes = [r for r in judged if r["should_duck"] == "N"]
+            rate_line("peeks: quieter", sum(1 for r in peeks if r.get("ducked") == "Y"), len(peeks))
+            rate_line("peeks: switched", sum(1 for r in peeks if r.get("switched") == "Y"), len(peeks))
+            rate_line("passers-by: quieter", sum(1 for r in passes if r.get("ducked") == "Y"), len(passes))
+            dist_line("seen at door -> quieter (software)",
+                      [v / 1000 for v in nums(rs, "door_to_duck_ms")], "s")
+            dist_line("quieter -> normal again (peeks)", nums(peeks, "duck_hold_s"), "s")
+            door_first = sum(1 for r in tp if r.get("entry_via") == "door")
+            if tp:
+                print(f"  {'entries first seen at the door':38} {door_first}/{len(tp)}")
+
         print("\n  per script")
         for sid in sorted({r["script_id"] for r in rs}):
             s_rows = [r for r in rs if r["script_id"] == sid]
             c = {k: sum(1 for r in s_rows if r.get("classification") == k) for k in ("TP", "FN", "FP", "TN")}
+            ducks = sum(1 for r in s_rows if r.get("ducked") == "Y")
             print(f"    {sid} {SCRIPTS[sid]['name']:20} n={len(s_rows):<3} "
-                  f"TP {c['TP']:>2}  FN {c['FN']:>2}  FP {c['FP']:>2}  TN {c['TN']:>2}")
+                  f"TP {c['TP']:>2}  FN {c['FN']:>2}  FP {c['FP']:>2}  TN {c['TN']:>2}  quieter {ducks:>2}")
     print()
 
 
@@ -662,6 +735,7 @@ class SimScene:
 
     ZONE = {"valid": True, "min_x_mm": -800, "max_x_mm": 800,
             "min_y_mm": 500, "max_y_mm": 2500, "mode": 0}
+    DOOR = {"min_x_mm": -1300, "max_x_mm": -800, "min_y_mm": 1200, "max_y_mm": 1800}
 
     def __init__(self, radar):
         self.radar = radar
@@ -678,7 +752,7 @@ class SimScene:
 
     def peek(self):
         with self._lock:
-            self.pos, self.vel, self.goal = [-1200.0, 1500.0], (1100.0, 0.0), ("x", -600.0)
+            self.pos, self.vel, self.goal = [-1400.0, 1500.0], (1100.0, 0.0), ("x", -1000.0)
             self.dwell_until = "pending"
 
     def leave(self):
@@ -687,7 +761,7 @@ class SimScene:
 
     def passby(self, dist_mm):
         with self._lock:
-            self.pos, self.vel, self.goal = [-800.0 - dist_mm, 0.0], (0.0, 1200.0), ("y", 3200.0)
+            self.pos, self.vel, self.goal = [-1300.0 - dist_mm, 0.0], (0.0, 1200.0), ("y", 3200.0)
             self.dwell_until = None
 
     def _run(self):
@@ -707,7 +781,7 @@ class SimScene:
                         self.pos[i] = limit
                         self.vel = (0.0, 0.0)
                         if self.dwell_until == "pending":
-                            self.dwell_until = time.monotonic() + 1.5
+                            self.dwell_until = time.monotonic() + 3.0
                         if limit in (-2600.0, 3200.0):
                             self.pos = None
                     if self.pos is not None:
@@ -743,6 +817,9 @@ class SimTTS:
             return False
         self._takeover.set()
         return True
+
+    def set_duck(self, active):
+        pass
 
 
 def quiet_console():
@@ -801,7 +878,9 @@ def main():
     if args.simulate:
         radar = RadarLD2450Adapter(bus=bus, serial_port="/dev/null",
                                    entry_margin_mm=config.RADAR_ENTRY_MARGIN_MM,
-                                   exit_margin_mm=config.RADAR_EXIT_MARGIN_MM)
+                                   exit_margin_mm=config.RADAR_EXIT_MARGIN_MM,
+                                   door_near_mm=config.RADAR_DOOR_NEAR_MM)
+        radar.set_door_zone(SimScene.DOOR)
         tts = SimTTS(bus)
     else:
         if config.RADAR_PROVIDER != "ld2450":
@@ -818,10 +897,13 @@ def main():
             tts.voice_id = voice["voice_id"]
         if hasattr(tts, "set_volume"):
             tts.set_volume(settings.get("volume", 1.0))
+        if hasattr(tts, "duck_gain"):
+            tts.duck_gain = config.TTS_DUCK_GAIN
         radar = build_radar(config, bus)
 
     original_takeover = wrap_takeover(tts, log)
-    guard = register_handlers(bus, conversation, tts, departure_grace_s=config.PRIVACY_DEPARTURE_GRACE_S)
+    guard = register_handlers(bus, conversation, tts, departure_grace_s=config.PRIVACY_DEPARTURE_GRACE_S,
+                              door_clear_hold_s=config.PRIVACY_DOOR_CLEAR_HOLD_S)
     if args.simulate:
         sim = SimScene(radar)
     else:
@@ -842,8 +924,10 @@ def main():
 
     seed = args.seed if args.seed is not None else random.randrange(1_000_000)
     rng = random.Random(seed)
+    door_zone = radar.get_door_zone()
     ctx = {"log": log, "radar": radar, "conversation": conversation, "tts": tts, "zone": zone, "bus": bus,
-           "sim": sim, "guard": guard, "stop_speech": original_takeover, "stay_s": args.stay, "walk_s": args.walk}
+           "sim": sim, "guard": guard, "stop_speech": original_takeover, "stay_s": args.stay, "walk_s": args.walk,
+           "door_zone": door_zone}
     counts = done_counts(load_rows(csv_path), args.configuration)
     entries_planned = sum(n for k, n in reps.items() if SCRIPTS[k]["should"])
     _, best_upper = clopper_pearson(0, entries_planned)
@@ -857,6 +941,12 @@ def main():
     print(f"Zone       : x {zone['min_x_mm']}..{zone['max_x_mm']} mm, y {zone['min_y_mm']}..{zone['max_y_mm']} mm")
     print(f"Edge band  : in at {config.RADAR_ENTRY_MARGIN_MM:.0f} mm inside, out at "
           f"{config.RADAR_EXIT_MARGIN_MM:.0f} mm outside the zone edge")
+    if door_zone.get("valid"):
+        print(f"Door zone  : x {door_zone['min_x_mm']}..{door_zone['max_x_mm']} mm, "
+              f"y {door_zone['min_y_mm']}..{door_zone['max_y_mm']} mm - entries decided there, "
+              f"a peek makes the voice quieter")
+    else:
+        print("Door zone  : none - entries are decided at the room-zone edge, peeks cannot be told apart")
 
     kept = 0
     try:

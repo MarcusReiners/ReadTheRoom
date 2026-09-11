@@ -21,6 +21,7 @@ from domain.events import (
     ListeningStateChanged,
     ModalitySwitched,
     RadarTargetsUpdated,
+    VoiceDucked,
     SpeechTranscribed,
 )
 from service_layer.bus import EventBus
@@ -143,6 +144,7 @@ class ChatBridgeAdapter:
                        lambda e: self._broadcast({"type": "listening", "value": e.listening}))
         bus.subscribe(ModalitySwitched,
                        lambda e: self._broadcast({"type": "modality", "value": e.to_modality, "reason": e.reason}))
+        bus.subscribe(VoiceDucked, lambda e: self._broadcast({"type": "voice_ducked", "value": e.active}))
         self._last_radar_broadcast = 0.0
         bus.subscribe(RadarTargetsUpdated, self._on_radar_targets)
 
@@ -186,6 +188,34 @@ class ChatBridgeAdapter:
         @self.app.post("/api/radar/zone/reset")
         def reset_zone():
             self.radar.send_command({"cmd": "reset_zone"})
+            return JSONResponse({"valid": False})
+
+        # The door zone lives only on the Pi (the sensor keeps just the room
+        # zone): entries and exits are decided there, and someone standing in
+        # it during a conversation makes the voice quieter.
+        @self.app.get("/api/radar/door_zone")
+        def get_door_zone():
+            getter = getattr(self.radar, "get_door_zone", None)
+            return JSONResponse(getter() if getter else {"valid": False})
+
+        @self.app.post("/api/radar/door_zone")
+        async def set_door_zone(request: Request):
+            setter = getattr(self.radar, "set_door_zone", None)
+            if setter is None:
+                return JSONResponse({"error": "this radar has no door zone support"}, status_code=400)
+            zone = setter(await request.json())
+            if not zone.get("valid"):
+                return JSONResponse({"error": "the door zone must be at least 10 cm on each side"},
+                                    status_code=400)
+            self._save_settings()
+            return JSONResponse(zone)
+
+        @self.app.delete("/api/radar/door_zone")
+        def delete_door_zone():
+            setter = getattr(self.radar, "set_door_zone", None)
+            if setter is not None:
+                setter(None)
+                self._save_settings()
             return JSONResponse({"valid": False})
 
         # Where the zone rectangle is enforced: 0 = in the XIAO's software
@@ -494,6 +524,7 @@ class ChatBridgeAdapter:
         source of truth (llm.model is what the next turn actually uses), so
         there's nothing here that can drift out of sync with them."""
         servo = self._get_servo_range()
+        door_getter = getattr(self.radar, "get_door_zone", None)
         save_app_settings(self.app_settings_path, {
             "system_prompt": self._get_system_prompt(),
             "llm_model": self._get_llm_model(),
@@ -504,6 +535,7 @@ class ChatBridgeAdapter:
             "servo_max_angle": servo["max"],
             "voices": self.voices,
             "active_voice_id": self.active_voice_id,
+            "door_zone": door_getter() if door_getter else None,
         })
 
     def _broadcast_voices(self) -> None:
