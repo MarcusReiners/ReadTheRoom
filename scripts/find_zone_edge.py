@@ -127,7 +127,10 @@ def main():
         while True:
             time.sleep(0.5)
     except KeyboardInterrupt:
-        print("\nBye!")
+        try:
+            print("\nBye!")
+        except BrokenPipeError:
+            pass
 
 
 if __name__ == "__main__":
