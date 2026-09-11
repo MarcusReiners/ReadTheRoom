@@ -41,6 +41,7 @@ ENTRY_WINDOW_S = 20.0
 PEEK_WINDOW_S = 15.0
 PASS_WINDOW_S = 15.0
 REVERSION_TIMEOUT_S = 60.0
+STUCK_PROMPT_S = 8.0
 SPEED_WINDOW_S = 0.6
 
 # should: the answer must move to the chat. should_duck: the voice must get
@@ -199,9 +200,20 @@ def wait_clear(guard, conversation, hold_s=CLEAR_HOLD_S, timeout_s=180.0):
     deadline = time.monotonic() + timeout_s
     since = None
     shown = None
+    stuck_since = time.monotonic()
     while time.monotonic() < deadline:
         visitors, mode = guard.visitors, conversation.modality
         at_door, ducked = guard.people_at_door, guard.ducked
+        if visitors > 0 and time.monotonic() - stuck_since >= STUCK_PROMPT_S:
+            sys.stdout.write("\r" + " " * 72 + "\r")
+            ask(f"  Still {visitors} visitor(s) counted - an exit was missed (it stays recorded in the last "
+                "trial).\n  If you are outside and the room is empty, press ENTER to reset > ")
+            guard.reset_room()
+            stuck_since = time.monotonic()
+            shown = None
+            continue
+        if visitors == 0:
+            stuck_since = time.monotonic()
         if visitors == 0 and mode == "voice" and not at_door and not ducked:
             since = since or time.monotonic()
             if time.monotonic() - since >= hold_s:
@@ -787,7 +799,9 @@ class SimScene:
                     if self.pos is not None:
                         x = self.pos[0] + random.gauss(0, 40)
                         y = self.pos[1] + random.gauss(0, 40)
-                        targets.append({"id": 2, "x_mm": x, "y_mm": y, "speed_mms": int(math.hypot(*self.vel)),
+                        r = math.hypot(*self.pos) or 1.0
+                        radial = (self.pos[0] * self.vel[0] + self.pos[1] * self.vel[1]) / r
+                        targets.append({"id": 2, "x_mm": x, "y_mm": y, "speed_mms": int(radial),
                                         "in_zone": zone_signed_distance(x, y, self.ZONE) <= 0})
             self.radar._handle_status({"targets": targets, "zone": self.ZONE})
             time.sleep(dt)

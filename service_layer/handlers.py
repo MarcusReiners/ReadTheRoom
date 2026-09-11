@@ -78,6 +78,21 @@ class PrivacyGuard:
     def people_at_door(self) -> int:
         return len(self._at_door)
 
+    def reset_room(self) -> None:
+        """Forgets visitors and anyone at the door, back to speech at normal
+        volume. For the study harness only, once the tester confirms the room
+        is empty after an exit the radar missed - otherwise one missed exit
+        keeps every later trial waiting for a visitor who already left."""
+        with self._lock:
+            self.visitors = 0
+            self._at_door.clear()
+            self._cancel_unduck()
+            back = self.conversation.modality == "web"
+        self._set_duck(False, "reset by the tester")
+        if back:
+            self.conversation.switch_modality("voice")
+            self.bus.publish(ModalitySwitched(to_modality="voice", reason="reset"))
+
     @property
     def ducked(self) -> bool:
         return self._ducked
