@@ -48,6 +48,43 @@ def quiet_console():
             h.setLevel(logging.WARNING)
 
 
+def guided_steps():
+    steps = []
+    for i in range(1, 6):
+        steps.append((f"walk-in {i}", "Walk in normally through the door to your desk and stop there."))
+        steps.append((f"walk-out {i}", "Walk back out through the door and wait outside, out of sight."))
+    for i in range(1, 3):
+        steps.append((f"walk-by {i}", "Walk past the open door without coming in, then wait out of sight."))
+    for i in range(1, 3):
+        steps.append((f"peek {i}", "Stop in the doorway for about 3 s as if looking in, then leave."))
+    return steps
+
+
+def run_guided(state, records, seg_events):
+    input("\nGo outside the room, out of the radar's view. Press ENTER when you are there...")
+    steps = guided_steps()
+    for n, (label, text) in enumerate(steps, 1):
+        input(f"\n[{n}/{len(steps)}] {label}: {text}\n  Press ENTER, then do it...")
+        state["segment"] = label
+    input("\nPress ENTER once you have finished the last step...")
+    state["segment"] = None
+
+    print("\nSummary (edge distance: + = outside the zone, - = inside)")
+    for label, _ in steps:
+        rs = [r for r in records if r[0] == label]
+        ev = ", ".join(e for s, e in seg_events if s == label) or "-"
+        if not rs:
+            print(f"  {label:10}  radar saw nothing                                  events: {ev}")
+            continue
+        new = [r for r in rs if r[6]] or rs
+        pick = rs[-1] if label.startswith("walk-out") else new[0]
+        what = "last seen " if label.startswith("walk-out") else "first seen"
+        deepest = min(r[5] for r in rs)
+        visible = rs[-1][1] - rs[0][1]
+        print(f"  {label:10}  {what} x={pick[3]:6.0f} y={pick[4]:6.0f} ({pick[5]:+6.0f} mm)  "
+              f"deepest {deepest:+6.0f} mm  seen {visible:4.1f} s  events: {ev}")
+
+
 def main():
     logging_setup.configure_logging(config)
     quiet_console()
@@ -64,14 +101,22 @@ def main():
     radar = build_radar(config, bus)
     state = {"frames": 0}
 
+    guided = "--guided" in sys.argv
+    records, seg_events = [], []
+    state["segment"] = None
+
     def on_enter(e):
         d = zone_signed_distance(e.x_mm, e.y_mm, radar.get_zone())
         play(high)
+        if state["segment"]:
+            seg_events.append((state["segment"], f"IN({e.via})"))
         print(f"  IN   ({e.via:8})  x={e.x_mm:6.0f}  y={e.y_mm:6.0f} mm   "
               f"{-d if d is not None else float('nan'):5.0f} mm inside the drawn edge")
 
     def on_leave(e):
         play(low)
+        if state["segment"]:
+            seg_events.append((state["segment"], "OUT"))
         print("  OUT")
 
     trace = "--trace" in sys.argv
@@ -80,7 +125,7 @@ def main():
 
     def on_frame(e):
         state["frames"] += 1
-        if not trace or not state.get("ready"):
+        if not state.get("ready") or not (trace or guided):
             return
         now = time.monotonic()
         zone = radar.get_zone()
@@ -91,6 +136,10 @@ def main():
             slot = t.get("id")
             first = now - last_seen.get(slot, -99.0) > 1.0
             last_seen[slot] = now
+            if guided and state["segment"]:
+                records.append((state["segment"], now, slot, t.get("x_mm"), t.get("y_mm"), d, first))
+            if not trace:
+                continue
             if not first and now - last_print.get(slot, -99.0) < 0.25:
                 continue
             last_print[slot] = now
@@ -120,9 +169,12 @@ def main():
     print(f"\nZone x {zone['min_x_mm']}..{zone['max_x_mm']} mm, y {zone['min_y_mm']}..{zone['max_y_mm']} mm")
     print(f"An entry fires {config.RADAR_ENTRY_MARGIN_MM:.0f} mm inside the drawn edge, "
           f"an exit {config.RADAR_EXIT_MARGIN_MM:.0f} mm outside it.")
+    state["ready"] = True
+    if guided:
+        run_guided(state, records, seg_events)
+        return
     print("\nWalk slowly through the doorway: HIGH beep = entry, LOW beep = exit.")
     print("Tape the floor where the high beep sounds. Repeat a few times. Ctrl+C to quit.\n")
-    state["ready"] = True
     try:
         while True:
             time.sleep(0.5)
