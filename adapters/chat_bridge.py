@@ -143,8 +143,8 @@ class ChatBridgeAdapter:
                        lambda e: self._broadcast({"type": "listening", "value": e.listening}))
         bus.subscribe(ModalitySwitched,
                        lambda e: self._broadcast({"type": "modality", "value": e.to_modality, "reason": e.reason}))
-        bus.subscribe(RadarTargetsUpdated,
-                       lambda e: self._broadcast({"type": "radar_targets", "targets": e.targets}))
+        self._last_radar_broadcast = 0.0
+        bus.subscribe(RadarTargetsUpdated, self._on_radar_targets)
 
     def _register_routes(self) -> None:
         index_html = (_STATIC_DIR / "index.html").read_text()
@@ -524,6 +524,17 @@ class ChatBridgeAdapter:
             on_progress=lambda st: self._broadcast({"type": "doa_calibration", "status": st}),
         )
         return self._doa_calibration
+
+    def _on_radar_targets(self, event) -> None:
+        """At most 10 radar updates a second reach the browser. Each one is a
+        fire-and-forget send per client, so at sensor rate a slow phone or
+        laptop queued them up and delayed every other message behind them -
+        including the one that shows the switch to text."""
+        now = time.monotonic()
+        if now - self._last_radar_broadcast < 0.1:
+            return
+        self._last_radar_broadcast = now
+        self._broadcast({"type": "radar_targets", "targets": event.targets})
 
     def _broadcast(self, message: dict) -> None:
         if self._loop is None:
