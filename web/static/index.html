@@ -26,6 +26,7 @@
     --radar-line: #d4d4d8;
     --radar-fov: #f6f6f7;
     --radar-dot: #18181b;
+    --door: #b45309;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -42,6 +43,7 @@
       --radar-line: #3f3f46;
       --radar-fov: #1c1c1f;
       --radar-dot: #f4f4f5;
+      --door: #f59e0b;
     }
   }
   :root[data-theme="dark"] {
@@ -58,6 +60,7 @@
     --radar-line: #3f3f46;
     --radar-fov: #1c1c1f;
     --radar-dot: #f4f4f5;
+    --door: #f59e0b;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -630,6 +633,9 @@
   .radar-handle { fill: var(--panel); stroke: var(--accent); stroke-width: 2; cursor: grab; }
   .radar-handle:active { cursor: grabbing; }
   .radar-zone-rect { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: var(--accent); stroke-width: 1.5; cursor: move; }
+  .radar-door-rect { fill: color-mix(in srgb, var(--door) 16%, transparent); stroke: var(--door); stroke-width: 1.5; stroke-dasharray: 5 3; cursor: move; }
+  .radar-handle.door { stroke: var(--door); }
+  .zone-mode-row .servo-save-btn { align-self: flex-start; }
   .target-dot { fill: var(--radar-dot); transition: cx 0.25s linear, cy 0.25s linear; }
   .target-dot.out-of-zone { fill: var(--muted); opacity: 0.55; }
 </style>
@@ -723,6 +729,11 @@
               <option value="2">Sensor · exclude — ignore inside the zone</option>
             </select>
             <p id="zoneModeHint" class="zone-mode-hint"></p>
+          </div>
+          <div class="zone-mode-row">
+            <label class="field-label" for="doorZoneBtn">Door zone</label>
+            <button id="doorZoneBtn" class="servo-save-btn" type="button">Add door zone</button>
+            <p id="doorZoneHint" class="zone-mode-hint"></p>
           </div>
         </div>
 
@@ -944,8 +955,16 @@
     currentAssistantBubble = null;
   }
 
+  let currentModality = "voice";
+  let voiceDucked = false;
   function setModalityLabel(modality) {
-    modalityLabelEl.textContent = modality === "voice" ? "Speaking" : "Chat only – person in room";
+    currentModality = modality;
+    modalityLabelEl.textContent = modality !== "voice" ? "Chat only – person in room"
+      : voiceDucked ? "Speaking quietly – someone at the door" : "Speaking";
+  }
+  function setVoiceDucked(active) {
+    voiceDucked = active;
+    setModalityLabel(currentModality);
   }
 
   function setVoiceToggle(enabled) {
@@ -1145,6 +1164,9 @@
         break;
       case "modality":
         setModalityLabel(data.value);
+        break;
+      case "voice_ducked":
+        setVoiceDucked(!!data.value);
         break;
       case "voice_enabled":
         setVoiceToggle(data.value);
@@ -1373,45 +1395,61 @@
     }
   }
 
-  // ---- zone rectangle (draggable/resizable) ----
+  // ---- zone rectangles (draggable/resizable): the room zone and the door zone ----
   const DEFAULT_BOUNDS = { min_x_mm: -1000, max_x_mm: 1000, min_y_mm: 500, max_y_mm: 3000 };
   let savedBounds = null;   // last known bounds from the sensor (null = none saved yet)
-  let bounds = null;        // currently displayed/edited bounds
   let zoneValid = false;
   let dragging = null;
 
-  const rectEl = el("rect", { class: "radar-zone-rect" });
-  zoneG.appendChild(rectEl);
   const HANDLES = [
     { id: "tl", x: "min", y: "max" },
     { id: "tr", x: "max", y: "max" },
     { id: "br", x: "max", y: "min" },
     { id: "bl", x: "min", y: "min" },
   ];
-  const handleElements = {};
-  for (const h of HANDLES) {
-    const c = el("circle", { r: 7, class: "radar-handle" });
-    c.addEventListener("pointerdown", (e) => startHandleDrag(e, h));
-    zoneG.appendChild(c);
-    handleElements[h.id] = c;
+
+  function createZoneEditor(rectClass, handleClass, onSave) {
+    const editor = { bounds: null, visible: true, onSave };
+    const group = el("g", {});
+    zoneG.appendChild(group);
+    const rect = el("rect", { class: rectClass });
+    group.appendChild(rect);
+    const handles = {};
+    for (const h of HANDLES) {
+      const c = el("circle", { r: 7, class: handleClass });
+      c.addEventListener("pointerdown", (e) => startHandleDrag(e, editor, h));
+      group.appendChild(c);
+      handles[h.id] = c;
+    }
+    rect.addEventListener("pointerdown", (e) => startMoveDrag(e, editor));
+    editor.render = () => {
+      group.style.display = editor.visible && editor.bounds ? "" : "none";
+      const b = editor.bounds;
+      if (!b) return;
+      const p1 = mmToPoint(b.min_x_mm, b.max_y_mm);
+      const p2 = mmToPoint(b.max_x_mm, b.min_y_mm);
+      rect.setAttribute("x", Math.min(p1.x, p2.x));
+      rect.setAttribute("y", Math.min(p1.y, p2.y));
+      rect.setAttribute("width", Math.abs(p2.x - p1.x));
+      rect.setAttribute("height", Math.abs(p2.y - p1.y));
+      for (const h of HANDLES) {
+        const p = mmToPoint(b[h.x + "_x_mm"], b[h.y + "_y_mm"]);
+        handles[h.id].setAttribute("cx", p.x);
+        handles[h.id].setAttribute("cy", p.y);
+      }
+    };
+    return editor;
   }
-  rectEl.addEventListener("pointerdown", startMoveDrag);
+
+  // Door zone second, so it is drawn on top and its handles win where the
+  // two rectangles meet.
+  const roomZone = createZoneEditor("radar-zone-rect", "radar-handle", () => saveZone());
+  const doorZone = createZoneEditor("radar-door-rect", "radar-handle door", () => saveDoorZone());
+  doorZone.visible = false;
 
   function renderZone() {
-    if (!bounds) return;
-    const p1 = mmToPoint(bounds.min_x_mm, bounds.max_y_mm);
-    const p2 = mmToPoint(bounds.max_x_mm, bounds.min_y_mm);
-    const x = Math.min(p1.x, p2.x), y = Math.min(p1.y, p2.y);
-    rectEl.setAttribute("x", x);
-    rectEl.setAttribute("y", y);
-    rectEl.setAttribute("width", Math.abs(p2.x - p1.x));
-    rectEl.setAttribute("height", Math.abs(p2.y - p1.y));
-
-    for (const h of HANDLES) {
-      const p = mmToPoint(bounds[h.x + "_x_mm"], bounds[h.y + "_y_mm"]);
-      handleElements[h.id].setAttribute("cx", p.x);
-      handleElements[h.id].setAttribute("cy", p.y);
-    }
+    roomZone.render();
+    doorZone.render();
   }
 
   function svgPointFromEvent(evt) {
@@ -1422,18 +1460,18 @@
     };
   }
 
-  function startHandleDrag(evt, handle) {
+  function startHandleDrag(evt, editor, handle) {
     evt.preventDefault();
     evt.target.setPointerCapture(evt.pointerId);
-    dragging = { type: "handle", handle, pointerId: evt.pointerId, moved: false };
+    dragging = { type: "handle", editor, handle, pointerId: evt.pointerId, moved: false };
   }
-  function startMoveDrag(evt) {
+  function startMoveDrag(evt, editor) {
     evt.preventDefault();
     evt.target.setPointerCapture(evt.pointerId);
     const p = svgPointFromEvent(evt);
     dragging = {
-      type: "move", pointerId: evt.pointerId, moved: false,
-      start: pointToMm(p.x, p.y), startBounds: { ...bounds },
+      type: "move", editor, pointerId: evt.pointerId, moved: false,
+      start: pointToMm(p.x, p.y), startBounds: { ...editor.bounds },
     };
   }
 
@@ -1441,6 +1479,7 @@
     if (!dragging || evt.pointerId !== dragging.pointerId) return;
     const p = svgPointFromEvent(evt);
     const mm = pointToMm(p.x, p.y);
+    const bounds = dragging.editor.bounds;
 
     if (dragging.type === "handle") {
       const { x: xk, y: yk } = dragging.handle;
@@ -1465,9 +1504,9 @@
     renderZone();
   });
   radarSvg.addEventListener("pointerup", () => {
-    const wasDragging = dragging && dragging.moved;
+    const done = dragging && dragging.moved ? dragging.editor : null;
     dragging = null;
-    if (wasDragging) saveZone();
+    if (done) done.onSave();
   });
   radarSvg.addEventListener("pointercancel", () => { dragging = null; });
 
@@ -1488,7 +1527,7 @@
     if (!result.ok) {
       radarStatusEl.textContent = "Radar unreachable: " + result.error;
       radarStatusEl.classList.add("error");
-      bounds = { ...DEFAULT_BOUNDS };
+      roomZone.bounds = { ...DEFAULT_BOUNDS };
       zoneValid = false;
       renderZone();
       return;
@@ -1506,7 +1545,7 @@
       zoneValid = false;
       radarStatusEl.textContent = "No zone saved – drag the rectangle to set one.";
     }
-    bounds = { ...(savedBounds || DEFAULT_BOUNDS) };
+    roomZone.bounds = { ...(savedBounds || DEFAULT_BOUNDS) };
     setZoneMode(result.data.mode);
     renderZone();
   }
@@ -1552,20 +1591,92 @@
     const result = await radarFetch("/api/radar/zone", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(bounds),
+      body: JSON.stringify(roomZone.bounds),
     });
     if (!result.ok) {
       radarStatusEl.textContent = "Save failed: " + result.error;
       radarStatusEl.classList.add("error");
       return;
     }
-    savedBounds = { ...bounds };
+    savedBounds = { ...roomZone.bounds };
     zoneValid = true;
     radarStatusEl.classList.remove("error");
     radarStatusEl.textContent = "Zone saved.";
   }
 
+  // ---- door zone: entries and exits are decided only there ----
+  const doorZoneBtn = document.getElementById("doorZoneBtn");
+  const doorZoneHintEl = document.getElementById("doorZoneHint");
+  const DOOR_HINT = "Drag it over the doorway. Entries and exits are only decided there, "
+    + "and the voice gets quieter while someone stands in it.";
+  const NO_DOOR_HINT = "Without a door zone, entries are decided at the edge of the room zone.";
+  const DOOR_DEFAULT_SIZE_MM = 1200;
+
+  function setDoorHint(text, isError) {
+    doorZoneHintEl.textContent = text;
+    doorZoneHintEl.classList.toggle("error", !!isError);
+  }
+
+  function showDoorZone(visible) {
+    doorZone.visible = visible;
+    doorZoneBtn.textContent = visible ? "Remove door zone" : "Add door zone";
+    renderZone();
+  }
+
+  async function loadDoorZone() {
+    const result = await radarFetch("/api/radar/door_zone");
+    if (!result.ok) {
+      setDoorHint("Could not load the door zone: " + result.error, true);
+      return;
+    }
+    const z = result.data;
+    doorZone.bounds = z.valid
+      ? { min_x_mm: z.min_x_mm, max_x_mm: z.max_x_mm, min_y_mm: z.min_y_mm, max_y_mm: z.max_y_mm }
+      : null;
+    setDoorHint(z.valid ? DOOR_HINT : NO_DOOR_HINT);
+    showDoorZone(!!z.valid);
+  }
+
+  async function saveDoorZone() {
+    setDoorHint("Saving…");
+    const result = await radarFetch("/api/radar/door_zone", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(doorZone.bounds),
+    });
+    if (!result.ok) {
+      setDoorHint("Save failed: " + result.error, true);
+      return;
+    }
+    setDoorHint(DOOR_HINT);
+  }
+
+  doorZoneBtn.addEventListener("click", async () => {
+    if (doorZone.visible) {
+      const result = await radarFetch("/api/radar/door_zone", { method: "DELETE" });
+      if (!result.ok) {
+        setDoorHint("Could not remove the door zone: " + result.error, true);
+        return;
+      }
+      doorZone.bounds = null;
+      setDoorHint(NO_DOOR_HINT);
+      showDoorZone(false);
+      return;
+    }
+    // Starts as a square just beyond the far-left corner of the room zone,
+    // clamped into the sensor's range - then dragged onto the real doorway.
+    const room = roomZone.bounds || DEFAULT_BOUNDS;
+    const y0 = Math.min(room.max_y_mm, MAX_RANGE_MM - DOOR_DEFAULT_SIZE_MM);
+    doorZone.bounds = {
+      min_x_mm: Math.round(room.min_x_mm), max_x_mm: Math.round(room.min_x_mm + DOOR_DEFAULT_SIZE_MM),
+      min_y_mm: Math.round(y0), max_y_mm: Math.round(y0 + DOOR_DEFAULT_SIZE_MM),
+    };
+    showDoorZone(true);
+    await saveDoorZone();
+  });
+
   loadZone();
+  loadDoorZone();
 
   // ---------------------------------------------------------------- servo home
   const servoOffsetEl = document.getElementById("servoOffset");

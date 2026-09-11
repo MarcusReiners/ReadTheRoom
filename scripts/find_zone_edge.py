@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 import logging_setup
 from adapters.hardware.radar_ld2450 import zone_signed_distance
-from domain.events import PersonEnteredRoom, PersonLeftRoom, RadarTargetsUpdated
+from domain.events import DoorCleared, PersonAtDoor, PersonEnteredRoom, PersonLeftRoom, RadarTargetsUpdated
 from service_layer.bus import EventBus
 
 
@@ -64,9 +64,8 @@ def run_guided(state, records, seg_events):
     input("\nGo outside the room, out of the radar's view. Press ENTER when you are there...")
     steps = guided_steps()
     for n, (label, text) in enumerate(steps, 1):
-        input(f"\n[{n}/{len(steps)}] {label}: {text}\n  Press ENTER, then do it...")
         state["segment"] = label
-    input("\nPress ENTER once you have finished the last step...")
+        input(f"\n[{n}/{len(steps)}] {label}: {text}\n  Do it now, then press ENTER when you are done...")
     state["segment"] = None
 
     print("\nSummary (edge distance: + = outside the zone, - = inside)")
@@ -119,6 +118,16 @@ def main():
             seg_events.append((state["segment"], "OUT"))
         print("  OUT")
 
+    def on_at_door(e):
+        if state["segment"]:
+            seg_events.append((state["segment"], "DOOR"))
+        print(f"  AT DOOR        x={e.x_mm:6.0f}  y={e.y_mm:6.0f} mm")
+
+    def on_door_cleared(e):
+        if state["segment"] and e.outcome == "gone":
+            seg_events.append((state["segment"], "PEEK-END"))
+        print(f"  DOOR CLEARED   ({e.outcome})")
+
     trace = "--trace" in sys.argv
     start = time.monotonic()
     last_seen, last_print = {}, {}
@@ -151,6 +160,8 @@ def main():
 
     bus.subscribe(PersonEnteredRoom, on_enter)
     bus.subscribe(PersonLeftRoom, on_leave)
+    bus.subscribe(PersonAtDoor, on_at_door)
+    bus.subscribe(DoorCleared, on_door_cleared)
     bus.subscribe(RadarTargetsUpdated, on_frame)
     radar.start()
 

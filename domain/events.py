@@ -28,6 +28,29 @@ class PersonLeftRoom(Event):
 
 
 @dataclass(frozen=True)
+class PersonAtDoor(Event):
+    """Someone from outside stepped into the door zone - could be about to
+    come in, or just looking in."""
+    person_id: int
+    x_mm: float
+    y_mm: float
+
+
+@dataclass(frozen=True)
+class DoorCleared(Event):
+    """Someone who was at the door is no longer there. outcome: "entered"
+    (walked on into the room) or "gone" (turned back or vanished - a peek)."""
+    person_id: int
+    outcome: str
+
+
+@dataclass(frozen=True)
+class VoiceDucked(Event):
+    active: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class PersonCountChanged(Event):
     count: int
 
