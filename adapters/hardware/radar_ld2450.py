@@ -25,6 +25,7 @@ APPEAR_SPEED_MMS = 150.0
 APPEAR_INWARD_MM = 80.0
 APPEAR_WINDOW_S = 0.6
 DOOR_OUTSIDE_S = 1.0
+LEAVING_SPEED_MMS = 150.0
 SILENCE_WARN_S = 3.0
 MODULE_SILENT_MS = 2000
 DIAG_WINDOW_S = 10.0
@@ -131,6 +132,7 @@ class RadarLD2450Adapter:
         self._sensor: dict = {}
         self._bridge_dropped = 0
         self._diag_mark: tuple | None = None
+        self._diag_from = 0.0
         # Candidate lower count waiting out drop_hold_s before being believed.
         self._pending_lower_count: int | None = None
         self._pending_since = 0.0
@@ -230,6 +232,11 @@ class RadarLD2450Adapter:
         core and let the Pi fall behind the bridge."""
         pending = b""
         started = time.monotonic()
+        # The first lines after opening the port were queued in the bridge
+        # while nobody read it; their counters are stale, and comparing them
+        # with fresh ones reported every line dropped meanwhile as a live loss.
+        self._diag_mark = None
+        self._diag_from = started + 2.0
         while not self._stop.is_set():
             chunk = ser.read(ser.in_waiting or 1)
             if chunk:
@@ -292,7 +299,7 @@ class RadarLD2450Adapter:
             logger.info("[Radar] LD2450 frames are arriving again (%d/s).", fps)
 
         failures = sensor.get("send_failures")
-        if not isinstance(failures, int):
+        if not isinstance(failures, int) or now < self._diag_from:
             return
         if self._diag_mark is None:
             self._diag_mark = (now, failures, self._bridge_dropped)
@@ -435,11 +442,21 @@ class RadarLD2450Adapter:
             region = self._region(x, y, d_room, prev_region)
             if prev is None or "region" not in prev:
                 tr = {"at_door": False, "in_room": region == "room", "leaving": False, "outside_since": None}
+                # The LD2450 drops people who stand still, so someone who stayed
+                # inside is often picked up again only on their way out - as a
+                # brand-new track at or near the door. The radar's own speed
+                # tells the two cases apart: positive is moving away from the
+                # sensor, i.e. out of the room it sits in.
+                speed = target.get("speed_mms") or 0
                 if region == "door":
-                    self._announce_at_door(tid, tr, x, y)
+                    if prev is None and speed >= LEAVING_SPEED_MMS:
+                        tr["in_room"] = True
+                        tr["leaving"] = True
+                    else:
+                        self._announce_at_door(tid, tr, x, y)
                 elif region == "room" and prev is None:
                     d_door = zone_signed_distance(x, y, self._door_zone)
-                    if d_door is not None and d_door <= self._door_near_mm:
+                    if d_door is not None and d_door <= self._door_near_mm and speed <= -APPEAR_SPEED_MMS:
                         self.bus.publish(PersonEnteredRoom(person_id=tid, x_mm=x, y_mm=y, via="near-door"))
             else:
                 tr = prev
