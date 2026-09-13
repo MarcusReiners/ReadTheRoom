@@ -237,11 +237,12 @@ def analyse_trial(r, d, door):
         out["ducked_before_switch"] = sw["t"] - duck["t"] if duck and duck["t"] <= sw["t"] else None
         out["via"] = enter.get("via")
     if r["classification"] == "TP" and sw:
-        t_leave_now = sw["t"] + STAY_S
-        voice = first(ev, "modality", sw["t"], lambda e: e["to"] == "voice")
+        t_leave_now = sw["t"] + (d.get("session_info") or {}).get("stay_s", STAY_S)
+        voice = (first(ev, "clear", sw["t"], lambda e: e["clear"])
+                 or first(ev, "modality", sw["t"], lambda e: e["to"] == "voice" and e.get("reason") == "alone_again"))
         out["t_leave_now"] = t_leave_now
         out["voice"] = voice
-        if voice is None or voice.get("reason") == "reset":
+        if voice is None:
             out["reversion"] = "missed"
         elif voice["t"] < t_leave_now:
             out["reversion"] = "premature"
@@ -368,7 +369,8 @@ def main():
         print(f"  trial {x['id']} {x['script']}: at door {'yes' if x['door'] else 'no'}, ducked "
               f"{'yes' if x['duck'] else 'no'}, door outcome {x['door_outcome']}, first target {pos}")
 
-    section("Return to voice after the visitor left, true positives")
+    section("Exit detected after the visitor left, true positives "
+            "(\"voice\" = room judged clear; in Study 2 speech came back at that moment)")
     cats = Counter(x["reversion"] for x in tp)
     for c in ("correct", "premature", "missed"):
         rate(c, cats[c], len(tp))

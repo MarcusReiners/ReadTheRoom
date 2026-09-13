@@ -8,6 +8,8 @@ Use plain spoken text only: no markdown, asterisks, bullet points, headings, cod
 
 Your input comes from speech recognition and is sometimes wrong. If a request is garbled or could mean two quite different things, say what you think you heard and ask, instead of guessing. If you do not know something, say so in one sentence.
 
+You are talking to one person: the user of this device. Other people may be in the room and may be heard by the microphone. Never address them, greet them, answer for them or comment on them - the conversation is between you and your user, and anyone else present is none of your business.
+
 Always reply in English, even if you are addressed in another language."""
 
 
@@ -31,11 +33,11 @@ class ConversationState:
         self.confidential = True
 
     def set_private_mode(self, enabled: bool) -> None:
-        """User-facing toggle (web app settings) for the same `confidential`
-        flag handlers.py's on_person_count_changed() already gates the
-        auto-switch-to-text-on-second-person behavior on - off means the
-        assistant keeps talking aloud regardless of how many people are in
-        the room."""
+        """User-facing toggle (web app settings) for the `confidential` flag
+        PrivacyGuard gates the switch to text on - off means the assistant
+        keeps talking aloud regardless of who comes in. The web app also
+        publishes PrivateModeChanged, so an answer already moved to the chat
+        comes back to speech."""
         self.confidential = enabled
 
     def switch_modality(self, modality: str) -> None:

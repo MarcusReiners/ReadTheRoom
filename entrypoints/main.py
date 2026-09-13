@@ -22,7 +22,8 @@ from domain.events import (
     SpeechTranscribed,
 )
 from service_layer.bus import EventBus
-from service_layer.handlers import register_handlers, register_tie_led_handlers, start_doa_tracking
+from service_layer.handlers import (VisitDiscretion, register_handlers, register_tie_led_handlers,
+                                   start_doa_tracking)
 
 from adapters.factory import build_stt, build_tts, build_radar, build_turntable
 from adapters.app_settings import load_app_settings
@@ -211,6 +212,7 @@ def vad_input_loop(
     calibration_mode: threading.Event | None = None, composing_mode: threading.Event | None = None,
     turn_in_progress: threading.Event | None = None,
     servo_recentering: threading.Event | None = None,
+    visit_discretion=None,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
     onboard VAD and starts recording automatically once it detects speech,
@@ -243,12 +245,19 @@ def vad_input_loop(
     during one is the motor, not a person, and starting a recording on it is
     always wrong.
 
-    Checked ONLY before opening a recording, never to abort one already in
-    progress. Aborting was tried and was badly wrong: the head turns toward
-    a speaker because they are speaking, so mid-recording servo checks threw
-    away the recording of the very utterance that caused the move. If a
-    recording is already open, some motor noise in the audio is a far
-    smaller problem than losing the speech entirely.
+    visit_discretion: set from the moment an answer moves to the chat until
+    the user resumes speech (see VisitDiscretion) - skipped here too, so that
+    a conversation between the user and the visitor is neither transcribed
+    nor answered, and a recording already open is discarded. Anything the
+    user wants from the assistant meanwhile goes through the chat.
+
+    servo_recentering is checked ONLY before opening a recording, never to
+    abort one already in progress. Aborting was tried and was badly wrong:
+    the head turns toward a speaker because they are speaking, so
+    mid-recording servo checks threw away the recording of the very
+    utterance that caused the move. If a recording is already open, some
+    motor noise in the audio is a far smaller problem than losing the
+    speech entirely.
 
     min_voice_polls: how many polls across the WHOLE recording must have
     reported voice for the result to be worth transcribing. Counted
@@ -266,6 +275,7 @@ def vad_input_loop(
             or (calibration_mode is not None and calibration_mode.is_set())
             or (composing_mode is not None and composing_mode.is_set())
             or (servo_recentering is not None and servo_recentering.is_set())
+            or (visit_discretion is not None and visit_discretion.is_set())
         ):
             time.sleep(poll_interval_s)
             continue
@@ -302,6 +312,7 @@ def vad_input_loop(
             # ends the turn exactly as it always did.
             start_time = time.monotonic()
             last_active_time = start_time
+            end_reason = ""
             voice_polls = 1  # the trigger poll that opened this recording
             while True:
                 time.sleep(poll_interval_s)
@@ -317,6 +328,9 @@ def vad_input_loop(
                 if composing_mode is not None and composing_mode.is_set():
                     abort_reason = "Nutzer tippt im Chat"
                     break
+                if visit_discretion is not None and visit_discretion.is_set():
+                    abort_reason = "Besuch im Raum"
+                    break
                 try:
                     with doa_lock:
                         still_active = doa.get_voice_active()
@@ -327,8 +341,10 @@ def vad_input_loop(
                     voice_polls += 1
                     last_active_time = time.monotonic()
                 if time.monotonic() - last_active_time >= trailing_silence_s:
+                    end_reason = f"{trailing_silence_s:.1f} s of silence"
                     break
                 if time.monotonic() - start_time >= config.MAX_RECORD_SECONDS:
+                    end_reason = "maximum length"
                     break
 
             # Cumulative, not consecutive: a real utterance accumulates voice
@@ -340,6 +356,9 @@ def vad_input_loop(
                 abort_reason = f"zu wenig Sprachaktivitaet ({voice_polls} Messungen)"
 
             bus.publish(ListeningStateChanged(listening=False))
+            logger.info("[VAD] Recording ended after %.1f s (%s, %d voice polls, last voice %.1f s before the end).",
+                        time.monotonic() - start_time, end_reason or abort_reason, voice_polls,
+                        time.monotonic() - last_active_time)
             success = _finish_recording(proc, raw_file, temp_in)
         finally:
             mic_lock.release()
@@ -524,6 +543,7 @@ def main() -> None:
 
     register_handlers(bus, conversation, tts, departure_grace_s=config.PRIVACY_DEPARTURE_GRACE_S,
                       door_clear_hold_s=config.PRIVACY_DOOR_CLEAR_HOLD_S)
+    visit_discretion = VisitDiscretion(conversation)
 
     chat_bridge = ChatBridgeAdapter(
         bus, conversation, store, turn_queue,
@@ -545,7 +565,7 @@ def main() -> None:
     chat_bridge.start()
 
     radar.start()
-    register_tie_led_handlers(bus, radar)
+    register_tie_led_handlers(bus, radar, face)
 
     mic_lock = threading.Lock()
 
@@ -572,6 +592,7 @@ def main() -> None:
             doa, turntable, face, lock=doa_lock,
             assistant_speaking=assistant_speaking, calibration_mode=calibration_mode,
             servo_recentering=servo_recentering, turn_in_progress=turn_in_progress,
+            paused=visit_discretion,
         )
         threading.Thread(
             target=_restart_on_error(vad_input_loop, "[VAD] input loop"),
@@ -579,6 +600,7 @@ def main() -> None:
             kwargs={
                 "calibration_mode": calibration_mode, "composing_mode": composing_mode,
                 "servo_recentering": servo_recentering, "turn_in_progress": turn_in_progress,
+                "visit_discretion": visit_discretion, "trailing_silence_s": config.VAD_TRAILING_SILENCE_S,
             },
             daemon=True,
         ).start()

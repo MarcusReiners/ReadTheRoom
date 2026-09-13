@@ -89,6 +89,7 @@ MIC_CHANNELS = int(_env("MIC_CHANNELS", "6"))
 MIC_RATE = int(_env("MIC_RATE", "16000"))
 SPEAKER_DEVICE = _env("SPEAKER_DEVICE", "plughw:CARD=ArrayUAC10,DEV=0")
 MAX_RECORD_SECONDS = int(_env("MAX_RECORD_SECONDS", "30"))
+VAD_TRAILING_SILENCE_S = float(_env("VAD_TRAILING_SILENCE_S", "0.8"))
 
 # --- Hardware features ----------------------------------------------------
 USE_LED_MATRIX = _env_bool("USE_LED_MATRIX", True)
