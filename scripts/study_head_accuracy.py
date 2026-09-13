@@ -512,6 +512,10 @@ def main():
                         help="readings required before the head is allowed to move")
     parser.add_argument("--post-move-quiet", type=float, default=POST_MOVE_QUIET_S,
                         help="seconds the tracker ignores DOA after a move, to reject servo noise")
+    parser.add_argument("--production", action="store_true",
+                        help="run the tracker exactly as main.py starts it - start_doa_tracking()'s own "
+                             "defaults plus DOA_OFFAXIS_GAIN and DOA_CALIBRATION_PATH from config - "
+                             "instead of the study's sampling settings; overrides the --doa-* options")
     parser.add_argument("--no-measure", action="store_true",
                         help="skip the protractor prompt; error is then commanded-only")
     parser.add_argument("--arm-timeout", type=float, default=ARM_TIMEOUT_S,
@@ -573,27 +577,46 @@ def main():
         from adapters.factory import build_turntable
         from adapters.hardware.doa_respeaker import RespeakerDOAAdapter
         base_turntable = build_turntable(config)
-        base_doa = RespeakerDOAAdapter(
-            front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES,
-            offaxis_gain=args.offaxis_gain)
+        if args.production:
+            # Same construction as entrypoints/main.py, so a production run
+            # measures whatever correction the device itself applies.
+            base_doa = RespeakerDOAAdapter(
+                front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES,
+                offaxis_gain=config.DOA_OFFAXIS_GAIN,
+                calibration_path=config.DOA_CALIBRATION_PATH)
+        else:
+            base_doa = RespeakerDOAAdapter(
+                front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES,
+                offaxis_gain=args.offaxis_gain)
 
     patch_pwm_recording(base_turntable, recorder)
     turntable = RecordingTurntable(base_turntable, recorder)
     doa = RecordingDOA(base_doa, base_turntable, recorder)
 
+    import inspect
     from service_layer.handlers import start_doa_tracking
     tracking_paused = threading.Event()
+    if args.production:
+        # Read the defaults off the signature rather than copying them, so a
+        # production run can never drift from what main.py actually starts.
+        prod = {k: p.default for k, p in inspect.signature(start_doa_tracking).parameters.items()
+                if p.default is not inspect.Parameter.empty}
+        sampling = {}
+    else:
+        sampling = dict(
+            post_move_quiet_s=args.post_move_quiet,
+            min_doa_samples=args.min_doa_samples,
+            doa_sample_interval_s=args.doa_sample_interval,
+            doa_onset_skip_s=args.doa_onset_skip,
+            sample_window_s=max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24),
+        )
     start_doa_tracking(
         doa, turntable, SilentFace(),
         lock=threading.Lock(),
         silence_timeout_s=0,
-        post_move_quiet_s=args.post_move_quiet,
-        min_doa_samples=args.min_doa_samples,
-        doa_sample_interval_s=args.doa_sample_interval,
-        doa_onset_skip_s=args.doa_onset_skip,
-        sample_window_s=max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24),
         accept_range=(base_turntable.safe_min_angle, base_turntable.safe_max_angle),
         paused=tracking_paused,
+        **sampling,
     )
 
     print(f"\nSession {args.session}")
@@ -628,15 +651,27 @@ def main():
         print("\nAfter each trial: measure the head with the protractor, then")
         print("ENTER = keep and continue, r = redo this rep, q = quit.\n")
 
-    cfg = {
-        "onset_skip_s": args.doa_onset_skip,
-        "sample_interval_s": args.doa_sample_interval,
-        "min_samples": args.min_doa_samples,
-        "post_move_quiet_s": args.post_move_quiet,
-        "offaxis_gain": args.offaxis_gain,
-        "sample_window_s": max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24),
-        "doa_samples": 5,
-    }
+    if args.production:
+        cfg = {
+            "onset_skip_s": prod["doa_onset_skip_s"],
+            "sample_interval_s": prod["doa_sample_interval_s"],
+            "min_samples": prod["min_doa_samples"],
+            "post_move_quiet_s": prod["post_move_quiet_s"],
+            "offaxis_gain": f"production:{config.DOA_OFFAXIS_GAIN}"
+                            + (f"+table:{config.DOA_CALIBRATION_PATH}" if config.DOA_CALIBRATION_PATH else ""),
+            "sample_window_s": prod["sample_window_s"],
+            "doa_samples": prod["doa_samples"],
+        }
+    else:
+        cfg = {
+            "onset_skip_s": args.doa_onset_skip,
+            "sample_interval_s": args.doa_sample_interval,
+            "min_samples": args.min_doa_samples,
+            "post_move_quiet_s": args.post_move_quiet,
+            "offaxis_gain": args.offaxis_gain,
+            "sample_window_s": max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24),
+            "doa_samples": 5,
+        }
     condition = {"angle_true": args.angle, "distance_m": args.distance, "noise_condition": args.noise}
     rep = 1
     kept = 0

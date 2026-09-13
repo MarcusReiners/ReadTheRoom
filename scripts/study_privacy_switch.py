@@ -1,10 +1,12 @@
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import math
 import os
 import random
+import subprocess
 import sys
 import threading
 import time
@@ -24,6 +26,7 @@ from domain.events import (
     PersonEnteredRoom,
     PersonLeftRoom,
     RadarTargetsUpdated,
+    RoomClearChanged,
     SpeechPlaybackEnded,
     SpeechPlaybackStarted,
     SpeechTranscribed,
@@ -35,6 +38,7 @@ from service_layer.handlers import register_handlers
 
 STUDY_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "study")
 REPLY_AUDIO = os.path.join(STUDY_DIR, "private_reply.wav")
+REPLY_META = os.path.join(STUDY_DIR, "private_reply.json")
 FN_TARGET = 0.05
 STAY_S = 15.0
 WALK_S = 0.0
@@ -139,6 +143,8 @@ def attach_recorder(bus, log):
                   lambda e: log.add(e.timestamp.timestamp(), "door_cleared", id=e.person_id, outcome=e.outcome))
     bus.subscribe(VoiceDucked,
                   lambda e: log.add(e.timestamp.timestamp(), "duck", active=e.active, reason=e.reason))
+    bus.subscribe(RoomClearChanged,
+                  lambda e: log.add(e.timestamp.timestamp(), "clear", clear=e.clear))
     bus.subscribe(RadarTargetsUpdated,
                   lambda e: log.add(e.timestamp.timestamp(), "frame", targets=[
                       {"id": t.get("id"), "x": t.get("x_mm"), "y": t.get("y_mm"),
@@ -199,7 +205,9 @@ def countdown(seconds, label):
 def wait_clear(guard, conversation, hold_s=CLEAR_HOLD_S, timeout_s=180.0):
     """No visitor inside, nobody at the door, normal volume and speech mode,
     for hold_s without interruption - so walking out to the start mark cannot
-    leak a switch or a lowered voice into the trial."""
+    leak a switch or a lowered voice into the trial. Speech no longer comes
+    back on its own, so once the room counts as clear this resumes it the way
+    the user would."""
     deadline = time.monotonic() + timeout_s
     since = None
     shown = None
@@ -207,6 +215,9 @@ def wait_clear(guard, conversation, hold_s=CLEAR_HOLD_S, timeout_s=180.0):
     while time.monotonic() < deadline:
         visitors, mode = guard.visitors, conversation.modality
         at_door, ducked = guard.people_at_door, guard.ducked
+        if visitors == 0 and mode == "web":
+            guard.resume_speech("resumed_study")
+            continue
         if visitors > 0 and time.monotonic() - stuck_since >= STUCK_PROMPT_S:
             sys.stdout.write("\r" + " " * 72 + "\r")
             ask(f"  Still {visitors} visitor(s) counted - an exit was missed (it stays recorded in the last "
@@ -267,7 +278,9 @@ def mover_at_entry(frames, enter, zone):
 
 
 def reversion(log, t_from, timeout_s):
-    voice = wait_for(log, "modality", t_from, lambda e: e["to"] == "voice", timeout_s)
+    """When the room was judged clear again after t_from - the moment speech
+    used to come back, and now the moment the user is offered to resume it."""
+    voice = wait_for(log, "clear", t_from, lambda e: e["clear"], timeout_s)
     leave = None
     if voice is not None:
         leaves = [e for e in log.snapshot() if e["kind"] == "leave" and t_from <= e["t"] <= voice["t"]]
@@ -349,10 +362,14 @@ def run_trial(ctx, script_id):
         if switch is not None:
             print("  SWITCHED - stay inside.")
             countdown(stay, "stay inside")
+            early = first(log.snapshot(), "clear", switch["t"], lambda e: e["clear"])
             print("  >>> LEAVE NOW <<<")
             if sim:
                 sim.leave()
-            rev = reversion(log, time.time(), REVERSION_TIMEOUT_S)
+            if early is not None:
+                rev = {"reversion_ts": iso(early["t"]), "reverted": "early"}
+            else:
+                rev = reversion(log, time.time(), REVERSION_TIMEOUT_S)
         else:
             print(f"  no switch within {ENTRY_WINDOW_S:.0f} s - leave the zone.")
     elif sc["kind"] == "peek":
@@ -410,9 +427,11 @@ def run_trial(ctx, script_id):
               f"switch -> audio killed {row['switch_to_takeover_ms']} ms, "
               f"est. crossing -> switch {row['switch_latency_est_s']} s")
         if row.get("reverted") == "Y":
-            print("      back to voice as soon as you were tracked leaving")
+            print("      room judged clear as soon as you were tracked leaving")
+        elif row.get("reverted") == "early":
+            print("      room judged clear while you were still inside - a premature exit (logged)")
         elif row.get("reverted") == "N":
-            print("      did NOT switch back - your exit was not seen. Walk fully out and back in.")
+            print("      your exit was not seen - the room still counts a visitor.")
     elif cls == "FN":
         print("  - MISSED: you entered but the assistant kept talking.")
     elif cls == "FP":
@@ -727,11 +746,14 @@ def print_report(path):
         if vias:
             print("  entries detected by: " + ", ".join(f"{k} {n}" for k, n in sorted(vias.items())))
 
-        rev = [r for r in tp if r.get("reverted") in ("Y", "N")]
-        print("\n  reversion after leaving")
+        rev = [r for r in tp if r.get("reverted") in ("Y", "N", "early")]
+        print("\n  exit after leaving (room judged clear; Study 2 sessions: speech came back)")
         if rev:
-            ok = sum(1 for r in rev if r["reverted"] == "Y")
-            print(f"  {'reverted to voice':38} {ok}/{len(rev)}")
+            for label, value in (("after the mover left", "Y"), ("before the mover left", "early"),
+                                 ("not at all", "N")):
+                print(f"  {label:38} {sum(1 for r in rev if r['reverted'] == value)}/{len(rev)}")
+            print("  (sessions recorded before the 'early' mark count premature ones as not at all - "
+                  "analyse_privacy_switch.py reads the event log instead)")
             vrev = [r for r in rev if r.get("reversion_latency_source") == "video"]
             if vrev:
                 dist_line("exit crossing -> voice (video)", nums(vrev, "reversion_latency_s"), "s")
@@ -911,6 +933,67 @@ def quiet_console():
             h.setLevel(logging.WARNING)
 
 
+def load_voice_settings():
+    from adapters.app_settings import load_app_settings
+    return load_app_settings(config.APP_SETTINGS_PATH, defaults={
+        "voices": [{"id": "default", "voice_id": config.ELEVENLABS_VOICE_ID}],
+        "active_voice_id": "default", "volume": 1.0})
+
+
+def active_voice(settings):
+    return next((v for v in settings["voices"] if v["id"] == settings["active_voice_id"]), settings["voices"][0])
+
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 16), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def code_version():
+    root = os.path.dirname(STUDY_DIR)
+    git = ["git", "-c", "safe.directory=*", "-C", root]
+    try:
+        commit = subprocess.run(git + ["rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                                timeout=5).stdout.strip()
+        status = subprocess.run(git + ["status", "--porcelain", "--untracked-files=no"], capture_output=True,
+                                text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    return {"commit": commit, "uncommitted": [line[3:] for line in status.splitlines()]} if commit else {}
+
+
+def render_recording(path):
+    """Speaks PRIVATE_REPLY once, sentence by sentence, through the same TTS
+    adapter and active voice a live session uses, and saves it for
+    --recording, with the voice and model next to it in REPLY_META."""
+    from adapters.factory import build_tts
+    voice = active_voice(load_voice_settings())
+    tts = build_tts(config, EventBus())
+    if hasattr(tts, "voice_id"):
+        tts.voice_id = voice["voice_id"]
+    print(f"Rendering {len(PRIVATE_REPLY)} sentences with {config.TTS_PROVIDER}, "
+          f"voice {voice.get('name') or voice['voice_id']} ...")
+    pcm = b"".join(chunk for sentence in PRIVATE_REPLY for chunk in tts._synthesize_chunks(sentence.strip()))
+    pcm = pcm[:len(pcm) - len(pcm) % 2]
+    tmp = path + ".part"
+    with wave.open(tmp, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(tts.sample_rate)
+        w.writeframes(pcm)
+    os.replace(tmp, path)
+    meta = {"provider": config.TTS_PROVIDER, "voice_name": voice.get("name", ""), "voice_id": voice["voice_id"],
+            "model_id": getattr(tts, "model_id", ""), "language_code": getattr(tts, "language_code", None),
+            "sample_rate": tts.sample_rate, "duration_s": round(len(pcm) / 2 / tts.sample_rate, 3),
+            "sha256": file_sha256(path), "rendered_at": iso(time.time()), "text": "".join(PRIVATE_REPLY).strip()}
+    with open(REPLY_META, "w") as f:
+        json.dump(meta, f, indent=2)
+    print(f"Wrote {path} ({meta['duration_s']} s) and {REPLY_META}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Study 2: privacy-switch reliability.")
     parser.add_argument("--configuration", default="baseline", help="placement label, e.g. baseline or doorway")
@@ -933,6 +1016,9 @@ def main():
     parser.add_argument("--recording", action="store_true",
                         help="play study/private_reply.wav instead of speaking the message with the live TTS "
                              "provider - identical in every trial, no TTS credits; keep one choice per session")
+    parser.add_argument("--render-recording", action="store_true",
+                        help="synthesise the message once with the live TTS provider and the active voice into "
+                             "study/private_reply.wav (plus private_reply.json), for --recording")
     parser.add_argument("--verbose", action="store_true", help="show the full event log in the terminal too")
     args = parser.parse_args()
 
@@ -941,6 +1027,10 @@ def main():
     csv_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}.csv")
     jsonl_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}_trials.jsonl")
     video_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}_video.csv")
+    discarded_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}_discarded.jsonl")
+    if args.render_recording:
+        render_recording(REPLY_AUDIO)
+        return
     if args.list:
         list_trials(csv_path)
         return
@@ -968,6 +1058,7 @@ def main():
     attach_recorder(bus, log)
     conversation = ConversationState()
 
+    from adapters.hardware import radar_ld2450
     from adapters.hardware.radar_ld2450 import RadarLD2450Adapter
     sim = None
     if args.simulate:
@@ -977,24 +1068,29 @@ def main():
                                    door_near_mm=config.RADAR_DOOR_NEAR_MM)
         radar.set_door_zone(SimScene.DOOR)
         tts = SimTTS(bus)
+        reply = {"source": "simulated"}
     else:
         if config.RADAR_PROVIDER != "ld2450":
             raise SystemExit(f"RADAR_PROVIDER is {config.RADAR_PROVIDER!r} - this study needs the LD2450.")
         from adapters.factory import build_radar, build_tts
-        from adapters.app_settings import load_app_settings
-        settings = load_app_settings(config.APP_SETTINGS_PATH, defaults={
-            "voices": [{"id": "default", "voice_id": config.ELEVENLABS_VOICE_ID}],
-            "active_voice_id": "default", "volume": 1.0})
+        settings = load_voice_settings()
         if args.recording:
             if not os.path.exists(REPLY_AUDIO):
-                raise SystemExit(f"--recording needs {REPLY_AUDIO}")
+                raise SystemExit(f"--recording needs {REPLY_AUDIO} - create it with --render-recording")
             tts = FileTTS(bus, REPLY_AUDIO, config.SPEAKER_DEVICE)
+            reply = {"source": "recording", "sha256": file_sha256(REPLY_AUDIO), "duration_s": round(tts.duration_s, 3)}
+            if os.path.exists(REPLY_META):
+                with open(REPLY_META) as f:
+                    meta = json.load(f)
+                reply.update({k: meta.get(k) for k in ("voice_name", "voice_id", "model_id", "rendered_at")})
+                if meta.get("sha256") != reply["sha256"]:
+                    print(f"Warning: {REPLY_AUDIO} is not the file described in {REPLY_META}.")
         else:
             tts = build_tts(config, bus)
-            voice = next((v for v in settings["voices"] if v["id"] == settings["active_voice_id"]),
-                         settings["voices"][0])
+            voice = active_voice(settings)
             if hasattr(tts, "voice_id"):
                 tts.voice_id = voice["voice_id"]
+            reply = {"source": "live", "provider": config.TTS_PROVIDER, "voice_id": getattr(tts, "voice_id", "")}
         if hasattr(tts, "set_volume"):
             tts.set_volume(settings.get("volume", 1.0))
         if hasattr(tts, "duck_gain"):
@@ -1028,6 +1124,8 @@ def main():
     ctx = {"log": log, "radar": radar, "conversation": conversation, "tts": tts, "zone": zone, "bus": bus,
            "sim": sim, "guard": guard, "stop_speech": original_takeover, "stay_s": args.stay, "walk_s": args.walk,
            "door_zone": door_zone}
+    session_info = {"reply": reply, "exit_speed_mms": getattr(radar_ld2450, "EXIT_SPEED_MMS", None),
+                    "stay_s": args.stay, "code": code_version()}
     counts = done_counts(load_rows(csv_path), args.configuration)
     entries_planned = sum(n for k, n in reps.items() if SCRIPTS[k]["should"])
     _, best_upper = clopper_pearson(0, entries_planned)
@@ -1042,10 +1140,17 @@ def main():
     print(f"Edge band  : in at {config.RADAR_ENTRY_MARGIN_MM:.0f} mm inside, out at "
           f"{config.RADAR_EXIT_MARGIN_MM:.0f} mm outside the zone edge")
     if isinstance(tts, FileTTS):
-        print(f"Voice      : recording {os.path.relpath(REPLY_AUDIO)} ({tts.duration_s:.0f} s), "
-              f"identical in every trial")
+        print(f"Voice      : recording {os.path.relpath(REPLY_AUDIO)} ({tts.duration_s:.0f} s, "
+              f"{reply.get('voice_name') or 'voice not recorded'}), identical in every trial")
     elif not args.simulate:
         print(f"Voice      : live {config.TTS_PROVIDER} TTS")
+    exit_speed = session_info["exit_speed_mms"]
+    print("Exit rule  : " + (f"an exit needs {exit_speed:.0f} mm/s away from the sensor" if exit_speed
+                             else "no speed condition (radar code older than the Study 2 fix)"))
+    code = session_info["code"]
+    print("Code       : " + (f"commit {code['commit']}" + (f", uncommitted changes in {', '.join(code['uncommitted'])}"
+                                                           if code["uncommitted"] else "")
+                             if code else "git version unknown"))
     if door_zone.get("valid"):
         print(f"Door zone  : x {door_zone['min_x_mm']}..{door_zone['max_x_mm']} mm, "
               f"y {door_zone['min_y_mm']}..{door_zone['max_y_mm']} mm - entries decided there, "
@@ -1070,7 +1175,12 @@ def main():
             if choice == "q":
                 break
             if choice == "r":
-                print("  discarded - that script stays in the pool.")
+                reason = ask("Why is it redone? (logged) > ").strip()
+                with open(discarded_path, "a") as f:
+                    f.write(json.dumps({"discarded_at": iso(time.time()), "reason": reason, "seed": seed,
+                                        "row": row, "zone": zone, "door_zone": door_zone,
+                                        "session_info": session_info, **detail}) + "\n")
+                print("  discarded and logged - that script stays in the pool.")
                 continue
             note = ask("Optional note > ").strip()
             trial_id = next_trial_id(load_rows(csv_path))
@@ -1082,7 +1192,7 @@ def main():
             append(csv_path, row)
             with open(jsonl_path, "a") as f:
                 f.write(json.dumps({"trial_id": trial_id, "seed": seed, "row": row, "zone": zone,
-                                    "door_zone": door_zone, **detail}) + "\n")
+                                    "door_zone": door_zone, "session_info": session_info, **detail}) + "\n")
             counts[script_id] = counts.get(script_id, 0) + 1
             kept += 1
     except KeyboardInterrupt:

@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import analyse_privacy_switch as analysis
 from domain.conversation import ConversationState
-from domain.events import ModalitySwitched, PersonEnteredRoom, PersonLeftRoom, SpeechTranscribed
+from domain.events import ModalitySwitched, PersonEnteredRoom, PersonLeftRoom, RoomClearChanged, SpeechTranscribed
 from service_layer.bus import EventBus
 from service_layer.handlers import register_handlers
 
@@ -43,6 +43,7 @@ def replay(radar_module, trial, door, args):
     bus.subscribe(PersonEnteredRoom, lambda e: events.append((clock["t"], "enter", e.via)))
     bus.subscribe(PersonLeftRoom, lambda e: events.append((clock["t"], "leave", None)))
     bus.subscribe(ModalitySwitched, lambda e: events.append((clock["t"], "modality", e.to_modality)))
+    bus.subscribe(RoomClearChanged, lambda e: events.append((clock["t"], "clear", e.clear)))
     radar = radar_module.RadarLD2450Adapter(bus=bus, serial_port="/dev/null",
                                             entry_margin_mm=args.entry_margin, exit_margin_mm=args.exit_margin,
                                             door_near_mm=args.door_near)
@@ -58,7 +59,7 @@ def replay(radar_module, trial, door, args):
     return events
 
 
-def outcome(script, events, live_switch):
+def outcome(script, events, live_switch, stay_s):
     switch = next((t for t, k, v in events if k == "modality" and v == "web"), None)
     if script in ("A", "E", "F"):
         cls = "TP" if switch is not None else "FN"
@@ -66,8 +67,8 @@ def outcome(script, events, live_switch):
         cls = "FP" if switch is not None else "TN"
     ret, voice_t = None, None
     if cls == "TP" and live_switch is not None:
-        cue = live_switch + analysis.STAY_S
-        voice_t = next((t for t, k, v in events if k == "modality" and v == "voice" and t > switch), None)
+        cue = live_switch + stay_s
+        voice_t = next((t for t, k, v in events if k == "clear" and v and t > switch), None)
         ret = "missed" if voice_t is None else ("premature" if voice_t < cue else "correct")
     return cls, ret, switch, voice_t
 
@@ -97,7 +98,8 @@ def main():
             continue
         live = analysis.analyse_trial(r, trial, door)
         live_switch = live["switch"]["t"] if live.get("switch") else None
-        cls, ret, _, voice_t = outcome(r["script_id"], replay(radar_module, trial, door, args), live_switch)
+        cls, ret, _, voice_t = outcome(r["script_id"], replay(radar_module, trial, door, args), live_switch,
+                                     (trial.get("session_info") or {}).get("stay_s", analysis.STAY_S))
         live_cls[live["cls"]] += 1
         replay_cls[cls] += 1
         if live.get("reversion"):

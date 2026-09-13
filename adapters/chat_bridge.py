@@ -20,7 +20,10 @@ from domain.events import (
     AssistantTurnCancelled,
     ListeningStateChanged,
     ModalitySwitched,
+    PrivateModeChanged,
     RadarTargetsUpdated,
+    ResumeSpeechRequested,
+    RoomClearChanged,
     VoiceDucked,
     SpeechTranscribed,
 )
@@ -142,8 +145,9 @@ class ChatBridgeAdapter:
         }))
         bus.subscribe(ListeningStateChanged,
                        lambda e: self._broadcast({"type": "listening", "value": e.listening}))
-        bus.subscribe(ModalitySwitched,
-                       lambda e: self._broadcast({"type": "modality", "value": e.to_modality, "reason": e.reason}))
+        self._room_clear = False
+        bus.subscribe(ModalitySwitched, self._on_modality_switched)
+        bus.subscribe(RoomClearChanged, self._on_room_clear)
         bus.subscribe(VoiceDucked, lambda e: self._broadcast({"type": "voice_ducked", "value": e.active}))
         self._last_radar_broadcast = 0.0
         bus.subscribe(RadarTargetsUpdated, self._on_radar_targets)
@@ -285,6 +289,7 @@ class ChatBridgeAdapter:
                 "modality": self.conversation.modality,
                 "voice_enabled": self.conversation.voice_enabled,
                 "private_mode": self.conversation.confidential,
+                "room_clear": self._room_clear,
                 "system_prompt": self._get_system_prompt(),
                 "llm_model": self._get_llm_model(),
                 "reasoning_effort": self._get_reasoning_effort(),
@@ -336,7 +341,10 @@ class ChatBridgeAdapter:
             self._broadcast({"type": "voice_enabled", "value": self.conversation.voice_enabled})
         elif msg_type == "set_private_mode":
             self.conversation.set_private_mode(bool(data.get("value")))
+            self.bus.publish(PrivateModeChanged(enabled=self.conversation.confidential))
             self._broadcast({"type": "private_mode", "value": self.conversation.confidential})
+        elif msg_type == "resume_speech":
+            self.bus.publish(ResumeSpeechRequested(source="web"))
         elif msg_type == "set_calibration_mode":
             if bool(data.get("value")):
                 self.calibration_mode.set()
@@ -448,6 +456,7 @@ class ChatBridgeAdapter:
             "modality": self.conversation.modality,
             "voice_enabled": self.conversation.voice_enabled,
             "private_mode": self.conversation.confidential,
+            "room_clear": self._room_clear,
             "system_prompt": self._get_system_prompt(),
             "llm_model": self._get_llm_model(),
             "reasoning_effort": self._get_reasoning_effort(),
@@ -556,6 +565,14 @@ class ChatBridgeAdapter:
             on_progress=lambda st: self._broadcast({"type": "doa_calibration", "status": st}),
         )
         return self._doa_calibration
+
+    def _on_modality_switched(self, event: ModalitySwitched) -> None:
+        self._room_clear = False
+        self._broadcast({"type": "modality", "value": event.to_modality, "reason": event.reason})
+
+    def _on_room_clear(self, event: RoomClearChanged) -> None:
+        self._room_clear = event.clear
+        self._broadcast({"type": "room_clear", "value": event.clear})
 
     def _on_radar_targets(self, event) -> None:
         """At most 10 radar updates a second reach the browser. Each one is a

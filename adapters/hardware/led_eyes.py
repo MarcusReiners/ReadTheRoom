@@ -88,6 +88,16 @@ class LedEyesAdapter:
         self._left_cx = self.x_offset + int(self.width * 0.375)
         self._right_cx = self.x_offset + int(self.width * 0.625)
 
+    def set_eyes_closed(self, closed: bool, duration_s: float = 0.4) -> None:
+        """Closes or reopens the eyes, for the redirect signal.
+
+        Closed eyes say the assistant has withdrawn its attention, which is
+        the opposite of turning towards someone: the point of the signal is
+        that the visitor is not being addressed. The blink clock in render()
+        keeps running underneath, so reopening returns to normal blinking.
+        """
+        self._start_openness_animation(0.0 if closed else 1.0, duration_s)
+
     def set_eye_direction(self, angle_degrees: float) -> None:
         """Instant snap - cancels any in-progress animate_eye_direction()."""
         self._eye_angle = angle_degrees

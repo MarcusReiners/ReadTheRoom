@@ -96,6 +96,24 @@ class ModalitySwitched(Event):
 
 
 @dataclass(frozen=True)
+class PrivateModeChanged(Event):
+    enabled: bool
+
+
+@dataclass(frozen=True)
+class RoomClearChanged(Event):
+    """The radar's judgement, while an answer is in the chat, that every
+    visitor has left (clear) or that someone has come in again. Speech does
+    not come back on its own - this only offers the user to resume it."""
+    clear: bool
+
+
+@dataclass(frozen=True)
+class ResumeSpeechRequested(Event):
+    source: str
+
+
+@dataclass(frozen=True)
 class AssistantDeltaReceived(Event):
     delta: str
     conversation_id: str

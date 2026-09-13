@@ -231,7 +231,9 @@
     border-bottom: 1px solid var(--border);
     background: var(--panel);
   }
-  #voiceToggle {
+  .status-left { display: flex; align-items: center; gap: 10px; }
+  #resumeBtn[hidden] { display: none; }
+  #voiceToggle, #resumeBtn {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -679,7 +681,10 @@
         </aside>
         <div class="chat-main">
           <div class="chat-status">
-            <span id="modalityLabel">–</span>
+            <div class="status-left">
+              <span id="modalityLabel">–</span>
+              <button id="resumeBtn" type="button" hidden>Resume speaking</button>
+            </div>
             <button id="voiceToggle" type="button">
               <svg class="icon" id="voiceIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
               <span id="voiceLabel">Voice on</span>
@@ -905,6 +910,7 @@
   const textInputEl = document.getElementById("textInput");
   const connDotEl = document.getElementById("connDot");
   const modalityLabelEl = document.getElementById("modalityLabel");
+  const resumeBtnEl = document.getElementById("resumeBtn");
   const voiceToggleEl = document.getElementById("voiceToggle");
   const voiceIconEl = document.getElementById("voiceIcon");
   const voiceLabelEl = document.getElementById("voiceLabel");
@@ -957,10 +963,18 @@
 
   let currentModality = "voice";
   let voiceDucked = false;
+  let roomClear = false;
   function setModalityLabel(modality) {
     currentModality = modality;
-    modalityLabelEl.textContent = modality !== "voice" ? "Chat only – person in room"
+    if (modality === "voice") roomClear = false;
+    modalityLabelEl.textContent = modality !== "voice"
+      ? (roomClear ? "Chat only – room looks clear" : "Chat only – person in room")
       : voiceDucked ? "Speaking quietly – someone at the door" : "Speaking";
+    resumeBtnEl.hidden = modality === "voice";
+  }
+  function setRoomClear(clear) {
+    roomClear = clear;
+    setModalityLabel(currentModality);
   }
   function setVoiceDucked(active) {
     voiceDucked = active;
@@ -1114,6 +1128,7 @@
       case "conversation_selected":
         activeConversationId = data.id;
         renderHistory(data.messages || []);
+        roomClear = !!data.room_clear;
         setModalityLabel(data.modality || "voice");
         setVoiceToggle(data.voice_enabled !== false);
         setPrivateModeToggle(data.private_mode !== false);
@@ -1164,6 +1179,9 @@
         break;
       case "modality":
         setModalityLabel(data.value);
+        break;
+      case "room_clear":
+        setRoomClear(!!data.value);
         break;
       case "voice_ducked":
         setVoiceDucked(!!data.value);
@@ -1266,6 +1284,11 @@
   voiceToggleEl.addEventListener("click", () => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ type: "set_voice_enabled", value: !voiceEnabled }));
+  });
+
+  resumeBtnEl.addEventListener("click", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "resume_speech" }));
   });
 
   privateModeToggleEl.addEventListener("change", () => {

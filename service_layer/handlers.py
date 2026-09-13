@@ -11,6 +11,9 @@ from domain.events import (
     PersonAtDoor,
     PersonEnteredRoom,
     PersonLeftRoom,
+    PrivateModeChanged,
+    ResumeSpeechRequested,
+    RoomClearChanged,
     SpeechPlaybackEnded,
     SpeechPlaybackStarted,
     SpeechTranscribed,
@@ -27,6 +30,7 @@ logger = logging.getLogger(__name__)
 TIE_LED_WHITE = (255, 255, 255)
 TIE_LED_IDLE_PERIOD_MS = 3000
 TIE_LED_LISTENING_PERIOD_MS = 900
+TIE_LED_ROOM_CLEAR = (64, 64, 64)
 
 
 class PrivacyGuard:
@@ -42,8 +46,10 @@ class PrivacyGuard:
     - Anyone crossing IN while a partner is present is a visitor: speech stops.
     - Anyone crossing IN with no conversation going is harmless - they become
       the partner if they start talking.
-    - Someone crossing OUT while visitors are present is taken to be a visitor;
-      speech returns once the last one has left.
+    - Someone crossing OUT while visitors are present is taken to be a visitor.
+      Once the last one has left the room counts as clear (RoomClearChanged),
+      but the answer stays in the chat until the user resumes speech - so an
+      exit the radar gets wrong costs nothing anyone can hear.
     - Someone crossing OUT with no visitors may be the partner. If no
       conversation follows within departure_grace_s, the partner is assumed
       gone; until then, newcomers are still treated as visitors.
@@ -52,6 +58,9 @@ class PrivacyGuard:
       is not worth cutting the answer off. It returns to normal
       door_clear_hold_s after the door zone is empty; walking on in is an
       entry like any other.
+    - Resuming by hand (ResumeSpeechRequested - the web app's button, later
+      the head) or turning private mode off brings speech back, visitor or
+      not, and forgets the visitor count: the user has judged who may hear.
     """
 
     def __init__(self, bus: EventBus, conversation: ConversationState, tts: StreamingTTSAdapter,
@@ -63,6 +72,7 @@ class PrivacyGuard:
         self.door_clear_hold_s = door_clear_hold_s
         self.partner_present = False
         self.visitors = 0
+        self.room_clear = False
         self._departure_since: float | None = None
         self._at_door: set = set()
         self._ducked = False
@@ -73,10 +83,24 @@ class PrivacyGuard:
         bus.subscribe(PersonLeftRoom, self._on_left)
         bus.subscribe(PersonAtDoor, self._on_at_door)
         bus.subscribe(DoorCleared, self._on_door_cleared)
+        bus.subscribe(PrivateModeChanged, self._on_private_mode)
+        bus.subscribe(ResumeSpeechRequested, lambda e: self.resume_speech(f"resumed_{e.source}"))
 
     @property
     def people_at_door(self) -> int:
         return len(self._at_door)
+
+    def resume_speech(self, reason: str) -> bool:
+        with self._lock:
+            self.visitors = 0
+            self.room_clear = False
+            back = self.conversation.modality == "web"
+            if back:
+                self.conversation.switch_modality("voice")
+        if back:
+            self.bus.publish(ModalitySwitched(to_modality="voice", reason=reason))
+            logger.info("Modality switched back to 'voice' (%s)", reason)
+        return back
 
     def reset_room(self) -> None:
         """Forgets visitors and anyone at the door, back to speech at normal
@@ -84,14 +108,10 @@ class PrivacyGuard:
         is empty after an exit the radar missed - otherwise one missed exit
         keeps every later trial waiting for a visitor who already left."""
         with self._lock:
-            self.visitors = 0
             self._at_door.clear()
             self._cancel_unduck()
-            back = self.conversation.modality == "web"
         self._set_duck(False, "reset by the tester")
-        if back:
-            self.conversation.switch_modality("voice")
-            self.bus.publish(ModalitySwitched(to_modality="voice", reason="reset"))
+        self.resume_speech("reset")
 
     @property
     def ducked(self) -> bool:
@@ -167,8 +187,12 @@ class PrivacyGuard:
                 return
             self.visitors += 1
             switch = self.conversation.confidential and self.conversation.modality == "voice"
+            occupied_again = self.room_clear
+            self.room_clear = False
             visitors = self.visitors
         logger.info("[Privacy] visitor entered (%s) - %d visitor(s) present.", event.via, visitors)
+        if occupied_again:
+            self.bus.publish(RoomClearChanged(clear=False))
         if switch:
             self.conversation.switch_modality("web")
             self.bus.publish(ModalitySwitched(to_modality="web", reason="person_entered"))
@@ -177,22 +201,50 @@ class PrivacyGuard:
                 logger.info("Speech interrupted (a person entered the room).")
 
     def _on_left(self, event: PersonLeftRoom) -> None:
-        back = False
+        clear = False
         with self._lock:
             now = time.monotonic()
             self._expire_departure(now)
             if self.visitors > 0:
                 self.visitors -= 1
-                back = self.visitors == 0 and self.conversation.modality == "web"
+                clear = self.visitors == 0 and self.conversation.modality == "web" and not self.room_clear
+                self.room_clear = self.room_clear or clear
                 logger.info("[Privacy] visitor left - %d still present.", self.visitors)
             elif self.partner_present:
                 self._departure_since = now
                 logger.info("[Privacy] someone left with no visitors present - the user, unless "
                             "the conversation continues within %.0fs.", self.departure_grace_s)
-        if back:
-            self.conversation.switch_modality("voice")
-            self.bus.publish(ModalitySwitched(to_modality="voice", reason="alone_again"))
-            logger.info("Modality switched back to 'voice' (visitors gone)")
+        if clear:
+            self.bus.publish(RoomClearChanged(clear=True))
+            logger.info("[Privacy] room clear again - answers stay in the chat until the user resumes speech.")
+
+    def _on_private_mode(self, event: PrivateModeChanged) -> None:
+        if event.enabled:
+            return
+        with self._lock:
+            self._cancel_unduck()
+        self._set_duck(False, "private mode off")
+        self.resume_speech("private_mode_off")
+
+
+class VisitDiscretion:
+    """Reads as set while an answer has been moved to the chat and the user
+    has not resumed speech - including after the radar judges the room clear
+    again, since that judgement is exactly what Study 2 found can be wrong.
+    start_doa_tracking() and vad_input_loop() only ever call is_set(), so
+    this stands in for a threading.Event.
+
+    While it is set the head stops following voices - turning to whoever
+    speaks would make the visitor the addressee - and no new recording is
+    opened, so what the visitor says is neither transcribed nor answered.
+    Resuming speech by hand clears it: the user has decided who may hear,
+    and the assistant behaves normally again."""
+
+    def __init__(self, conversation: ConversationState) -> None:
+        self._conversation = conversation
+
+    def is_set(self) -> bool:
+        return self._conversation.modality == "web"
 
 
 def register_handlers(
@@ -206,36 +258,75 @@ def register_handlers(
                         door_clear_hold_s=door_clear_hold_s)
 
 
-def _tie_led_command(mode: str, period_ms: int | None = None) -> dict:
-    r, g, b = TIE_LED_WHITE
+def _tie_led_command(mode: str, period_ms: int | None = None, color: tuple = TIE_LED_WHITE) -> dict:
+    r, g, b = color
     cmd = {"cmd": "set_led", "mode": mode, "r": r, "g": g, "b": b}
     if period_ms is not None:
         cmd["period_ms"] = period_ms
     return cmd
 
 
-def register_tie_led_handlers(bus: EventBus, radar) -> None:
+def register_tie_led_handlers(bus: EventBus, radar, face=None) -> None:
     """Drives the 7-LED tie strip via the same serial command channel the
     radar adapter already has open to the bridge ESP32 (see
     mmWaveBridge/src/main.cpp's set_led command) - always white, states
     are distinguished by animation speed/mode rather than color.
+
+    A fourth state joins idle/listening/speaking: while output is redirected
+    to the chat the strip goes dark and the eyes close. Dark is the one state
+    the other three cannot be mistaken for, and closed eyes on a still-lit
+    face say the assistant has withdrawn rather than crashed - the signal
+    has to be readable without announcing that something is being hidden.
+    Once the radar judges the room clear again the strip glows faintly while
+    the eyes stay closed: the assistant is waiting to be told it may speak.
     """
+    redirected = False
+    room_clear = False
+
+    def redirected_command() -> dict:
+        return _tie_led_command("solid", color=TIE_LED_ROOM_CLEAR) if room_clear else _tie_led_command("off")
 
     def on_listening_changed(event: ListeningStateChanged) -> None:
+        if redirected:
+            return
         if event.listening:
             radar.send_command(_tie_led_command("pulse", TIE_LED_LISTENING_PERIOD_MS))
         else:
             radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_PERIOD_MS))
 
     def on_speech_started(event: SpeechPlaybackStarted) -> None:
+        if redirected:
+            return
         radar.send_command(_tie_led_command("solid"))
 
     def on_speech_ended(event: SpeechPlaybackEnded) -> None:
-        radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_PERIOD_MS))
+        # The switch kills playback, so this arrives just after a redirect -
+        # without the guard it would immediately overwrite the dark strip.
+        radar.send_command(redirected_command() if redirected
+                           else _tie_led_command("pulse", TIE_LED_IDLE_PERIOD_MS))
+
+    def on_modality_switched(event: ModalitySwitched) -> None:
+        nonlocal redirected, room_clear
+        redirected = event.to_modality == "web"
+        room_clear = False
+        close_eyes = getattr(face, "set_eyes_closed", None)
+        if close_eyes is not None:
+            close_eyes(redirected)
+        radar.send_command(redirected_command() if redirected
+                           else _tie_led_command("pulse", TIE_LED_IDLE_PERIOD_MS))
+
+    def on_room_clear(event: RoomClearChanged) -> None:
+        nonlocal room_clear
+        if not redirected:
+            return
+        room_clear = event.clear
+        radar.send_command(redirected_command())
 
     bus.subscribe(ListeningStateChanged, on_listening_changed)
     bus.subscribe(SpeechPlaybackStarted, on_speech_started)
     bus.subscribe(SpeechPlaybackEnded, on_speech_ended)
+    bus.subscribe(ModalitySwitched, on_modality_switched)
+    bus.subscribe(RoomClearChanged, on_room_clear)
 
     radar.send_command(_tie_led_command("pulse", TIE_LED_IDLE_PERIOD_MS))
 

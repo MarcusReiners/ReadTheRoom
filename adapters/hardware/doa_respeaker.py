@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 _DOAANGLE_PARAM = (21, 0x00)
 _VOICEACTIVITY_PARAM = (19, 0x20)
+_SPEECHDETECTED_PARAM = (19, 0x16)
 
 
 class DOAUnavailable(RuntimeError):
@@ -275,6 +276,12 @@ class RespeakerDOAAdapter:
         """Onboard VAD flag - use this to gate on "loud enough"/speech-like sound
         instead of reacting to every DOA reading, most of which are ambient noise."""
         return bool(self._read_param(*_VOICEACTIVITY_PARAM))
+
+    def get_speech_detected(self) -> bool:
+        """The array's separate speech-detection flag (SPEECHDETECTED), as
+        opposed to VOICEACTIVITY's general activity. Not used for gating yet -
+        scripts/probe_vad.py compares the two on real sounds first."""
+        return bool(self._read_param(*_SPEECHDETECTED_PARAM))
 
     def close(self) -> None:
         usb.util.dispose_resources(self._dev)
