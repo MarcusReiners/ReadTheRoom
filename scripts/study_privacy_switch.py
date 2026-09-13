@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import random
+import statistics
 import subprocess
 import sys
 import threading
@@ -43,6 +44,7 @@ FN_TARGET = 0.05
 STAY_S = 15.0
 WALK_S = 0.0
 CLEAR_HOLD_S = 2.0
+BASELINE_S = 30.0
 SPEECH_START_TIMEOUT_S = 20.0
 ENTRY_WINDOW_S = 20.0
 PEEK_WINDOW_S = 15.0
@@ -221,7 +223,7 @@ def wait_clear(guard, conversation, hold_s=CLEAR_HOLD_S, timeout_s=180.0):
         if visitors > 0 and time.monotonic() - stuck_since >= STUCK_PROMPT_S:
             sys.stdout.write("\r" + " " * 72 + "\r")
             ask(f"  Still {visitors} visitor(s) counted - an exit was missed (it stays recorded in the last "
-                "trial).\n  If you are outside and the room is empty, press ENTER to reset > ")
+                "trial).\n  If you are outside (a seated person stays where they are), press ENTER to reset > ")
             guard.reset_room()
             stuck_since = time.monotonic()
             shown = None
@@ -246,6 +248,34 @@ def wait_clear(guard, conversation, hold_s=CLEAR_HOLD_S, timeout_s=180.0):
         time.sleep(0.1)
     print("\n  never cleared - was an exit missed? Walk fully out of the zone and back, or restart.")
     return False
+
+
+def record_baseline(log, zone, seconds, path):
+    """With only the seated person in view: how often and where the radar
+    reports them before any trial, as the reference for how a still person
+    is tracked once someone walks in. One line per capture, so a restart
+    after a break gets a fresh one."""
+    ask(f"\n  Seated person at the desk and still, everyone else out of the radar's view.\n"
+        f"  ENTER to record {seconds:.0f} s of baseline > ")
+    log.clear()
+    t0 = time.time()
+    countdown(seconds, "baseline - nobody moves")
+    frames = [e for e in log.snapshot() if e["kind"] == "frame" and e["t"] >= t0]
+    counts = [sum(1 for t in f["targets"] if t["z"]) for f in frames]
+    inside = [t for f in frames for t in f["targets"] if t["z"]]
+    summary = {
+        "recorded_at": iso(t0), "duration_s": seconds, "frames": len(frames),
+        "frames_seen": sum(1 for c in counts if c >= 1), "frames_multi": sum(1 for c in counts if c >= 2),
+        "median_x_mm": statistics.median(t["x"] for t in inside) if inside else None,
+        "median_y_mm": statistics.median(t["y"] for t in inside) if inside else None,
+    }
+    with open(path, "a") as f:
+        f.write(json.dumps({**summary, "zone": zone, "events": frames}) + "\n")
+    where = (f" at x {summary['median_x_mm']:.0f}, y {summary['median_y_mm']:.0f} mm (median)"
+             if inside else "")
+    print(f"  Baseline : seated person reported in {summary['frames_seen']}/{summary['frames']} frames{where}, "
+          f"two or more targets in {summary['frames_multi']}")
+    return summary
 
 
 def mover_at_entry(frames, enter, zone):
@@ -1019,6 +1049,10 @@ def main():
     parser.add_argument("--render-recording", action="store_true",
                         help="synthesise the message once with the live TTS provider and the active voice into "
                              "study/private_reply.wav (plus private_reply.json), for --recording")
+    parser.add_argument("--seated-person", action="store_true",
+                        help="someone sits still at the desk throughout; records a baseline with only them in view "
+                             "before the trials (again after every restart) and marks it in every trial record")
+    parser.add_argument("--baseline-s", type=float, default=BASELINE_S, help="length of that baseline")
     parser.add_argument("--verbose", action="store_true", help="show the full event log in the terminal too")
     args = parser.parse_args()
 
@@ -1028,6 +1062,7 @@ def main():
     jsonl_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}_trials.jsonl")
     video_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}_video.csv")
     discarded_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}_discarded.jsonl")
+    baseline_path = os.path.join(STUDY_DIR, f"privacy_switch_{args.session}_baseline.jsonl")
     if args.render_recording:
         render_recording(REPLY_AUDIO)
         return
@@ -1157,6 +1192,10 @@ def main():
               f"a peek makes the voice quieter")
     else:
         print("Door zone  : none - entries are decided at the room-zone edge, peeks cannot be told apart")
+    print("Seated     : " + ("one person at the desk throughout - baseline next" if args.seated_person
+                             else "nobody (use --seated-person if someone sits in the room)"))
+    session_info["seated_person"] = (record_baseline(log, zone, args.baseline_s, baseline_path)
+                                     if args.seated_person else None)
 
     kept = 0
     try:
