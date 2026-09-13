@@ -660,6 +660,30 @@ def main():
         for row, (label, vals) in enumerate(rows_out, start=1):
             print(f"  % {label} ({len(vals)})")
             print("  " + " ".join(f"({v / 1000:.3f},{row})" for v in vals))
+        section("pgfplots coordinates: plan view (x, y in m)")
+        pts = [x["cross_in_point"] for x in res if x.get("cross_in_point")]
+        print(f"  % room-edge crossing of detected entries ({len(pts)})")
+        print("  " + " ".join(f"({p[1] / 1000:.3f},{p[2] / 1000:.3f})" for p in pts))
+        missed = []
+        for x in res:
+            if x["cls"] != "FN":
+                continue
+            seat = seat_of(logs[x["id"]], baselines)
+            t = next((t for f in x["frames"] for t in f["targets"] if not near_seat(t, seat)
+                      and (zone_distance(t["x"], t["y"], room) or 1) <= 0
+                      and (zone_distance(t["x"], t["y"], door) or 1) > 0), None)
+            if t:
+                missed.append((x["id"], t))
+        print(f"  % first report inside the room, missed entries ({len(missed)}): trial ids "
+              + ", ".join(tid for tid, _ in missed))
+        print("  " + " ".join(f"({t['x'] / 1000:.3f},{t['y'] / 1000:.3f})" for _, t in missed))
+        if door:
+            arc = lambda cx, a0, a1: [(cx + DOOR_NEAR_MM * math.sin(math.radians(a)),
+                                       door["min_y_mm"] - DOOR_NEAR_MM * math.cos(math.radians(a)))
+                                      for a in range(a0, a1 + 1, 10)]
+            boundary = arc(door["min_x_mm"], -90, 0) + arc(door["max_x_mm"], 0, 90)
+            print(f"  % {DOOR_NEAR_MM:.0f} mm from the door zone, room side")
+            print("  " + " ".join(f"({px / 1000:.3f},{py / 1000:.3f})" for px, py in boundary))
     if args.track:
         x = next((x for x in res if x["id"] == args.track), None)
         if x is None:
