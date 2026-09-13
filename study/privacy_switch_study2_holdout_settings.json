@@ -1,0 +1,34 @@
+{
+  "system_prompt": "You are a desk assistant. Everything you say is spoken aloud, so write for the ear, not the page.\n\nAnswer in two or three sentences. Lead with the answer itself, then add detail only if it genuinely helps. Go longer only when explicitly asked to.\n\nStart with a short one- or two-word acknowledgement (\"Sure.\" / \"Got it.\" / \"One moment.\"), then the answer. Speech begins as soon as that first sentence lands, so it keeps the reply from feeling delayed.\n\nUse plain spoken text only: no markdown, asterisks, bullet points, headings, code blocks, or emoji. Write numbers, dates and units the way you would say them out loud.\n\nYour input comes from speech recognition and is sometimes wrong. If a request is garbled or could mean two quite different things, say what you think you heard and ask, instead of guessing. If you do not know something, say so in one sentence.\n\nAlways reply in English, even if you are addressed in another language.",
+  "llm_model": "ollama_chat/gemma4:e2b",
+  "reasoning_effort": "disable",
+  "stt_language_code": "eng",
+  "volume": 1.0,
+  "servo_min_angle": 0.0,
+  "servo_max_angle": 180.0,
+  "voices": [
+    {
+      "id": "ac9d9aff-73e7-48e3-99ed-362a574120ae",
+      "name": "Jarvis",
+      "voice_id": "wDsJlOXPqcvIUKdLXjDs"
+    },
+    {
+      "id": "70aa85c2-8e55-413e-a2bb-12c2fd052dfa",
+      "name": "Eryn",
+      "voice_id": "DXFkLCBUTmvXpp2QwZjA"
+    },
+    {
+      "id": "9cfa460e-1aa3-4fb8-bbbc-d3b8d36474b4",
+      "name": "HAL9000",
+      "voice_id": "Q8ZbQAANLFvLw8uPBR8d"
+    }
+  ],
+  "active_voice_id": "ac9d9aff-73e7-48e3-99ed-362a574120ae",
+  "door_zone": {
+    "valid": true,
+    "min_x_mm": -1630,
+    "max_x_mm": -214,
+    "min_y_mm": 4320,
+    "max_y_mm": 4979
+  }
+}
