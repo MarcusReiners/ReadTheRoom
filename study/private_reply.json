@@ -1,0 +1,12 @@
+{
+  "provider": "elevenlabs",
+  "voice_name": "Jarvis",
+  "voice_id": "wDsJlOXPqcvIUKdLXjDs",
+  "model_id": "eleven_flash_v2_5",
+  "language_code": "en",
+  "sample_rate": 16000,
+  "duration_s": 64.923,
+  "sha256": "4e634322b570d345115fea6bc635c04755f5ce39af6d8ca7d9606f6604bc599c",
+  "rendered_at": "2026-09-13T15:45:49.027",
+  "text": "You have three new messages. The first is from your bank, about your current account balance and a payment that is overdue. The second is from the clinic, confirming your appointment on Thursday and the results of your blood test. The third is from your landlord, about the rent increase that was discussed last week. Would you like me to read the first message in full? It says that your balance is below the agreed limit, and that a fee will be charged unless a transfer is made by Friday. The message also lists the last five transactions on the account, including two card payments and a standing order. The clinic message says that most values are within the normal range, but one value should be discussed with the doctor. The landlord writes that the new amount will apply from the first of next month, and asks you to confirm by email. Shall I draft a reply to any of these messages, or would you like to hear them again?"
+}

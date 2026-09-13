@@ -12,6 +12,7 @@ MAX_JUMP_MM = 800.0
 TRACK_GAP_S = 1.0
 SPEED_WINDOW_S = 0.6
 EXIT_SPEED_MMS = 500.0
+DOOR_NEAR_MM = 800.0
 SCRIPT_NAMES = {"A": "direct entry", "B": "passer-by", "D": "peek", "F": "fast entry",
                 "C": "passer-by, far", "E": "slow entry"}
 
@@ -99,6 +100,85 @@ def load(csv_path, settings_path):
     return rows, logs, door
 
 
+def load_baselines(csv_path):
+    path = csv_path[:-4] + "_baseline.jsonl"
+    if not os.path.exists(path):
+        return {}
+    out = {}
+    with open(path) as f:
+        for line in f:
+            if not line.strip():
+                continue
+            b = json.loads(line)
+            inside = [t for fr in b["events"] for t in fr["targets"] if t["z"]]
+            if not inside:
+                out[b["recorded_at"]] = {**{k: b[k] for k in b if k != "events"}, "r": None}
+                continue
+            x, y = b["median_x_mm"], b["median_y_mm"]
+            out[b["recorded_at"]] = {**{k: b[k] for k in b if k != "events"},
+                                     "r": max(math.hypot(t["x"] - x, t["y"] - y) for t in inside)}
+    return out
+
+
+def near_seat(t, seat):
+    return bool(seat and seat["r"] is not None
+                and math.hypot(t["x"] - seat["median_x_mm"], t["y"] - seat["median_y_mm"]) <= seat["r"])
+
+
+def seat_of(d, baselines):
+    info = (d.get("session_info") or {}).get("seated_person") or {}
+    return baselines.get(info.get("recorded_at"))
+
+
+def longest_still_run(frames, zone, t_from):
+    best, start, last = 0.0, None, None
+    for f in frames:
+        if f["t"] < t_from:
+            continue
+        still = [t for t in f["targets"] if t["v"] == 0 and (zone_distance(t["x"], t["y"], zone) or 1) <= 0]
+        if still and start is None:
+            start = f["t"]
+        if still:
+            last = f["t"]
+            best = max(best, last - start)
+        else:
+            start = None
+    return best
+
+
+def seated_trial(x, d, seat, door, room):
+    frames = x["frames"]
+    helper = [any(near_seat(t, seat) for t in f["targets"]) for f in frames]
+    others = [[t for t in f["targets"] if not near_seat(t, seat)] for f in frames]
+    alone = [h for h, o in zip(helper, others) if not o]
+    out = {"helper_frames": sum(helper), "frames": len(frames), "helper_alone": (sum(alone), len(alone)),
+           "helper_with_other": (sum(h for h, o in zip(helper, others) if o), sum(1 for o in others if o))}
+
+    def in_door(t):
+        return (zone_distance(t["x"], t["y"], door) or 1) <= 0
+
+    t_switch = x["switch"]["t"] if x.get("switch") else None
+    t_limit = t_switch if t_switch is not None else frames[-1]["t"]
+    out["door_before"] = sum(1 for f, o in zip(frames, others) if f["t"] <= t_limit for t in o if in_door(t))
+    out["beyond_before"] = sum(1 for f, o in zip(frames, others) if f["t"] <= t_limit for t in o
+                               if t["y"] > door["max_y_mm"])
+    first_room = next(((f["t"], t) for f, o in zip(frames, others) for t in o
+                       if (zone_distance(t["x"], t["y"], room) or 1) <= 0 and not in_door(t)), None)
+    out["first_room"] = first_room[1] if first_room else None
+    out["first_room_gap"] = zone_distance(first_room[1]["x"], first_room[1]["y"], door) if first_room else None
+    if t_switch is not None and x.get("t_leave_now"):
+        cue = x["t_leave_now"]
+        stay = Counter()
+        for f, h, o in zip(frames, helper, others):
+            if t_switch + 3 <= f["t"] <= cue - 1:
+                stay["both" if h and o else "helper only" if h else "other only" if o else "none"] += 1
+        out["stay"] = stay
+        end = x["voice"]["t"] if x.get("voice") else frames[-1]["t"]
+        out["door_after_cue"] = sum(1 for f, o in zip(frames, others) if cue <= f["t"] <= end for t in o if in_door(t))
+        out["still_in_door_after_cue"] = longest_still_run(frames, door, cue)
+    return out
+
+
 def build_tracks(frames):
     live, hist, next_id = {}, {}, 0
     for f in frames:
@@ -133,13 +213,15 @@ def track_at(hist, t, x, y):
     return best[1] if best and best[0] < 400 else None
 
 
-def crossing(pts, zone, inward):
+def crossing(pts, zone, inward, point=False):
     for (t0, x0, y0, _), (t1, x1, y1, _) in reversed(list(zip(pts, pts[1:]))):
         d0, d1 = zone_distance(x0, y0, zone), zone_distance(x1, y1, zone)
         if d0 is None or d1 is None:
             continue
         if (inward and d0 > 0 >= d1) or (not inward and d0 <= 0 < d1):
-            return t0 + (t1 - t0) * d0 / (d0 - d1)
+            f = d0 / (d0 - d1)
+            t = t0 + (t1 - t0) * f
+            return (t, x0 + (x1 - x0) * f, y0 + (y1 - y0) * f) if point else t
     return None
 
 
@@ -230,6 +312,7 @@ def analyse_trial(r, d, door):
         out["entry_track"] = k
         out["first_seen"] = pts[0] if pts else None
         out["cross_in"] = crossing(pts, room, inward=True)
+        out["cross_in_point"] = crossing(pts, room, inward=True, point=True)
         out["cross_to_switch"] = sw["t"] - out["cross_in"] if out["cross_in"] else None
         out["speed_in"] = ground_speed(pts, enter["t"])
         ent_door = first(ev, "door", pred=lambda e: e["id"] == enter["id"])
@@ -291,6 +374,134 @@ def analyse_trial(r, d, door):
     return out
 
 
+def print_geometry(res, logs, baselines, door, room):
+    section("Geometry in sensor coordinates (x lateral, y along the sensor axis; zones as drawn, "
+            "positions as reported by the radar)")
+    for label, z in (("room zone", room), ("door zone", door)):
+        if not z:
+            continue
+        cx, cy = (z["min_x_mm"] + z["max_x_mm"]) / 2, (z["min_y_mm"] + z["max_y_mm"]) / 2
+        print(f"  {label:9} x {z['min_x_mm']}..{z['max_x_mm']}, y {z['min_y_mm']}..{z['max_y_mm']} mm: "
+              f"{z['max_x_mm'] - z['min_x_mm']} mm wide, {z['max_y_mm'] - z['min_y_mm']} mm deep; centre x {cx:.0f}, "
+              f"y {cy:.0f} mm, {math.hypot(cx, cy):.0f} mm from the sensor at atan(x/y) = "
+              f"{math.degrees(math.atan2(cx, cy)):.1f} deg")
+    pts = [x["cross_in_point"] for x in res if x.get("cross_in_point")]
+    if pts:
+        dist("entry path: x where the room edge was crossed", [p[1] for p in pts], "mm", 1, 0)
+    peeks = []
+    for x in res:
+        if x["script"] != "D" or not x["door"]:
+            continue
+        seat = seat_of(logs[x["id"]], baselines)
+        end = next((e["t"] for e in logs[x["id"]]["events"] if e["kind"] == "door_cleared"
+                    and e["t"] >= x["door"]["t"]), x["frames"][-1]["t"])
+        peeks += [t for f in x["frames"] if x["door"]["t"] <= f["t"] <= end for t in f["targets"]
+                  if not near_seat(t, seat) and (zone_distance(t["x"], t["y"], door) or 1) <= 0]
+    if peeks:
+        dist("peeks: position in the door zone, x", [t["x"] for t in peeks], "mm", 1, 0)
+        dist("peeks: position in the door zone, y", [t["y"] for t in peeks], "mm", 1, 0)
+    stay = []
+    for x in res:
+        if x["cls"] != "TP" or not x.get("t_leave_now"):
+            continue
+        seat = seat_of(logs[x["id"]], baselines)
+        stay += [(t, seat) for f in x["frames"] if x["switch"]["t"] + 3 <= f["t"] <= x["t_leave_now"] - 1
+                 for t in f["targets"] if not near_seat(t, seat) and (zone_distance(t["x"], t["y"], room) or 1) <= 0
+                 and (zone_distance(t["x"], t["y"], door) or 1) > 0]
+    if stay:
+        dist("entrant during the stay, x", [t["x"] for t, _ in stay], "mm", 1, 0)
+        dist("entrant during the stay, y", [t["y"] for t, _ in stay], "mm", 1, 0)
+        dist("  ... distance past the door zone's inner edge", [door["min_y_mm"] - t["y"] for t, _ in stay], "mm", 1, 0)
+        seated = [math.hypot(t["x"] - s["median_x_mm"], t["y"] - s["median_y_mm"]) for t, s in stay if s and s["r"]]
+        if seated:
+            dist("  ... distance to the seated person's position", seated, "mm", 1, 0)
+    for key, b in sorted(baselines.items()):
+        if b["r"] is not None:
+            print(f"  seated person (baseline {key}): x {b['median_x_mm']:.1f}, y {b['median_y_mm']:.1f} mm, "
+                  f"{math.hypot(b['median_x_mm'], b['median_y_mm']):.0f} mm from the sensor, reports within "
+                  f"{b['r']:.0f} mm of that")
+
+
+def print_seated(res, logs, baselines, door, room, path):
+    section("Seated person and a second person moving")
+    for key, b in sorted(baselines.items()):
+        where = (f"at x {b['median_x_mm']:.1f}, y {b['median_y_mm']:.1f} mm; radius = farthest baseline report "
+                 f"from there, {b['r']:.0f} mm" if b["r"] is not None else "never reported")
+        print(f"  baseline {key}: reported in {b['frames_seen']}/{b['frames']} frames, two or more targets in "
+              f"{b['frames_multi']}, {where}")
+    per = [(x, seated_trial(x, logs[x["id"]], seat_of(logs[x["id"]], baselines), door, room)) for x in res
+           if seat_of(logs[x["id"]], baselines)]
+    if not per:
+        print("  no trial recorded a baseline")
+        return
+    hf, fr = sum(s["helper_frames"] for _, s in per), sum(s["frames"] for _, s in per)
+    print(f"  seated person reported in {hf}/{fr} trial frames ({100 * hf / fr:.1f}%) - frames are not "
+          f"independent, so no interval")
+    shares = [(s["helper_frames"] / s["frames"], x["id"]) for x, s in per]
+    print(f"  per trial: every frame in {sum(1 for v, _ in shares if v == 1)}/{len(shares)} trials, "
+          f"lowest {100 * min(shares)[0]:.1f}% (trial {min(shares)[1]})")
+    for key, label in (("helper_alone", "in frames with no other target"),
+                       ("helper_with_other", "in frames with another target")):
+        k, n = sum(s[key][0] for _, s in per), sum(s[key][1] for _, s in per)
+        print(f"  ... {label}: {k}/{n} ({100 * k / n:.1f}%)" if n else f"  ... {label}: no frames")
+    low = [(x["id"], x["script"], s["helper_frames"], s["frames"]) for x, s in per if s["helper_frames"] < s["frames"]]
+    print("  trials with the seated person missing from some frames: " + ", ".join(
+        f"{tid} {sc} ({k}/{n})" for tid, sc, k, n in sorted(low, key=lambda v: v[2] / v[3])))
+    stay = Counter()
+    for _, s in per:
+        stay.update(s.get("stay") or {})
+    if stay:
+        n = sum(stay.values())
+        print("  detected entries, during the stay (switch + 3 s to cue - 1 s): " + ", ".join(
+            f"{k} {stay[k]}/{n} ({100 * stay[k] / n:.1f}%)" for k in ("both", "helper only", "other only", "none")))
+    for cls in ("TP", "FN"):
+        xs = [(x, s) for x, s in per if x["cls"] == cls]
+        if xs:
+            print(f"  {cls}: someone else reported in the door zone before the switch / entry window in "
+                  f"{sum(1 for _, s in xs if s['door_before'])}/{len(xs)} trials, beyond it in "
+                  f"{sum(1 for _, s in xs if s['beyond_before'])}/{len(xs)}")
+    for x, s in per:
+        if x["cls"] == "FN":
+            t = s["first_room"]
+            where = (f"first reported in the room at x {t['x']}, y {t['y']} mm, {s['first_room_gap']:.0f} mm from "
+                     f"the door zone ({'beyond' if s['first_room_gap'] > DOOR_NEAR_MM else 'within'} the "
+                     f"{DOOR_NEAR_MM:.0f} mm near-door radius), radial speed {t['v']} mm/s") if t else "never reported in the room"
+            print(f"    trial {x['id']} {x['script']}: door zone frames {s['door_before']}, beyond {s['beyond_before']}; "
+                  f"{where}; seated person in {s['helper_frames']}/{s['frames']} frames")
+    for cat in ("correct", "missed"):
+        xs = [(x, s) for x, s in per if x.get("reversion") == cat]
+        if xs:
+            print(f"  exits {cat}: someone else reported in the door zone after the leave cue in "
+                  f"{sum(1 for _, s in xs if s['door_after_cue'])}/{len(xs)} trials")
+    still = sorted(((s["still_in_door_after_cue"], x["id"], x.get("reversion"), x.get("exit_to_voice"))
+                    for x, s in per if "still_in_door_after_cue" in s), reverse=True)[:3]
+    for dur, tid, cat, lag in still:
+        print(f"    longest motionless target in the door zone after the cue: trial {tid} ({cat}), {dur:.1f} s; "
+              f"exit crossing -> room clear {'-' if lag is None else f'{lag:.2f} s'}")
+    near_entries = [(x["id"], x["enter"]) for x, _ in per if x.get("enter")
+                    and near_seat({"x": x["enter"]["x"], "y": x["enter"]["y"]}, seat_of(logs[x["id"]], baselines))]
+    print(f"  entries decided at the seated person's position: {len(near_entries)}")
+    discarded = csv_path_discarded(path)
+    if os.path.exists(discarded):
+        with open(discarded) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                d = json.loads(line)
+                seat = seat_of(d, baselines)
+                frames = [e for e in d["events"] if e["kind"] == "frame"]
+                others = [t for fr in frames for t in fr["targets"] if not near_seat(t, seat)]
+                helper = sum(1 for fr in frames if any(near_seat(t, seat) for t in fr["targets"]))
+                print(f"  redone (not counted): {d['discarded_at']} script {d['row']['script_id']} "
+                      f"{d['row'].get('classification')}, reason {d.get('reason')!r}; seated person in "
+                      f"{helper}/{len(frames)} frames, other target reports {len(others)}, of which in the door zone "
+                      f"{sum(1 for t in others if (zone_distance(t['x'], t['y'], door) or 1) <= 0)}")
+
+
+def csv_path_discarded(path):
+    return path[:-4] + "_discarded.jsonl"
+
+
 def section(title):
     print(f"\n{title}\n{'-' * len(title)}")
 
@@ -306,6 +517,7 @@ def main():
     path = args.csv or max((p for p in glob.glob(os.path.join(study, "privacy_switch_*.csv"))
                             if not p.endswith("_video.csv")), key=os.path.getmtime)
     rows, logs, door = load(path, args.settings)
+    baselines = load_baselines(path)
     res = [analyse_trial(r, logs[r["trial_id"]], door) for r in rows if r["trial_id"] in logs]
     room = next(iter(logs.values()))["zone"]
     door = next((d["door_zone"] for d in logs.values() if d.get("door_zone")), door)
@@ -364,8 +576,9 @@ def main():
 
     section("Missed entries")
     for x in [x for x in res if x["cls"] == "FN"]:
-        fs = next((f for f in x["frames"] if f["targets"]), None)
-        pos = f"{fs['targets'][0]['x']},{fs['targets'][0]['y']} v{fs['targets'][0]['v']}" if fs else "-"
+        seat = seat_of(logs[x["id"]], baselines)
+        fs = next((t for f in x["frames"] for t in f["targets"] if not near_seat(t, seat)), None)
+        pos = f"{fs['x']},{fs['y']} v{fs['v']}" if fs else "-"
         print(f"  trial {x['id']} {x['script']}: at door {'yes' if x['door'] else 'no'}, ducked "
               f"{'yes' if x['duck'] else 'no'}, door outcome {x['door_outcome']}, first target {pos}")
 
@@ -430,8 +643,13 @@ def main():
     dist("frame rate", [x["fps"] for x in res], "Hz", 1, 1)
     seen = sum(x["n_seen"] for x in res)
     multi = sum(x["n_multi"] for x in res)
-    print(f"  frames with a target: {seen}; with two or more targets: {multi} ({100 * multi / seen:.1f}%)")
+    print(f"  frames with a target: {seen}; with two or more targets: {multi} ({100 * multi / seen:.1f}%)"
+          + ("  - includes the seated person" if baselines else ""))
     print(f"  trials with at least one multi-target frame: {sum(1 for x in res if x['n_multi'])}/{len(res)}")
+
+    print_geometry(res, logs, baselines, door, room)
+    if baselines:
+        print_seated(res, logs, baselines, door, room, path)
 
     if args.coords:
         section("pgfplots coordinates: depth past the door zone's outer edge (m)")
