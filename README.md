@@ -183,6 +183,7 @@ Other scripts, roughly in the order you'd reach for them:
 |---|---|
 | `track_audio.py` | Live DOA tracking on the servo alone, using the same production code path as `main.py` but without STT/LLM/TTS/radar/matrix |
 | `print_doa.py` | Prints only the tracked DOA angle — used to find `DOA_FRONT_REFERENCE_DEGREES` by standing dead ahead |
+| `probe_doa_circle.py` | Guided direction logging all around the head (default every 30°, including behind it): the head points to show where to stand, returns home, and every raw DOA reading plus both voice flags is logged at 20 Hz from before speech onset. Reports per direction the settled estimate, the share of readings on the wrong side, and whether the production estimate or a plain median would turn the head the right way. Writes `study/doa_circle_<session>.csv` and `_polls.csv`. Main app stopped |
 | `probe_vad.py` | Guided comparison of the array's two voice flags, `VOICEACTIVITY` (what head tracking and recording use) and `SPEECHDETECTED`, on speech and on knocks, typing, footsteps and the like; prints active share, onsets and first reaction per flag and saves every poll to `study/vad_probe_<session>.csv`. Main app stopped |
 | `sweep_servo.py` | Sweeps the full safe window end to end; the quickest way to check the range is what you think it is |
 | `probe_servo_range.py` | Finds the servo's **real** mechanical limits one small step at a time, waiting for you between each. Stops at the first sign of resistance |

@@ -272,6 +272,16 @@ class RespeakerDOAAdapter:
             angle = apply_calibration(angle, self._calibration)
         return angle
 
+    @property
+    def calibration_points(self) -> int:
+        """How many points of DOA_CALIBRATION_PATH are in use - 0 if none was
+        given, or if the file was missing or rejected and raw bearings apply."""
+        return len(self._calibration) if self._calibration else 0
+
+    def get_raw_direction_degrees(self) -> float:
+        """The array's own 0..359 reading, before front reference, gain or table."""
+        return float(self._read_param(*_DOAANGLE_PARAM))
+
     def get_voice_active(self) -> bool:
         """Onboard VAD flag - use this to gate on "loud enough"/speech-like sound
         instead of reacting to every DOA reading, most of which are ambient noise."""

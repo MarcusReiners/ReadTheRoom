@@ -610,11 +610,12 @@ def main():
             doa_onset_skip_s=args.doa_onset_skip,
             sample_window_s=max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24),
         )
+    accept_range = None if args.production else (base_turntable.safe_min_angle, base_turntable.safe_max_angle)
     start_doa_tracking(
         doa, turntable, SilentFace(),
         lock=threading.Lock(),
         silence_timeout_s=0,
-        accept_range=(base_turntable.safe_min_angle, base_turntable.safe_max_angle),
+        accept_range=accept_range,
         paused=tracking_paused,
         **sampling,
     )
@@ -623,21 +624,34 @@ def main():
     print(f"Data sheet : {csv_path}")
     print(f"Trial log  : {jsonl_path}")
     print(f"Servo range: {base_turntable.safe_min_angle:.0f}-{base_turntable.safe_max_angle:.0f} deg")
-    print(f"Post-move deaf period: {args.post_move_quiet:.1f}s")
-    print(f"Min DOA samples to move: {args.min_doa_samples}")
-    print(f"Onset skipped: first {args.doa_onset_skip:.2f}s after voice starts "
-          "(array needs time to converge)")
-    print(f"DOA sample spacing: {args.doa_sample_interval * 1000:.0f}ms "
-          f"(5 samples span {args.doa_sample_interval * 4:.2f}s minimum, "
-          f"up to {max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24):.1f}s "
-          "through VAD dropouts)")
-    print(f"Head commits ~{args.doa_onset_skip + args.doa_sample_interval * 4:.2f}s after voice "
-          f"starts - stimulus must sustain past that")
+    if args.production:
+        points = getattr(base_doa, "calibration_points", 0)
+        step = prod["doa_sample_interval_s"] or prod["eye_lead_s"] / max(1, prod["doa_samples"] - 1)
+        print("Tracker    : PRODUCTION - start_doa_tracking() defaults, as main.py starts it")
+        print(f"  onset skip {prod['doa_onset_skip_s']:.2f}s, up to {prod['doa_samples']} samples "
+              f"{step * 1000:.1f}ms apart within {prod['sample_window_s']:.2f}s, at least {prod['min_doa_samples']}, "
+              f"deaf {prod['post_move_quiet_s']:.2f}s after a move")
+        print(f"  off-axis gain {config.DOA_OFFAXIS_GAIN:g}; calibration table "
+              + (f"{config.DOA_CALIBRATION_PATH} ({points} points loaded)" if points
+                 else f"{config.DOA_CALIBRATION_PATH} NOT LOADED - raw bearings" if config.DOA_CALIBRATION_PATH
+                 else "none"))
+        print("  all bearings accepted (no range filter), head never recentres during a trial")
+    else:
+        print(f"Post-move deaf period: {args.post_move_quiet:.1f}s")
+        print(f"Min DOA samples to move: {args.min_doa_samples}")
+        print(f"Onset skipped: first {args.doa_onset_skip:.2f}s after voice starts "
+              "(array needs time to converge)")
+        print(f"DOA sample spacing: {args.doa_sample_interval * 1000:.0f}ms "
+              f"(5 samples span {args.doa_sample_interval * 4:.2f}s minimum, "
+              f"up to {max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24):.1f}s "
+              "through VAD dropouts)")
+        print(f"Head commits ~{args.doa_onset_skip + args.doa_sample_interval * 4:.2f}s after voice "
+              f"starts - stimulus must sustain past that")
+        print(f"Off-axis gain: {args.offaxis_gain:.4f}"
+              f"{' (raw, uncorrected)' if args.offaxis_gain == 1.0 else ' (compression corrected)'}")
+        print(f"Accepted bearings: {base_turntable.safe_min_angle:.0f}-"
+              f"{base_turntable.safe_max_angle:.0f} deg (others ignored as impossible)")
     print(f"Miss timeout: {args.miss_timeout:.1f}s from first voice")
-    print(f"Off-axis gain: {args.offaxis_gain:.4f}"
-          f"{' (raw, uncorrected)' if args.offaxis_gain == 1.0 else ' (compression corrected)'}")
-    print(f"Accepted bearings: {base_turntable.safe_min_angle:.0f}-"
-          f"{base_turntable.safe_max_angle:.0f} deg (others ignored as impossible)")
     print(f"Condition  : angle={args.angle} distance={args.distance}m noise={args.noise}, {args.reps} reps")
     if args.play:
         print(f"Stimulus   : {args.play} (auto, +{args.play_latency_ms:.0f}ms latency offset)")
@@ -652,15 +666,22 @@ def main():
         print("ENTER = keep and continue, r = redo this rep, q = quit.\n")
 
     if args.production:
+        points = getattr(base_doa, "calibration_points", 0)
+        table = ""
+        if config.DOA_CALIBRATION_PATH:
+            table = (f"+table:{config.DOA_CALIBRATION_PATH}({points} points)" if points
+                     else f"+table:{config.DOA_CALIBRATION_PATH}(NOT LOADED)")
         cfg = {
             "onset_skip_s": prod["doa_onset_skip_s"],
-            "sample_interval_s": prod["doa_sample_interval_s"],
+            "sample_interval_s": round(prod["doa_sample_interval_s"]
+                                       or prod["eye_lead_s"] / max(1, prod["doa_samples"] - 1), 4),
             "min_samples": prod["min_doa_samples"],
             "post_move_quiet_s": prod["post_move_quiet_s"],
-            "offaxis_gain": f"production:{config.DOA_OFFAXIS_GAIN}"
-                            + (f"+table:{config.DOA_CALIBRATION_PATH}" if config.DOA_CALIBRATION_PATH else ""),
+            "offaxis_gain": f"production:{config.DOA_OFFAXIS_GAIN}" + table,
             "sample_window_s": prod["sample_window_s"],
             "doa_samples": prod["doa_samples"],
+            "accept_range": None,
+            "silence_timeout_s": 0,
         }
     else:
         cfg = {
@@ -671,6 +692,8 @@ def main():
             "offaxis_gain": args.offaxis_gain,
             "sample_window_s": max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24),
             "doa_samples": 5,
+            "accept_range": list(accept_range),
+            "silence_timeout_s": 0,
         }
     condition = {"angle_true": args.angle, "distance_m": args.distance, "noise_condition": args.noise}
     rep = 1
