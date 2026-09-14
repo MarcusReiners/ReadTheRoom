@@ -1,0 +1,275 @@
+% Production session of Study 1, in parts for content.tex:
+%   Part 1 replaces the \todo{Fill in the production session once run: ...}
+%          under \subsection{Design} \label{sec:feas-s1-design}
+%   Part 2 replaces the \todo under \subsection{Production Configuration}
+%          \label{sec:results-s1-production}
+%   Part 3 (optional) is a sentence for \subsection{Summary} \label{sec:results-s1-summary}
+% Requires: booktabs, pgfplots (compat=1.18) with the groupplots library, \abs from commands.tex. No siunitx.
+% Numbers: python3 scripts/analyse_head_accuracy.py study/head_accuracy_production.csv --moves
+%          python3 scripts/analyse_head_accuracy.py study/head_accuracy_20260909.csv --only 45:1.25:none 90:1.25:none 135:1.25:none --trials
+%          python3 scripts/analyse_head_accuracy.py study/head_accuracy_production.csv --drop production:11 --trials
+%          python3 scripts/analyse_head_accuracy.py study/head_accuracy_20260909.csv --trials
+%          python3 scripts/analyse_head_accuracy.py study/head_accuracy_validation.csv --trials
+% Figure:  python3 scripts/analyse_head_accuracy.py study/head_accuracy_20260909.csv study/head_accuracy_production.csv --only 45:1.25:none 135:1.25:none --pgf-until 4.5
+
+% ======================================================================
+% Part 1 - method
+% ======================================================================
+
+The production session was run on 14 September 2026 between 15:48 and 15:55:
+five trials at each of the three bearings, at 1.25\,m in quiet, 15 in all, with
+the stimulus started by hand as in the main session.
+\todo{Confirm that the room, the stimulus recording and its 60\,dB(A) level were those of the main session.}
+The harness started the tracker with the default arguments of
+\texttt{start\_doa\_tracking()}, read from the function itself rather than
+copied, and recorded the resulting configuration with every trial: no discard
+after the voice-activity onset, whose own reading counts as the first sample; up
+to five readings 37.5\,ms apart within 0.6\,s, and at least two; 0.6\,s after
+each move during which voice is ignored; and no filter on the estimated bearing.
+\texttt{DOA\_OFFAXIS\_GAIN} was 1.0 and no \texttt{DOA\_CALIBRATION\_PATH} was
+set, so the head followed the uncorrected bearing, with the front reference at
+90\textdegree{}. As in the main session, the head was not returned home after a
+silence during a trial, whereas the running assistant returns it after 5\,s of
+silence.
+
+% ======================================================================
+% Part 2 - results
+% ======================================================================
+
+The head reacted in all 15 trials. Pooled over the three bearings, its final
+heading was a median 5.0\textdegree{} (IQR 2.0--6.0\textdegree{}) from the true
+bearing, against 5.0\textdegree{} (IQR 0.0--6.0\textdegree{}) in the same three
+cells of the main session, and it came to rest a median 1.525\,s (IQR
+1.336--1.540\,s) after the array's first voice report, against 3.428\,s (IQR
+3.413--3.670\,s). Table~\ref{tab:s1-production} breaks both down by bearing. The
+pooled figures conceal three differences, taken in turn below: the production
+head reaches its bearing in two moves rather than one, its final error is less
+consistent, and in one trial it turned away from the source.
+
+\begin{table}[htb]
+  \centering
+  \small
+  \caption{Study and production configuration at 1.25\,m in quiet, five trials
+  per cell, with no detection failures in either. Errors are commanded heading
+  minus true bearing; the first column gives the error after the first move.
+  Times are median [IQR] from the array's first voice report; \emph{latency} is
+  the measure of section~\ref{sec:results-s1-latency}. The study
+  configuration made one move per trial, so its two time columns coincide.}
+  \label{tab:s1-production}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}llrrrll@{}}
+    \toprule
+    & & \multicolumn{2}{c}{Median $\abs{e}$ (\textdegree)} & Signed $e$ (\textdegree) & \multicolumn{2}{c}{Time (s)} \\
+    \cmidrule(lr){3-4} \cmidrule(l){6-7}
+    Bearing & Config. & first move & final & mean $\pm$ SD & first move & latency \\
+    \midrule
+    45\textdegree{}  & study      &  6.0 & 6.0 & $+6.40 \pm 1.14$   & 3.666 [3.662, 3.670] & 3.666 [3.662, 3.670] \\
+                     & production & 17.0 & 5.0 & $+4.20 \pm 6.98$   & 0.493 [0.422, 0.525] & 1.538 [1.506, 1.542] \\
+    \addlinespace
+    90\textdegree{}  & study      &  0.0 & 0.0 & $0.00 \pm 0.00$    & 3.378 [3.122, 4.402] & 3.378 [3.122, 4.402] \\
+                     & production &  2.0 & 2.0 & $-1.20 \pm 1.10$   & 0.367 [0.259, 0.367] & 1.250 [1.250, 1.250] \\
+    \addlinespace
+    135\textdegree{} & study      &  6.0 & 6.0 & $-5.40 \pm 0.89$   & 3.414 [3.414, 3.427] & 3.414 [3.414, 3.427] \\
+                     & production & 19.0 & 6.0 & $-31.80 \pm 57.71$ & 0.533 [0.485, 0.539] & 1.534 [1.525, 1.538] \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsubsection{Two Moves Instead of One}
+
+Figure~\ref{fig:s1-production} shows how the head gets there. In the study
+configuration it stays at home until the estimate exists and then turns once.
+In the production configuration the first move was complete a median 0.493\,s
+and 0.533\,s after the first voice report at 45\textdegree{} and
+135\textdegree{}, but it left the head a median 17.0\textdegree{} and
+19.0\textdegree{} from the source. The readings behind that move are taken as
+soon as voice activity begins, and in several trials some of them still pointed
+close to straight ahead: in trial~3 at 45\textdegree{} all five lay between
+86\textdegree{} and 88\textdegree{}, and the head turned by 3\textdegree{}; in
+trial~13 at 135\textdegree{} three of the five read 90\textdegree{}, and the head
+did not turn at all. Once the 0.6\,s after the move had passed, a second estimate
+turned the head again in four of the five trials at each off-axis bearing. At
+90\textdegree{} the head turned by 2\textdegree{} in three trials and not at all
+in two. Every trial produced a second estimate while the 13.6\,s stimulus was still
+playing; an utterance that ends before the second estimate would leave the head at
+its first position.
+
+\begin{figure}[htb]
+  \centering
+  \definecolor{studyc}{HTML}{9A9A9A}
+  \definecolor{prodc}{HTML}{2A78D6}
+  \begin{tikzpicture}
+    \begin{groupplot}[
+      group style={group size=2 by 1, horizontal sep=1.2cm},
+      scale only axis, width=0.39\textwidth, height=0.36\textwidth,
+      xmin=0, xmax=4.5, xtick={0,1,2,3,4},
+      tick label style={font=\footnotesize},
+      label style={font=\footnotesize},
+      title style={font=\footnotesize},
+      grid=major, grid style={line width=0.2pt, draw=black!12},
+      axis line style={draw=black!45}, tick style={draw=black!45},
+      xlabel={Time from first voice report (s)},
+    ]
+      \nextgroupplot[title={45\textdegree{}}, ymin=-20, ymax=50,
+        ytick={-10,0,10,20,30,40,50}, ylabel={Heading error (\textdegree)}]
+      \addplot[black!55, line width=0.6pt, domain=0:4.5, samples=2, forget plot] {0};
+      % trial 26
+      \addplot[studyc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (3.122,45.00) (3.122,39.29) (3.173,39.29) (3.173,33.57) (3.224,33.57) (3.224,27.86) (3.275,27.86) (3.275,22.14) (3.326,22.14) (3.326,16.43) (3.377,16.43) (3.377,10.71) (3.427,10.71) (3.427,5.00) (4.500,5.00)};
+      % trial 27
+      \addplot[studyc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (3.378,45.00) (3.378,38.67) (3.436,38.67) (3.436,32.33) (3.493,32.33) (3.493,26.00) (3.551,26.00) (3.551,19.67) (3.608,19.67) (3.608,13.33) (3.666,13.33) (3.666,7.00) (4.500,7.00)};
+      % trial 28
+      \addplot[studyc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (3.378,45.00) (3.378,38.83) (3.435,38.83) (3.435,32.67) (3.492,32.67) (3.492,26.50) (3.548,26.50) (3.548,20.33) (3.605,20.33) (3.605,14.17) (3.662,14.17) (3.662,8.00) (4.500,8.00)};
+      % trial 29
+      \addplot[studyc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (3.378,45.00) (3.378,38.50) (3.436,38.50) (3.436,32.00) (3.495,32.00) (3.495,25.50) (3.553,25.50) (3.553,19.00) (3.611,19.00) (3.611,12.50) (3.670,12.50) (3.670,6.00) (4.500,6.00)};
+      % trial 30
+      \addplot[studyc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (3.378,45.00) (3.378,38.50) (3.437,38.50) (3.437,32.00) (3.495,32.00) (3.495,25.50) (3.553,25.50) (3.553,19.00) (3.612,19.00) (3.612,12.50) (3.670,12.50) (3.670,6.00) (4.500,6.00)};
+      % trial 1
+      \addplot[prodc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (0.258,45.00) (0.258,38.75) (0.309,38.75) (0.309,32.50) (0.360,32.50) (0.360,26.25) (0.411,26.25) (0.411,20.00) (0.462,20.00) (0.462,13.75) (0.512,13.75) (0.512,7.50) (0.563,7.50) (0.563,1.25) (0.614,1.25) (0.614,-5.00) (4.500,-5.00)};
+      % trial 2
+      \addplot[prodc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (0.258,45.00) (0.258,41.75) (0.313,41.75) (0.313,38.50) (0.367,38.50) (0.367,35.25) (0.422,35.25) (0.422,32.00) (1.314,32.00) (1.314,26.80) (1.371,26.80) (1.371,21.60) (1.428,21.60) (1.428,16.40) (1.485,16.40) (1.485,11.20) (1.542,11.20) (1.542,6.00) (4.500,6.00)};
+      % trial 3
+      \addplot[prodc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (0.258,45.00) (0.258,44.00) (0.314,44.00) (0.314,43.00) (0.370,43.00) (0.370,42.00) (1.250,42.00) (1.250,36.40) (1.309,36.40) (1.309,30.80) (1.368,30.80) (1.368,25.20) (1.426,25.20) (1.426,19.60) (1.485,19.60) (1.485,14.00) (4.500,14.00)};
+      % trial 4
+      \addplot[prodc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (0.258,45.00) (0.258,39.40) (0.317,39.40) (0.317,33.80) (0.375,33.80) (0.375,28.20) (0.434,28.20) (0.434,22.60) (0.493,22.60) (0.493,17.00) (1.378,17.00) (1.378,14.00) (1.432,14.00) (1.432,11.00) (1.485,11.00) (1.485,8.00) (1.538,8.00) (1.538,5.00) (4.500,5.00)};
+      % trial 5
+      \addplot[prodc, line width=0.8pt, forget plot]
+        coordinates {(0.000,45.00) (0.258,45.00) (0.258,39.50) (0.311,39.50) (0.311,34.00) (0.365,34.00) (0.365,28.50) (0.418,28.50) (0.418,23.00) (0.471,23.00) (0.471,17.50) (0.525,17.50) (0.525,12.00) (1.458,12.00) (1.458,9.25) (1.510,9.25) (1.510,6.50) (1.562,6.50) (1.562,3.75) (1.614,3.75) (1.614,1.00) (4.500,1.00)};
+      \nextgroupplot[title={135\textdegree{}}, ymin=-50, ymax=20,
+        ytick={-50,-40,-30,-20,-10,0,10,20},
+        legend style={at={(0.97,0.97)}, anchor=north east, font=\footnotesize,
+                      draw=none, fill=white, cells={anchor=west}}]
+      \addplot[black!55, line width=0.6pt, domain=0:4.5, samples=2, forget plot] {0};
+      % trial 36
+      \addplot[studyc, line width=0.8pt]
+        coordinates {(0.000,-45.00) (3.122,-45.00) (3.122,-38.50) (3.181,-38.50) (3.181,-32.00) (3.239,-32.00) (3.239,-25.50) (3.297,-25.50) (3.297,-19.00) (3.356,-19.00) (3.356,-12.50) (3.414,-12.50) (3.414,-6.00) (4.500,-6.00)};
+      \addlegendentry{study configuration}
+      % trial 37
+      \addplot[studyc, line width=0.8pt, forget plot]
+        coordinates {(0.000,-45.00) (3.378,-45.00) (3.378,-39.14) (3.430,-39.14) (3.430,-33.29) (3.482,-33.29) (3.482,-27.43) (3.534,-27.43) (3.534,-21.57) (3.585,-21.57) (3.585,-15.71) (3.637,-15.71) (3.637,-9.86) (3.689,-9.86) (3.689,-4.00) (4.500,-4.00)};
+      % trial 38
+      \addplot[studyc, line width=0.8pt, forget plot]
+        coordinates {(0.000,-45.00) (3.122,-45.00) (3.122,-38.50) (3.180,-38.50) (3.180,-32.00) (3.239,-32.00) (3.239,-25.50) (3.297,-25.50) (3.297,-19.00) (3.355,-19.00) (3.355,-12.50) (3.413,-12.50) (3.413,-6.00) (4.500,-6.00)};
+      % trial 39
+      \addplot[studyc, line width=0.8pt, forget plot]
+        coordinates {(0.000,-45.00) (3.122,-45.00) (3.122,-39.29) (3.173,-39.29) (3.173,-33.57) (3.224,-33.57) (3.224,-27.86) (3.275,-27.86) (3.275,-22.14) (3.325,-22.14) (3.325,-16.43) (3.376,-16.43) (3.376,-10.71) (3.427,-10.71) (3.427,-5.00) (4.500,-5.00)};
+      % trial 40
+      \addplot[studyc, line width=0.8pt, forget plot]
+        coordinates {(0.000,-45.00) (3.122,-45.00) (3.122,-38.50) (3.181,-38.50) (3.181,-32.00) (3.239,-32.00) (3.239,-25.50) (3.297,-25.50) (3.297,-19.00) (3.355,-19.00) (3.355,-12.50) (3.414,-12.50) (3.414,-6.00) (4.500,-6.00)};
+      % trial 11
+      \addplot[prodc, line width=0.8pt]
+        coordinates {(0.000,-45.00) (0.258,-45.00) (0.258,-72.58) (0.309,-72.58) (0.309,-100.17) (0.360,-100.17) (0.360,-127.75) (0.411,-127.75) (0.411,-135.00) (4.500,-135.00)};
+      \addlegendentry{production}
+      % trial 12
+      \addplot[prodc, line width=0.8pt, forget plot]
+        coordinates {(0.000,-45.00) (0.258,-45.00) (0.258,-39.17) (0.313,-39.17) (0.313,-33.33) (0.368,-33.33) (0.368,-27.50) (0.423,-27.50) (0.423,-21.67) (0.478,-21.67) (0.478,-15.83) (0.533,-15.83) (0.533,-10.00) (1.410,-10.00) (1.410,-8.67) (1.468,-8.67) (1.468,-7.33) (1.525,-7.33) (1.525,-6.00) (4.500,-6.00)};
+      % trial 13
+      \addplot[prodc, line width=0.8pt, forget plot]
+        coordinates {(0.000,-45.00) (1.138,-45.00) (1.138,-38.83) (1.195,-38.83) (1.195,-32.67) (1.251,-32.67) (1.251,-26.50) (1.308,-26.50) (1.308,-20.33) (1.365,-20.33) (1.365,-14.17) (1.422,-14.17) (1.422,-8.00) (4.500,-8.00)};
+      % trial 14
+      \addplot[prodc, line width=0.8pt, forget plot]
+        coordinates {(0.000,-45.00) (0.258,-45.00) (0.258,-39.80) (0.315,-39.80) (0.315,-34.60) (0.372,-34.60) (0.372,-29.40) (0.428,-29.40) (0.428,-24.20) (0.485,-24.20) (0.485,-19.00) (1.362,-19.00) (1.362,-15.25) (1.419,-15.25) (1.419,-11.50) (1.477,-11.50) (1.477,-7.75) (1.534,-7.75) (1.534,-4.00) (4.500,-4.00)};
+      % trial 15
+      \addplot[prodc, line width=0.8pt, forget plot]
+        coordinates {(0.000,-45.00) (0.260,-45.00) (0.260,-39.00) (0.316,-39.00) (0.316,-33.00) (0.372,-33.00) (0.372,-27.00) (0.428,-27.00) (0.428,-21.00) (0.483,-21.00) (0.483,-15.00) (0.539,-15.00) (0.539,-9.00) (1.426,-9.00) (1.426,-8.00) (1.482,-8.00) (1.482,-7.00) (1.538,-7.00) (1.538,-6.00) (4.500,-6.00)};
+      \node[font=\scriptsize, prodc, anchor=south west] at (axis cs:0.45,-50) {trial~11: to $-135$\textdegree{}};
+    \end{groupplot}
+  \end{tikzpicture}
+  \caption{Heading error (commanded heading minus true bearing) over time at
+  1.25\,m in quiet, one line per trial, stepped at every servo update and held
+  after the last. The head starts at home, 45\textdegree{} from the source. Grey:
+  study configuration; blue: production. Trial~11 leaves the plot at the bottom
+  and stays at $-135$\textdegree{}. At 90\textdegree{} (not shown) the head turned
+  by 2\textdegree{} at most in either configuration.}
+  \label{fig:s1-production}
+\end{figure}
+
+\subsubsection{Final Error}
+
+Once at rest, the production head was about as close to the source as the study
+configuration left it: a median 5.0\textdegree{} against 6.0\textdegree{} at
+45\textdegree{}, 6.0\textdegree{} against 6.0\textdegree{} at 135\textdegree{},
+and 2.0\textdegree{} against 0.0\textdegree{} at 90\textdegree{}. It was less
+consistent. At 45\textdegree{} the final error ranged from $-5$\textdegree{} to
+$+14$\textdegree{}, with a standard deviation of 6.98\textdegree{} against
+1.14\textdegree{}. At 135\textdegree{}, leaving out the trial described next, the
+signed mean was $-6.00 \pm 1.63$\textdegree{} ($n = 4$), against
+$-5.40 \pm 0.89$\textdegree{}. With five trials per cell the comparison is
+descriptive and was not tested.
+
+\subsubsection{A Turn Away from the Source}
+
+In trial~11 at 135\textdegree{} the head turned to 0\textdegree{}, the limit of
+its sweep on the side away from the source, and stayed there: an error of
+$-135$\textdegree{}. The readings are expressed relative to the head, with
+90\textdegree{} straight ahead, and run from $-90$\textdegree{} to
+270\textdegree{}, both of which lie directly behind it. The first estimate
+rested on the readings $-90$, $-90$, 119, 119 and 119\textdegree{}. The circular
+median (section~\ref{sec:feas-s1-procedure}) unwraps each reading onto the branch
+of the circle nearest the first one, which placed 119\textdegree{} at
+$-241$\textdegree{}, and the median of the unwrapped values, $-241$\textdegree{},
+lies far outside the sweep; the servo clamped it to 0\textdegree{}. The second
+estimate began the same way ($-62$, $-62$, 232, 230 and 231\textdegree{}), came
+out at $-128$\textdegree{}, and left the head where it was. The study
+configuration waits 1.5\,s before sampling and discards estimates outside the
+sweep rather than clamping them; production does neither.
+
+A plain median of the same five readings is 119\textdegree{}, which would have
+turned the head towards the source. Where it would then have come to rest cannot
+be reconstructed, because every later reading depends on the heading. To check
+what the choice of median does elsewhere, every move of the three sessions was
+rebuilt from its logged readings. The rebuilt circular median reproduced the
+recorded estimate in all 133 moves (83 in the main session, 15 in the validation
+session and 35 in this one), and a plain median differed from it only in the two
+moves of trial~11. None of the readings that fed no move spanned 180\textdegree{}
+or more, the condition for the two medians to disagree. The results of the main
+and validation sessions are therefore unchanged under a plain median.
+
+\subsubsection{What the Latency Measures}
+
+The latency measure of section~\ref{sec:results-s1-latency} runs to the last
+move the tracker issued before the trial ended, whether or not that move changed
+the heading. In the study configuration every trial ended after one move, so the
+measure is the time to that move. The production tracker keeps estimating while
+speech continues, and the measure then includes estimates that leave the head
+where it is. At 90\textdegree{} the recorded 1.250\,s is the time of a second
+estimate that did not move the head, and the longest value, 3.826\,s in
+trial~10, comes from five estimates none of which moved it. Measured instead to
+the last update that changed the commanded angle, the off-axis medians are
+1.538\,s (IQR 1.485--1.542\,s) at 45\textdegree{} and 1.525\,s (IQR
+1.422--1.534\,s) at 135\textdegree{}, close to the recorded values, since at
+those bearings the second estimate was a real move in four of five trials.
+
+\subsubsection{Is the Study Configuration Representative?}
+
+The session answers the question it was run for in two parts. For where the head
+comes to rest at 1.25\,m in quiet, the study configuration is representative:
+the final errors are of the same size, and at both off-axis bearings the signed
+mean points towards the front in both configurations, at 135\textdegree{} once
+trial~11 is left out. For how the head gets
+there, and how reliably, it is not. The deployed head completes a first move a
+median 0.367--0.533\,s after the first voice report and is at rest after
+1.525\,s rather than 3.428\,s, but its first move is coarse, its final bearing
+is less consistent, and in one of 15 trials the combination of sampling at the
+onset and a circular median turned it away from the talker. Fifteen trials show
+that this failure occurs; they do not estimate how often. Neither distance nor
+noise was varied, and both affected the study configuration strongly
+(sections~\ref{sec:results-s1-distance} and~\ref{sec:results-s1-noise}).
+
+% ======================================================================
+% Part 3 (optional) - for \subsection{Summary} \label{sec:results-s1-summary},
+% after "... 5.2\,s under babble."
+% ======================================================================
+
+% With the production defaults, at 1.25\,m in quiet, the head came to rest a
+% median 1.5\,s after voice onset with a final error of the same size, but it
+% reached that bearing through a coarse first move, and in one of 15 trials it
+% turned away from the talker (section~\ref{sec:results-s1-production}).

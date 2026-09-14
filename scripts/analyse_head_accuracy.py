@@ -1,8 +1,10 @@
 import argparse
 import csv
 import glob
+import json
 import math
 import os
+import re
 from collections import defaultdict
 
 FACTORS = ["angle_true", "distance_m", "noise_condition"]
@@ -275,6 +277,303 @@ def report_gain(analysed):
         print("constant is wrong and the model needs to be distance-dependent.")
 
 
+def median_angle_as_deployed(angles):
+    base = angles[0]
+    return median([base + ((a - base + 180.0) % 360.0 - 180.0) for a in angles])
+
+
+def servo_heading(heading, target):
+    return min(180.0, max(0.0, heading + target - 90.0))
+
+
+def load_trial_details(paths, analysed):
+    wanted = {(r.get("session", ""), str(r.get("trial_id", ""))): r for r in analysed}
+    details = []
+    for path in paths:
+        jpath = os.path.splitext(path)[0] + "_trials.jsonl"
+        if not os.path.exists(jpath):
+            print(f"  {os.path.basename(jpath)} not found - {os.path.basename(path)} skipped")
+            continue
+        found = {}
+        with open(jpath) as f:
+            for line in f:
+                if line.strip():
+                    d = json.loads(line)
+                    key = (d.get("session", ""), str(d.get("trial_id")))
+                    if key in wanted:
+                        found[key] = d
+        print(f"  {os.path.basename(jpath)}: {len(found)} trial record(s) matched")
+        details.extend((wanted[key], d) for key, d in found.items())
+    return details
+
+
+def rebuild_moves(d):
+    skip = float(d["config"].get("onset_skip_s") or 0)
+    k = int(d["config"].get("doa_samples") or 5)
+    readings = d["doa_samples"]
+    accounted = set()
+    prev = float("-inf")
+    moves = []
+    for m in (m for m in d["moves"] if m["kind"] == "track"):
+        group = [i for i, s in enumerate(readings) if prev < s["t"] <= m["t"]]
+        chosen = (group[1:] if skip > 0 else group)[-k:]
+        accounted.update(chosen)
+        if skip > 0 and group:
+            accounted.add(group[0])
+        moves.append((m, [readings[i]["doa_angle"] for i in chosen]))
+        prev = m["t"]
+    runs, run = [], []
+    for i, s in enumerate(readings):
+        if i in accounted:
+            if run:
+                runs.append(run)
+            run = []
+        else:
+            run.append(s["doa_angle"])
+    if run:
+        runs.append(run)
+    return moves, runs
+
+
+def motion_times(d):
+    readings = d["doa_samples"]
+    track = [m for m in d["moves"] if m["kind"] == "track"]
+    out = {"first": None, "at_rest": None, "moved_later": False, "decisions": len(track)}
+    if not readings or not track:
+        return out
+    t0 = readings[0]["t"]
+    out["first"] = track[0]["t"] - t0
+    last_angle = readings[0]["head_heading"]
+    for p in d["pwm_updates"]:
+        if abs(p["angle"] - last_angle) > 0.005:
+            out["at_rest"] = p["t"] - t0
+            if p["t"] > track[0]["t"]:
+                out["moved_later"] = True
+        last_angle = p["angle"]
+    return out
+
+
+def table_from_config(d):
+    m = re.search(r"\+table:(.+)\((\d+) points\)$", str(d["config"].get("offaxis_gain", "")))
+    if not m:
+        return None
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), m.group(1))
+    by_true = defaultdict(list)
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            t, r = fnum(row, "true_angle"), fnum(row, "reported_angle")
+            if t is not None and r is not None:
+                by_true[t].append(r)
+    table = sorted((median(v), t) for t, v in by_true.items())
+    if len(table) != int(m.group(2)):
+        raise SystemExit(f"{path} now has {len(table)} points, the run loaded {m.group(2)} - not the same table")
+    return table
+
+
+def uncorrect(value, table):
+    pts = [(t, r) for r, t in table]
+    if value <= pts[0][0]:
+        (t1, r1), (t2, r2) = pts[0], pts[1]
+    elif value >= pts[-1][0]:
+        (t1, r1), (t2, r2) = pts[-2], pts[-1]
+    else:
+        (t1, r1), (t2, r2) = next((a, b) for a, b in zip(pts, pts[1:]) if a[0] <= value <= b[0])
+    return r1 if t2 == t1 else r1 + (r2 - r1) * (value - t1) / (t2 - t1)
+
+
+def print_tables(details):
+    seen = set()
+    for _, d in details:
+        m = re.search(r"\+table:(.+)\((\d+) points\)$", str(d["config"].get("offaxis_gain", "")))
+        if not m or m.group(1) in seen:
+            continue
+        seen.add(m.group(1))
+        table_from_config(d)
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), m.group(1))
+        by_true = defaultdict(list)
+        with open(path, newline="") as f:
+            for row in csv.DictReader(f):
+                t, r = fnum(row, "true_angle"), fnum(row, "reported_angle")
+                if t is not None and r is not None:
+                    by_true[t].append((r, fnum(row, "distance_m")))
+        print(f"\nCalibration table in use: {m.group(1)} ({m.group(2)} points)")
+        print(f"  {'true':>6} {'reps':>5} {'median reported':>16} {'reported per rep':>20}  distance")
+        for t in sorted(by_true):
+            reps = by_true[t]
+            print(f"  {t:>6g} {len(reps):>5} {median([r for r, _ in reps]):>16g} "
+                  f"{' '.join(f'{r:g}' for r, _ in reps):>20}  {sorted({dist for _, dist in reps})}")
+
+
+def report_implied_bearings(details):
+    print("\nWhere the last estimate puts the source, from uncorrected readings")
+    print("  implied = heading before the last move + (uncorrected estimate - 90). The last estimate is taken")
+    print("  with the head already turned, so the source is close to its axis. For a run with a table the")
+    print("  readings are un-mapped through the same table; they should come out as whole degrees.")
+    by_cell = defaultdict(list)
+    for row, d in details:
+        by_cell[(row["_source"], row["angle_true"], row["distance_m"], row["noise_condition"])].append((row, d))
+    for key in sorted(by_cell):
+        items = by_cell[key]
+        source = f"{key[0]} {key[1]:g} deg {key[2]:g} m {key[3]}"
+        implied = {"first": [], "last": []}
+        parts = {"first": [], "last": []}
+        off_whole = 0.0
+        for row, d in sorted(items, key=lambda rd: int(rd[1]["trial_id"])):
+            moves, _ = rebuild_moves(d)
+            if not moves:
+                continue
+            table = table_from_config(d)
+            for which, (m, used) in (("first", moves[0]), ("last", moves[-1])):
+                raw = [uncorrect(v, table) for v in used] if table else used
+                off_whole = max([off_whole] + [abs(v - round(v)) for v in raw])
+                bearing = m["heading_before"] + median_angle_as_deployed(raw) - 90.0
+                implied[which].append(bearing)
+                parts[which].append(f"{d['trial_id']}: {bearing:g}")
+        print(f"  {source}  (largest distance of an uncorrected reading from a whole degree {off_whole:.3f})")
+        for which, label in (("first", "first estimate, head at home"), ("last", "last estimate")):
+            vals = implied[which]
+            print(f"    {label:29} median {median(vals):.2f} [{quantile(vals, .25):.2f}, {quantile(vals, .75):.2f}]"
+                  f"   per trial {', '.join(parts[which])}")
+
+
+def print_moves(details):
+    print("\nPer trial: seconds from the array's first voice report; each move is logged when the head")
+    print("has reached it. Errors are commanded heading minus true bearing.")
+    for row, d in sorted(details, key=lambda rd: (rd[0]["_source"], rd[0]["angle_true"], int(rd[1]["trial_id"]))):
+        times = motion_times(d)
+        moves, _ = rebuild_moves(d)
+        if not moves:
+            continue
+        t0 = d["doa_samples"][0]["t"]
+        true = row["angle_true"]
+        first, final = moves[0][0]["resulting_heading"], moves[-1][0]["resulting_heading"]
+        rest = "-" if times["at_rest"] is None else f"{times['at_rest']:.3f}"
+        print(f"  {row['_source']} trial {d['trial_id']:>3} true {true:g}: first {first:g} ({first - true:+g}), "
+              f"final {final:g} ({final - true:+g}), {times['decisions']} decision(s), "
+              f"first move {times['first']:.3f}, at rest {rest}, settle {row.get('settle_from_voice_s')}")
+        for m, used in moves:
+            print(f"      {m['t'] - t0:6.3f}  readings {' '.join(f'{v:g}' for v in used):<28} "
+                  f"estimate {m['target']:g}  heading {m['heading_before']:g} -> {m['resulting_heading']:g}")
+
+
+def print_trajectories(details, until_s):
+    print(f"\nHeading error over time (pgfplots coordinates): commanded heading minus true bearing at every")
+    print(f"PWM update, from the array's first voice report, held at its last value until {until_s:g} s.")
+    for row, d in sorted(details, key=lambda rd: (rd[0]["_source"], rd[0]["angle_true"], int(rd[1]["trial_id"]))):
+        if not d["doa_samples"]:
+            continue
+        t0 = d["doa_samples"][0]["t"]
+        true = row["angle_true"]
+        heading = d["doa_samples"][0]["head_heading"]
+        points = [(0.0, heading - true)]
+        for p in d["pwm_updates"]:
+            t = p["t"] - t0
+            if t > until_s:
+                break
+            if abs(p["angle"] - heading) > 0.005:
+                points.append((t, heading - true))
+                points.append((t, p["angle"] - true))
+                heading = p["angle"]
+        points.append((until_s, heading - true))
+        coords = " ".join(f"({t:.3f},{e:.2f})" for t, e in points)
+        print(f"% {row['_source']} trial {d['trial_id']} true {true:g}")
+        print(f"coordinates {{{coords}}};")
+
+
+def fmt_med_iqr(vals):
+    if not vals:
+        return "-"
+    return f"{median(vals):.3f} [{quantile(vals, .25):.3f}, {quantile(vals, .75):.3f}]"
+
+
+def report_trials(paths, analysed, show_moves=False, trajectories_until_s=None):
+    print("\n" + "-" * 78)
+    print("TRIAL RECORDS (rebuilt from the _trials.jsonl readings)")
+    print("-" * 78)
+    details = load_trial_details(paths, analysed)
+    if not details:
+        return
+
+    print("\nEstimator: each head move rebuilt from the readings that fed it")
+    print("(onset read dropped when the onset skip is on, then the last doa_samples readings).")
+    by_file = defaultdict(list)
+    for row, d in details:
+        by_file[row["_source"]].append((row, d))
+    for source, items in by_file.items():
+        n_moves = reproduced = 0
+        differs, not_rebuilt, wide_runs = [], [], []
+        for row, d in items:
+            moves, runs = rebuild_moves(d)
+            first_diff = True
+            for idx, (m, used) in enumerate(moves, 1):
+                n_moves += 1
+                if not used or abs(median_angle_as_deployed(used) - m["target"]) > 0.02:
+                    not_rebuilt.append((d["trial_id"], idx, m["target"], used))
+                    continue
+                reproduced += 1
+                plain = median(used)
+                if abs(plain - m["target"]) > 0.02:
+                    differs.append((row, d, idx, m, used, plain, first_diff))
+                    first_diff = False
+            for run in runs:
+                if len(run) > 1 and max(run) - min(run) >= 180.0:
+                    wide_runs.append((d["trial_id"], run))
+        print(f"\n  {source}: {reproduced}/{n_moves} moves reproduce the recorded target; "
+              f"plain median differs on {len(differs)}")
+        for tid, idx, target, used in not_rebuilt:
+            print(f"    NOT REBUILT trial {tid} move {idx}: target {target}, readings {used}")
+        for row, d, idx, m, used, plain, first in differs:
+            before = m["heading_before"]
+            print(f"    trial {d['trial_id']} (true {row['angle_true']:g}) move {idx}"
+                  f"{'' if first else ' (after a differing move - not a valid counterfactual)'}: "
+                  f"readings {' '.join(f'{v:g}' for v in used)}")
+            print(f"      deployed {m['target']:g} -> heading {servo_heading(before, m['target']):g}   "
+                  f"plain {plain:g} -> heading {servo_heading(before, plain):g}   (head was at {before:g})")
+        unused = sum(len(r) for r in [run for _, d in items for run in rebuild_moves(d)[1]])
+        print(f"    readings that fed no move: {unused}; runs spanning 180 deg or more "
+              f"(where the estimators could disagree): {len(wide_runs)}")
+        for tid, run in wide_runs:
+            print(f"      trial {tid}: {' '.join(f'{v:g}' for v in run)}")
+
+    print("\nLatency split, seconds from the array's first voice report")
+    print("  decisions = track moves issued (incl. ones that left the head where it was)")
+    print("  first     = first move complete (logged once the head reached it)")
+    print("  first|e|  = median absolute error of the heading after that first move, degrees")
+    print("  moved     = trials in which the head moved at all; later = moved again after the first move")
+    print("  at rest   = last PWM update that changed the angle (trials where the head moved)")
+    print("  settle    = settle_from_voice_s as recorded (last move or PWM event of any kind)")
+    print(f"\n{'angle':>6} {'dist':>5} {'noise':>8} {'n':>3} {'decisions':>9}  "
+          f"{'first median [IQR]':>24} {'first|e|':>8}  {'moved':>5} {'later':>5} "
+          f"{'at rest median [IQR]':>24}  {'settle median [IQR]':>24}")
+    cells = defaultdict(list)
+    for row, d in details:
+        cells[(row["angle_true"], row["distance_m"], row["noise_condition"])].append((row, d))
+    for key in sorted(cells):
+        firsts, first_errs, rests, settles, decisions, later = [], [], [], [], [], 0
+        for row, d in cells[key]:
+            times = motion_times(d)
+            track = [m for m in d["moves"] if m["kind"] == "track"]
+            if times["first"] is not None:
+                firsts.append(times["first"])
+                first_errs.append(abs(track[0]["resulting_heading"] - row["angle_true"]))
+            if times["at_rest"] is not None:
+                rests.append(times["at_rest"])
+            later += times["moved_later"]
+            if row.get("settle_from_voice_s") is not None:
+                settles.append(row["settle_from_voice_s"])
+            decisions.append(times["decisions"])
+        print(f"{key[0]:>6g} {key[1]:>5g} {key[2]:>8} {len(cells[key]):>3} {median(decisions):>9g}  "
+              f"{fmt_med_iqr(firsts):>24} {median(first_errs):>8.2f}  {len(rests):>5} {later:>5} "
+              f"{fmt_med_iqr(rests):>24}  {fmt_med_iqr(settles):>24}")
+
+    print_tables(details)
+    report_implied_bearings(details)
+    if show_moves:
+        print_moves(details)
+    if trajectories_until_s:
+        print_trajectories(details, trajectories_until_s)
+
+
 def factor_label(rec, factor):
     if factor == "noise_condition":
         return rec.get("noise_condition", "?")
@@ -290,6 +589,18 @@ def main():
     parser.add_argument("--include-simulated", action="store_true",
                         help="keep rehearsal trials recorded with --simulate")
     parser.add_argument("--plots", action="store_true", help="write PNG plots next to the CSVs")
+    parser.add_argument("--trials", action="store_true",
+                        help="read the matching _trials.jsonl: rebuild each head move, compare the deployed "
+                             "circular median with a plain median, and split latency")
+    parser.add_argument("--moves", action="store_true",
+                        help="with --trials, also list every trial's moves and the readings behind them")
+    parser.add_argument("--pgf-until", type=float, metavar="S",
+                        help="with --trials, print each trial's heading error over time as pgfplots "
+                             "coordinates up to S seconds after the first voice report")
+    parser.add_argument("--only", nargs="+", metavar="ANGLE:DIST:NOISE",
+                        help="restrict the analysis to these cells, e.g. 45:1.25:none")
+    parser.add_argument("--drop", nargs="+", metavar="SESSION:TRIAL",
+                        help="leave these trials out, for a sensitivity check, e.g. production:11")
     args = parser.parse_args()
 
     study_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "study")
@@ -301,6 +612,18 @@ def main():
         return
 
     rows = enrich(load(paths))
+    if args.only:
+        cells = set()
+        for spec in args.only:
+            angle, dist, noise = spec.split(":")
+            cells.add((float(angle), float(dist), noise))
+        rows = [r for r in rows if (r["angle_true"], r["distance_m"], r["noise_condition"]) in cells]
+        print(f"Restricted to {', '.join(args.only)}")
+    if args.drop:
+        drop = {tuple(spec.split(":", 1)) for spec in args.drop}
+        before = len(rows)
+        rows = [r for r in rows if (r.get("session", ""), str(r.get("trial_id", ""))) not in drop]
+        print(f"Sensitivity check: left out {before - len(rows)} trial(s) ({', '.join(args.drop)})")
     if not rows:
         print("No usable trials found.")
         return
@@ -442,6 +765,9 @@ def main():
         print("-" * 78)
         print("Machine-timed on the Pi: array's first voice report -> head at rest.")
         run_kruskal(lat, value=lambda r: r.get("settle_from_voice_s"))
+
+    if args.trials or args.moves or args.pgf_until:
+        report_trials(paths, analysed, show_moves=args.moves, trajectories_until_s=args.pgf_until)
 
     if args.plots:
         make_plots(rows, analysed, paths, args.include_misses)
