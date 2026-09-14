@@ -547,8 +547,9 @@ def start_doa_tracking(
                             time.sleep(poll_interval_s)
                             continue
                         logger.info(
-                            "[DOA] Voice detected at %.0f deg (median of %d readings).",
-                            angle, len(samples),
+                            "[DOA] Voice detected at %.0f deg (median of %d readings: %s; head at %.0f deg).",
+                            angle, len(samples), " ".join(f"{s:.0f}" for s in samples),
+                            getattr(turntable, "current_heading_degrees", float("nan")),
                         )
 
                         moved = turntable.predict_relative_move(angle)

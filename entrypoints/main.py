@@ -411,10 +411,15 @@ def handle_turn(
     # Speak aloud only while alone (or voice hasn't been muted from the chat
     # app) - otherwise just stream the answer as text into the chat.
     should_speak = conversation.voice_enabled and conversation.modality == "voice"
+    deltas = mirrored_deltas()
     if should_speak:
-        full_text = tts.speak_stream(mirrored_deltas())
+        # speak_stream() stops reading on a TTS error (an unknown voice, a
+        # used-up quota); whatever it left unread still goes to the chat, so
+        # the answer is never cut off mid-sentence along with the voice.
+        full_text = tts.speak_stream(deltas)
+        full_text += "".join(deltas)
     else:
-        full_text = "".join(mirrored_deltas())
+        full_text = "".join(deltas)
 
     if cancel_event is not None and cancel_event.is_set():
         # Cut short by a higher-priority chat message - don't persist a
