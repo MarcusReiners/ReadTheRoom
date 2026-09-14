@@ -682,6 +682,7 @@ def main():
             "doa_samples": prod["doa_samples"],
             "accept_range": None,
             "silence_timeout_s": 0,
+            "front_reference_degrees": config.DOA_FRONT_REFERENCE_DEGREES,
         }
     else:
         cfg = {
@@ -694,6 +695,7 @@ def main():
             "doa_samples": 5,
             "accept_range": list(accept_range),
             "silence_timeout_s": 0,
+            "front_reference_degrees": config.DOA_FRONT_REFERENCE_DEGREES,
         }
     condition = {"angle_true": args.angle, "distance_m": args.distance, "noise_condition": args.noise}
     rep = 1
