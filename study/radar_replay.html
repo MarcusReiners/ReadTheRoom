@@ -216,11 +216,17 @@ const SCRIPT_NAMES = {
   A: "Direct entry", B: "Passer-by", C: "Passer-by, far", D: "Peek at the door", E: "Slow entry", F: "Fast entry",
 };
 
-function outcomeText(row) {
+function outcomeText(row, trial) {
   if (!row) return "";
   const c = row.classification;
   if (row.script_id === "D") return row.ducked === "Y" ? "Voice quieter, no switch" : "No switch";
-  if (c === "TP") return row.reverted === "Y" ? "Switched to chat, back to speaking after leaving" : "Switched to chat";
+  if (c === "TP") {
+    const exit = trial && trial.exit;
+    if (!exit) return "Switched to chat";
+    if (exit.kind === "missed") return "Switched to chat, exit not noticed";
+    const what = exit.via === "clear" ? "room judged clear" : "back to speaking";
+    return exit.kind === "premature" ? `Switched to chat, ${what} too early` : `Switched to chat, ${what} after leaving`;
+  }
   if (c === "FN") return "Entry missed";
   if (c === "FP") return "Switched without an entry";
   return row.ducked === "Y" ? "No switch, voice briefly quieter" : "No switch";
@@ -239,6 +245,19 @@ function parseLog(text) {
     const speech = others.find((e) => e.kind === "speech_start");
     const t0 = speech ? speech.t : (frames[0] ? frames[0].t : 0);
     const last = Math.max(frames.length ? frames[frames.length - 1].t : t0, others.length ? others[others.length - 1].t : t0);
+    const sw = others.find((e) => e.kind === "modality" && e.to === "web");
+    let exit = null;
+    if (sw && rec.row && rec.row.classification === "TP") {
+      const cue = sw.t + ((rec.session_info && rec.session_info.stay_s) || 15);
+      const back = others.find((e) => e.t >= sw.t && e.kind === "clear" && e.clear)
+        || others.find((e) => e.t >= sw.t && e.kind === "modality" && e.to === "voice" && e.reason === "alone_again");
+      exit = { cue, t: back ? back.t : null, via: back ? (back.kind === "clear" ? "clear" : "voice") : null,
+               kind: !back ? "missed" : back.t < cue ? "premature" : "correct" };
+      if (cue <= last) {
+        others.push({ t: cue, kind: "cue" });
+        others.sort((a, b) => a.t - b.t);
+      }
+    }
     // Same two stages as the web app: a low-pass on each reading, then a
     // 0.25 s glide that starts from wherever the dot is displayed right now
     // (a CSS transition restarting mid-way), not from the previous reading.
@@ -269,7 +288,7 @@ function parseLog(text) {
       id: rec.trial_id, script: rec.row ? rec.row.script_id : "?", row: rec.row || null,
       zone: rec.zone || null, door: rec.door_zone || null,
       t0, tStart: frames.length ? frames[0].t : t0, tEnd: last,
-      steps, events: others,
+      steps, events: others, exit,
     });
   }
   return trials;
@@ -303,24 +322,28 @@ function eventLabel(e) {
     case "door_cleared": return e.outcome === "gone" ? "Left the doorway" : null;
     case "leave": return "Left the room";
     case "speech_end": return e.completed ? "Reply finished" : null;
+    case "clear": return e.clear ? "Room looks clear" : "Someone in the room again";
+    case "cue": return "Study: visitor told to leave";
     default: return null;
   }
 }
 
 function stateAt(trial, t) {
-  let speaking = false, modality = "voice", ducked = false;
+  let speaking = false, modality = "voice", ducked = false, roomClear = false;
   const feed = [];
   for (const e of trial.events) {
     if (e.t > t) break;
     if (e.kind === "speech_start") speaking = true;
     if (e.kind === "speech_end" || (e.kind === "takeover" && e.effective)) speaking = false;
-    if (e.kind === "modality") modality = e.to;
+    if (e.kind === "modality") { modality = e.to; roomClear = false; }
     if (e.kind === "duck") ducked = !!e.active;
+    if (e.kind === "clear") roomClear = !!e.clear;
     const label = eventLabel(e);
     if (label) feed.push({ t: e.t, label });
   }
   let status, tone;
-  if (modality === "web") { status = "Chat only – person in room"; tone = "muted"; }
+  if (modality === "web" && roomClear) { status = "Chat only – room looks clear"; tone = "ok"; }
+  else if (modality === "web") { status = "Chat only – person in room"; tone = "muted"; }
   else if (speaking && ducked) { status = "Speaking quietly – someone at the door"; tone = "door"; }
   else if (speaking) { status = "Speaking"; tone = "ok"; }
   else { status = "Listening"; tone = "muted"; }
@@ -450,7 +473,7 @@ function drawPanel(ctx, trial, t, th, box, captions = true) {
   ctx.fillText(SCRIPT_NAMES[trial.script] || `Script ${trial.script}`, x0, box.y + pad + H * 0.03);
   ctx.fillStyle = th.muted;
   ctx.font = `${Math.round(H * 0.022)}px ${FONT}`;
-  ctx.fillText(`Trial ${trial.id} · ${outcomeText(trial.row)}`, x0, box.y + pad + H * 0.068);
+  ctx.fillText(`Trial ${trial.id} · ${outcomeText(trial.row, trial)}`, x0, box.y + pad + H * 0.068);
 
   ctx.textAlign = "right";
   ctx.fillStyle = th.text;
@@ -608,7 +631,7 @@ if (typeof module !== "undefined") {
       $("doorHint").textContent = trial.door ? "Entered by hand - applies to every trial without one."
                                              : "Not in this log - enter it by hand to draw it.";
     }
-    $("trialInfo").textContent = `${trial.steps.length} radar frames over ${dur} s · ${outcomeText(trial.row)}`;
+    $("trialInfo").textContent = `${trial.steps.length} radar frames over ${dur} s · ${outcomeText(trial.row, trial)}`;
     refreshControls();
     render(previewTime());
   }

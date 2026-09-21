@@ -335,14 +335,29 @@ def start_doa_tracking(
     doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
-    post_move_quiet_s: float = 0.6, servo_recentering=None, min_doa_samples: int = 2,
-    accept_range=None, paused=None, sample_window_s: float = 0.6,
-    doa_sample_interval_s=None, doa_onset_skip_s: float = 0.0, turn_in_progress=None,
+    post_move_quiet_s: float = 1.5, servo_recentering=None, min_doa_samples: int = 3,
+    accept_range=None, paused=None, sample_window_s: float = 6.0,
+    doa_sample_interval_s=0.25, doa_onset_skip_s: float = 1.5, turn_in_progress=None,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
     detected speech - same logic as scripts/test_hardware.py's
     live_doa_tracking().
+
+    The sampling defaults are the configuration Study 1's main session
+    measured: skip the first 1.5s after voice starts, then take readings
+    250ms apart (at least three, up to doa_samples), and stay deaf for 1.5s
+    after a move. The head waits for the array's estimate to settle and turns
+    once, instead of turning on the onset readings and again while the person
+    is still talking - fewer moves mid-utterance means less servo noise in the
+    recording. The earlier defaults sampled from the onset (37.5ms apart within
+    0.6s, no skip); on the bench that made a coarse first move and, once,
+    turned the head away from the talker.
+
+    accept_range: (min, max) bearings the head can actually face, or a
+    callable returning that pair (so a safe range edited from the web app is
+    picked up without a restart). Estimates outside it are ignored rather
+    than clamped to an end stop. None accepts everything.
 
     lock serializes USB control-transfer access to the ReSpeaker with any
     other thread reading the same device concurrently (see main.py's
@@ -536,13 +551,14 @@ def start_doa_tracking(
                             time.sleep(poll_interval_s)
                             continue
                         angle = median_angle(samples)
-                        if accept_range is not None and not (accept_range[0] <= angle <= accept_range[1]):
+                        bounds = accept_range() if callable(accept_range) else accept_range
+                        if bounds is not None and not (bounds[0] <= angle <= bounds[1]):
                             # Physically impossible for this mount: the head
                             # cannot turn there, so the target would only clamp
                             # to an end stop and park the head off-axis.
                             logger.info(
                                 "[DOA] %.0f deg is outside %s - ignored.",
-                                angle, accept_range,
+                                angle, bounds,
                             )
                             time.sleep(poll_interval_s)
                             continue
