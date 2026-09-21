@@ -15,6 +15,9 @@ class DummyFaceDisplayAdapter:
     def set_eyes_closed(self, closed: bool, duration_s: float = 0.4) -> None:
         pass
 
+    def set_happy(self, happy: bool) -> None:
+        pass
+
     def animate_eye_direction(self, to_angle_degrees: float, duration_s: float) -> None:
         pass
 
