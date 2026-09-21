@@ -11,7 +11,9 @@ class LocalAddons:
     """Add-ons that live on one machine only. Every *_addon.py in
     local_addons/ (git-ignored, next to the code) that defines setup(ctx) is
     loaded at start; setup() returns an object, or None to stay inactive.
-    That object may implement:
+    ctx carries bus, config, conversation, tts, face (the eyes) and radar
+    (whose send_command() also drives the tie strip). The object may
+    implement:
 
         reply_to(text, source) -> str | None
             Called before a turn reaches the language model. A string is
