@@ -4,7 +4,7 @@ A desk voice assistant that "reads the room": a radar sensor detects how many pe
 
 ## How it works
 
-1. Recording starts automatically when the mic array's onboard VAD hears speech, and stops after a short trailing silence (`vad_input_loop`). Pressing ENTER still works as a manual override. Audio via arecord + sox with a channel downmix to mono; `sox -d` on macOS
+1. Recording starts automatically when the mic array's onboard VAD hears speech, including the fraction of a second before it was detected (`MIC_PREROLL_S`), and stops after a short trailing silence (`vad_input_loop`). Pressing ENTER still works as a manual override. Audio via arecord + sox with a channel downmix to mono; `sox -d` on macOS
 2. Transcription via a swappable STT provider (default: ElevenLabs Scribe; local `faster-whisper` fallback)
 3. Response from a swappable LLM provider via [LiteLLM](https://github.com/BerriAI/litellm) (default: OpenAI; any LiteLLM-supported provider works by changing one config value, incl. local Ollama)
 4. Speech synthesis via a swappable TTS provider (default: ElevenLabs; local Piper fallback), streamed sentence by sentence while the LLM is still generating
@@ -126,6 +126,7 @@ All settings live in [config.py](config.py) and are read from environment variab
 | `WHISPER_MODEL`, `WHISPER_THREADS`, `WHISPER_VAD` | Local STT fallback: path to the CT2 model, CPU threads, VAD filter |
 | `PIPER_MODEL` | Local TTS fallback: path to the Piper voice (.onnx) |
 | `MIC_DEVICE`, `MIC_CHANNELS`, `MIC_RATE` | ALSA capture device (Pi only) |
+| `MIC_PREROLL_S` | Seconds of audio from before voice was detected that a recording starts with (default `0.6`), so the first syllable isn't cut off. The mic stays open for this while listening is allowed and keeps only that last fraction of a second in memory; during a visit, the settings tab, typing in the chat or an add-on hold it is closed completely, and nothing the assistant says ends up in it. `0` starts the recorder only on detection, as before (Pi only) |
 | `SPEAKER_DEVICE` | ALSA playback device (Pi only) |
 | `USE_LED_MATRIX`, `GPIO_SLOWDOWN`, `LED_MATRIX_BRIGHTNESS`, `LED_MATRIX_PWM_BITS` | Enable/disable the LED matrix (eyes) and its signal/refresh tuning |
 | `USE_SERVO`, `SERVO_GPIO_PIN` | Enable/disable the servo turntable and its GPIO pin |

@@ -33,8 +33,11 @@ from adapters.chat_bridge import ChatBridgeAdapter
 from adapters.conversation_store import ConversationStore
 from adapters.llm import ERROR_REPLIES, LLMGatewayAdapter
 from adapters.hardware.face_display import DummyFaceDisplayAdapter
+from adapters.hardware.mic_stream import MicStream, StreamRecording
 
 logger = logging.getLogger(__name__)
+
+_mic_stream: MicStream | None = None
 
 
 def _spawn_recorder(output_file: str):
@@ -51,6 +54,9 @@ def _spawn_recorder(output_file: str):
         return proc, None
 
     raw_file = "temp_in_raw.pcm"
+    if _mic_stream is not None:
+        _mic_stream.begin(raw_file)
+        return StreamRecording(_mic_stream), raw_file
     proc = subprocess.Popen(
         ["arecord", "-D", config.MIC_DEVICE, "-t", "raw",
          "-r", str(config.MIC_RATE), "-f", "S16_LE", "-c", str(config.MIC_CHANNELS), raw_file],
@@ -610,6 +616,16 @@ def main() -> None:
         # calibration gets its handles here.
         chat_bridge.doa = doa
         chat_bridge.assistant_speaking = assistant_speaking
+
+        if sys.platform != "darwin" and config.MIC_PREROLL_S > 0:
+            global _mic_stream
+            _mic_stream = MicStream(
+                config.MIC_DEVICE, config.MIC_RATE, config.MIC_CHANNELS, preroll_s=config.MIC_PREROLL_S,
+                stop_when=(visit_discretion, addons.hold("holds_listening"), calibration_mode, composing_mode),
+                mute_when=(assistant_speaking, servo_recentering),
+            )
+            _mic_stream.start()
+            logger.info("[Mic] Kept open with a %.1f s pre-roll while listening is allowed.", config.MIC_PREROLL_S)
 
         start_doa_tracking(
             doa, turntable, face, lock=doa_lock,
