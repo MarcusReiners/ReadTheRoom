@@ -81,6 +81,7 @@ class LedEyesAdapter:
         self._openness_anim_start_time = 0.0
         self._openness_anim_duration_s = 0.0
         self._was_calibrating = False
+        self._happy = False
 
         self._eye_r = max(4, min(self.height // 6, self.width // 10))
         self._dot_r = max(2, self._eye_r // 2)
@@ -97,6 +98,12 @@ class LedEyesAdapter:
         keeps running underneath, so reopening returns to normal blinking.
         """
         self._start_openness_animation(0.0 if closed else 1.0, duration_s)
+
+    def set_happy(self, happy: bool) -> None:
+        """Half-moon eyes - a smiling squint, flat along the bottom - in
+        place of the round pupils. They still follow set_eye_direction(), and
+        closing the eyes still takes precedence."""
+        self._happy = happy
 
     def set_eye_direction(self, angle_degrees: float) -> None:
         """Instant snap - cancels any in-progress animate_eye_direction()."""
@@ -155,7 +162,7 @@ class LedEyesAdapter:
             self._draw_closing_eyes(canvas, openness)
             return
 
-        blinking = (t % self.BLINK_INTERVAL) < self.BLINK_DURATION
+        blinking = (t % self.BLINK_INTERVAL) < self.BLINK_DURATION and not self._happy
 
         current_angle = self._current_angle()
         clamped_angle = max(self._min_angle_degrees, min(self._max_angle_degrees, current_angle))
@@ -169,6 +176,9 @@ class LedEyesAdapter:
         px = int((self._eye_r - self._dot_r) * offset_fraction * math.sin(rad))
 
         for cx in (self._left_cx, self._right_cx):
+            if self._happy:
+                _fill_half_moon(canvas, cx + px, self._cy + self._dot_r // 2 + 1, self._dot_r + 2, _WHITE)
+                continue
             if blinking:
                 for dx in range(-self._dot_r, self._dot_r + 1):
                     canvas.SetPixel(cx + dx, self._cy, *_WHITE)
@@ -195,6 +205,13 @@ def _fill_circle(canvas, cx: int, cy: int, r: int, color: tuple) -> None:
         for dx in range(-r, r + 1):
             if dx * dx + dy * dy <= r * r:
                 canvas.SetPixel(cx + dx, cy + dy, *color)
+
+
+def _fill_half_moon(canvas, cx: int, base_y: int, r: int, color: tuple) -> None:
+    for dy in range(-r, 1):
+        for dx in range(-r, r + 1):
+            if dx * dx + dy * dy <= r * r + r:
+                canvas.SetPixel(cx + dx, base_y + dy, *color)
 
 
 def _fill_ellipse(canvas, cx: int, cy: int, rx: int, ry: int, color: tuple) -> None:
