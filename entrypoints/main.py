@@ -595,6 +595,8 @@ def main() -> None:
 
         start_doa_tracking(
             doa, turntable, face, lock=doa_lock,
+            # Read on every estimate - the safe range is editable from the web app.
+            accept_range=lambda: (turntable.safe_min_angle, turntable.safe_max_angle),
             assistant_speaking=assistant_speaking, calibration_mode=calibration_mode,
             servo_recentering=servo_recentering, turn_in_progress=turn_in_progress,
             paused=visit_discretion,
