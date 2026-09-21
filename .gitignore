@@ -8,3 +8,4 @@ logs/
 conversations.db
 .DS_Store
 node_modules/
+local_addons/

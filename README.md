@@ -147,6 +147,10 @@ All settings live in [config.py](config.py) and are read from environment variab
 | `MAX_RECORD_SECONDS` | Watchdog against endless recordings |
 | `LOG_DIR`, `LOG_FILE`, `LOG_LEVEL`, `LOG_MAX_BYTES`, `LOG_BACKUP_COUNT` | Logging (see below) |
 
+## Local add-ons
+
+Modules named `*_addon.py` in `local_addons/` (git-ignored) are loaded at start if the folder exists; see `service_layer/local_addons.py` for what an add-on can hook into. Without the folder nothing changes.
+
 ## Logging
 
 Every domain event (`PersonCountChanged`, `SpeechPlaybackStarted`, …) and all adapter activity (STT/LLM/TTS timings, transcribed text, errors, model load status) go through the stdlib `logging` module, set up once in [logging_setup.py](logging_setup.py). Output goes to both the console and a local rotating log file — `logs/readtheroom.log` by default, capped at `LOG_MAX_BYTES` (5 MB) × `LOG_BACKUP_COUNT` (5) so it can't fill the SD card. Logs stay on the device by design — nothing is uploaded, since conversations can be confidential.
