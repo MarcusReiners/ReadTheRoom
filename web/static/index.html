@@ -326,7 +326,9 @@
   .settings-panel h2 {
     font-size: 15px;
     font-weight: 600;
-    margin: 0 0 14px;
+    margin: 0 0 12px;
+    width: 100%;
+    max-width: 620px;
   }
   .radar-section {
     display: flex;
@@ -445,13 +447,22 @@
     width: 100%;
     accent-color: var(--accent);
   }
-  .zone-mode-row {
+  .zone-mode-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px 20px;
     width: 100%;
     max-width: 620px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 16px;
     margin-top: 12px;
+  }
+  .zone-mode-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
   .zone-mode-row select {
     border: 1px solid var(--border);
@@ -484,6 +495,7 @@
     flex-wrap: wrap;
     width: 100%;
   }
+  .range-row .field-label { margin-top: 0; }
   .range-row input[type="number"] {
     width: 78px;
     flex: none;
@@ -507,9 +519,6 @@
   }
   .range-row input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .range-sep { font-size: 13px; color: var(--muted); }
-  .servo-wrap .range-row,
-  .servo-wrap .zone-mode-hint,
-  .servo-wrap .field-label { align-self: stretch; }
   .voice-list {
     display: flex;
     flex-direction: column;
@@ -584,9 +593,21 @@
     max-width: 620px;
     display: flex;
     flex-direction: column;
+    gap: 12px;
+  }
+  .servo-readout {
+    display: flex;
+    flex-direction: column;
     align-items: center;
     gap: 12px;
   }
+  .servo-readout:not(:last-child) {
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .servo-wrap .radar-status,
+  .assistant-wrap .radar-status { text-align: left; }
+  .servo-readout .radar-status { text-align: center; }
   .servo-offset {
     font-size: 22px;
     font-weight: 600;
@@ -726,34 +747,38 @@
             </svg>
           </div>
           <div id="radarStatus" class="radar-status">Loading…</div>
-          <div class="zone-mode-row">
-            <label class="field-label" for="zoneModeSelect">Enforced by</label>
-            <select id="zoneModeSelect">
-              <option value="0">Software — all targets stay visible</option>
-              <option value="1">Sensor · detect — only inside the zone</option>
-              <option value="2">Sensor · exclude — ignore inside the zone</option>
-            </select>
-            <p id="zoneModeHint" class="zone-mode-hint"></p>
-          </div>
-          <div class="zone-mode-row">
-            <label class="field-label" for="doorZoneBtn">Door zone</label>
-            <button id="doorZoneBtn" class="servo-save-btn" type="button">Add door zone</button>
-            <p id="doorZoneHint" class="zone-mode-hint"></p>
+          <div class="zone-mode-card">
+            <div class="zone-mode-row">
+              <label class="field-label" for="zoneModeSelect">Enforced by</label>
+              <select id="zoneModeSelect">
+                <option value="0">Software — all targets stay visible</option>
+                <option value="1">Sensor · detect — only inside the zone</option>
+                <option value="2">Sensor · exclude — ignore inside the zone</option>
+              </select>
+              <p id="zoneModeHint" class="zone-mode-hint"></p>
+            </div>
+            <div class="zone-mode-row">
+              <label class="field-label" for="doorZoneBtn">Door zone</label>
+              <button id="doorZoneBtn" class="servo-save-btn" type="button">Add door zone</button>
+              <p id="doorZoneHint" class="zone-mode-hint"></p>
+            </div>
           </div>
         </div>
 
         <div class="servo-section">
           <h2>Servo Home</h2>
           <div class="servo-wrap">
-            <div id="servoOffset" class="servo-offset">– degrees</div>
-            <div class="servo-buttons">
-              <button type="button" data-nudge="-10">−10°</button>
-              <button type="button" data-nudge="-1">−1°</button>
-              <button type="button" data-nudge="1">+1°</button>
-              <button type="button" data-nudge="10">+10°</button>
+            <div class="servo-readout">
+              <div id="servoOffset" class="servo-offset">– degrees</div>
+              <div class="servo-buttons">
+                <button type="button" data-nudge="-10">−10°</button>
+                <button type="button" data-nudge="-1">−1°</button>
+                <button type="button" data-nudge="1">+1°</button>
+                <button type="button" data-nudge="10">+10°</button>
+              </div>
+              <button id="servoSaveBtn" class="servo-save-btn" type="button">Save as home</button>
+              <div id="servoStatus" class="radar-status">Loading…</div>
             </div>
-            <button id="servoSaveBtn" class="servo-save-btn" type="button">Save as home</button>
-            <div id="servoStatus" class="radar-status">Loading…</div>
 
             <label class="field-label">Turning range</label>
             <div class="range-row">
