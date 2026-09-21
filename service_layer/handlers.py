@@ -570,6 +570,15 @@ def start_doa_tracking(
                             angle, len(samples), " ".join(f"{s:.0f}" for s in samples),
                             getattr(turntable, "current_heading_degrees", float("nan")),
                         )
+                        if (
+                            (paused is not None and paused.is_set())
+                            or (assistant_speaking is not None and assistant_speaking.is_set())
+                            or (calibration_mode is not None and calibration_mode.is_set())
+                        ):
+                            logger.info("[DOA] Estimate dropped - tracking was paused while it was sampled.")
+                            face.set_eye_direction(angle_degrees=90.0)
+                            time.sleep(poll_interval_s)
+                            continue
 
                         moved = turntable.predict_relative_move(angle)
                         if moved > 0.5:
