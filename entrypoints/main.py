@@ -565,7 +565,8 @@ def main() -> None:
     register_handlers(bus, conversation, tts, departure_grace_s=config.PRIVACY_DEPARTURE_GRACE_S,
                       door_clear_hold_s=config.PRIVACY_DOOR_CLEAR_HOLD_S)
     visit_discretion = VisitDiscretion(conversation)
-    addons = LocalAddons(SimpleNamespace(bus=bus, config=config, conversation=conversation, tts=tts))
+    addons = LocalAddons(SimpleNamespace(bus=bus, config=config, conversation=conversation, tts=tts,
+                                         face=face, radar=radar))
 
     chat_bridge = ChatBridgeAdapter(
         bus, conversation, store, turn_queue,
