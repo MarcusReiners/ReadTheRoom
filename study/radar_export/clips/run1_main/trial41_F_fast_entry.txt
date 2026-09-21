@@ -1,0 +1,18 @@
+Trial 41  script F (fast_entry)  TP  Switched to chat, back to speaking too early
+Video: 972x1080, 30 fps, 28.73 s, dark theme, radar with status and event captions
+First frame = Pi clock 2026-09-11 14:39:59.947
+First word of the reply at   0.21 s in this video; the on-screen clock counts from there
+Cut at  28.71 s; the log runs to  79.60 s
+
+Events (time in this video, then Pi clock):
+    0.21 s   2026-09-11 14:40:00.154   Assistant starts speaking
+    3.40 s   2026-09-11 14:40:03.347   Someone at the door
+    3.40 s   2026-09-11 14:40:03.348   Voice quieter
+    4.60 s   2026-09-11 14:40:04.548   Entered through the door
+    4.60 s   2026-09-11 14:40:04.548   Switched to chat
+    4.60 s   2026-09-11 14:40:04.549   Speech cut off
+    6.10 s   2026-09-11 14:40:06.050   Voice back to normal
+    6.90 s   2026-09-11 14:40:06.848   Left the room
+    6.90 s   2026-09-11 14:40:06.848   Back to speaking
+   19.60 s   2026-09-11 14:40:19.548   Study: visitor told to leave
+   25.70 s   2026-09-11 14:40:25.650   Left the room

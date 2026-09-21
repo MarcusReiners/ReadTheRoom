@@ -1,0 +1,8 @@
+Trial 46  script A (direct_entry)  FN  Entry missed
+Video: 972x1080, 30 fps, 20.60 s, dark theme, radar with status and event captions
+First frame = Pi clock 2026-09-13 16:12:04.838
+First word of the reply at  -0.02 s in this video; the on-screen clock counts from there
+The log ends at  20.00 s; the radar view holds its last frame after that
+
+Events (time in this video, then Pi clock):
+   -0.02 s   2026-09-13 16:12:04.822   Assistant starts speaking

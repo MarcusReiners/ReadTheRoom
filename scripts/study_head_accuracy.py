@@ -610,9 +610,7 @@ def main():
             doa_onset_skip_s=args.doa_onset_skip,
             sample_window_s=max(SAMPLE_WINDOW_FLOOR_S, args.doa_sample_interval * 24),
         )
-    # main.py passes the head's safe range explicitly (it is not a default), so
-    # production mode has to mirror that call rather than read it off the signature.
-    accept_range = (base_turntable.safe_min_angle, base_turntable.safe_max_angle)
+    accept_range = None if args.production else (base_turntable.safe_min_angle, base_turntable.safe_max_angle)
     start_doa_tracking(
         doa, turntable, SilentFace(),
         lock=threading.Lock(),
@@ -637,7 +635,7 @@ def main():
               + (f"{config.DOA_CALIBRATION_PATH} ({points} points loaded)" if points
                  else f"{config.DOA_CALIBRATION_PATH} NOT LOADED - raw bearings" if config.DOA_CALIBRATION_PATH
                  else "none"))
-        print(f"  estimates outside {accept_range[0]:.0f}-{accept_range[1]:.0f} deg ignored, "
+        print("  every bearing accepted, the head turning as far towards it as the sweep allows; "
               "head never recentres during a trial")
     else:
         print(f"Post-move deaf period: {args.post_move_quiet:.1f}s")
@@ -683,7 +681,7 @@ def main():
             "offaxis_gain": f"production:{config.DOA_OFFAXIS_GAIN}" + table,
             "sample_window_s": prod["sample_window_s"],
             "doa_samples": prod["doa_samples"],
-            "accept_range": list(accept_range),
+            "accept_range": None,
             "silence_timeout_s": 0,
             "front_reference_degrees": config.DOA_FRONT_REFERENCE_DEGREES,
         }
