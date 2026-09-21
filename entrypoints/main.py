@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -22,6 +23,7 @@ from domain.events import (
     SpeechTranscribed,
 )
 from service_layer.bus import EventBus
+from service_layer.local_addons import AnyOf, LocalAddons
 from service_layer.handlers import (VisitDiscretion, register_handlers, register_tie_led_handlers,
                                    start_doa_tracking)
 
@@ -378,7 +380,7 @@ def vad_input_loop(
 
 def handle_turn(
     text: str, bus: EventBus, conversation: ConversationState, store: ConversationStore,
-    llm, tts, cancel_event: threading.Event | None = None, source: str = "voice",
+    llm, tts, cancel_event: threading.Event | None = None, source: str = "voice", addons=None,
 ) -> None:
     """cancel_event: set by ChatBridgeAdapter the instant a chat message is
     typed and sent, so a still-in-progress voice-triggered reply gets cut off
@@ -387,6 +389,11 @@ def handle_turn(
     half of that same rule). Checked once per streamed LLM delta below;
     cleared by main()'s turn loop just before each handle_turn() call, so a
     stale set from an idle moment never affects the next turn."""
+    override = addons.reply_to(text, source) if addons is not None else None
+    if override == "":
+        logger.info("Turn handled by a local add-on without a reply: %r", text)
+        return
+
     conversation_id = store.get_active_id()
     history = store.get_history(conversation_id)
 
@@ -402,7 +409,7 @@ def handle_turn(
     # tracking resumes afterward.
 
     def mirrored_deltas():
-        for delta in llm.ask_stream(text, history):
+        for delta in ([override] if override is not None else llm.ask_stream(text, history)):
             if cancel_event is not None and cancel_event.is_set():
                 break
             bus.publish(AssistantDeltaReceived(delta=delta, conversation_id=conversation_id))
@@ -549,6 +556,7 @@ def main() -> None:
     register_handlers(bus, conversation, tts, departure_grace_s=config.PRIVACY_DEPARTURE_GRACE_S,
                       door_clear_hold_s=config.PRIVACY_DOOR_CLEAR_HOLD_S)
     visit_discretion = VisitDiscretion(conversation)
+    addons = LocalAddons(SimpleNamespace(bus=bus, config=config, conversation=conversation, tts=tts))
 
     chat_bridge = ChatBridgeAdapter(
         bus, conversation, store, turn_queue,
@@ -597,7 +605,7 @@ def main() -> None:
             doa, turntable, face, lock=doa_lock,
             assistant_speaking=assistant_speaking, calibration_mode=calibration_mode,
             servo_recentering=servo_recentering, turn_in_progress=turn_in_progress,
-            paused=visit_discretion,
+            paused=AnyOf(visit_discretion, addons),
         )
         threading.Thread(
             target=_restart_on_error(vad_input_loop, "[VAD] input loop"),
@@ -627,7 +635,7 @@ def main() -> None:
             turn_in_progress.set()
             try:
                 handle_turn(text, bus, conversation, store, llm, tts, cancel_current_turn,
-                            source="chat" if _priority == PRIORITY_CHAT else "voice")
+                            source="chat" if _priority == PRIORITY_CHAT else "voice", addons=addons)
             except Exception:
                 # One failed turn must not end the loop. Everything else
                 # (radar, DOA tracking, the web app) runs on daemon threads,
