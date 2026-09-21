@@ -1,0 +1,17 @@
+Trial 25  script A (direct_entry)  TP  Switched to chat, room judged clear after leaving
+Video: 972x1080, 30 fps, 28.50 s, dark theme, radar with status and event captions
+First frame = Pi clock 2026-09-13 16:01:36.364
+First word of the reply at  -0.01 s in this video; the on-screen clock counts from there
+The log ends at  25.89 s; the radar view holds its last frame after that
+
+Events (time in this video, then Pi clock):
+   -0.01 s   2026-09-13 16:01:36.353   Assistant starts speaking
+    3.99 s   2026-09-13 16:01:40.356   Someone at the door
+    3.99 s   2026-09-13 16:01:40.357   Voice quieter
+    4.89 s   2026-09-13 16:01:41.256   Entered through the door
+    4.89 s   2026-09-13 16:01:41.257   Switched to chat
+    4.89 s   2026-09-13 16:01:41.257   Speech cut off
+    6.39 s   2026-09-13 16:01:42.758   Voice back to normal
+   19.89 s   2026-09-13 16:01:56.257   Study: visitor told to leave
+   25.89 s   2026-09-13 16:02:02.257   Left the room
+   25.89 s   2026-09-13 16:02:02.258   Room looks clear

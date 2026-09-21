@@ -30,10 +30,7 @@ def main() -> None:
     # Same production code path main.py uses (service_layer/handlers.py) -
     # not a reimplementation, so this behaves identically to the real
     # assistant's tracking, just standalone without STT/LLM/TTS/radar/matrix.
-    start_doa_tracking(
-        doa, turntable, face,
-        accept_range=lambda: (turntable.safe_min_angle, turntable.safe_max_angle),
-    )
+    start_doa_tracking(doa, turntable, face)
 
     # Read off the turntable, not config - the safe range is editable from
     # the web app, so the configured default isn't necessarily what's active.

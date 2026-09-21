@@ -124,7 +124,14 @@ def median_angle(angles: list[float]) -> float:
     170 and -170 are 20 degrees apart but average to 0, pointing the exact
     wrong way. Each sample is first unwrapped to the branch nearest the first
     one, making them ordinary colinear numbers, then re-expressed on the same
-    branch afterward.
+    branch raw_to_target_degrees() uses, -90..270 around the head's own nose.
+
+    That last step is not cosmetic. Unwrapping alone can leave the median a
+    full turn away from the branch it started on: readings of -90, -90, 119,
+    119, 119 unwrap to a median of -241, and since the servo clamps linearly,
+    a target of -241 parks the head at the end stop on the side AWAY from the
+    talker instead of the 119 it should have turned to. Measured once in the
+    production session of 14 September 2026.
 
     Median rather than mean deliberately: the array occasionally emits a
     single wildly-off reading (a reflection off a wall or monitor, a chair
@@ -135,7 +142,7 @@ def median_angle(angles: list[float]) -> float:
         raise ValueError("median_angle() braucht mindestens einen Wert.")
     base = angles[0]
     unwrapped = [base + ((a - base + 180.0) % 360.0 - 180.0) for a in angles]
-    return statistics.median(unwrapped)
+    return 90.0 + ((statistics.median(unwrapped) - 90.0 + 180.0) % 360.0 - 180.0)
 
 
 class RespeakerDOAAdapter:

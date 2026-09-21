@@ -354,10 +354,13 @@ def start_doa_tracking(
     0.6s, no skip); on the bench that made a coarse first move and, once,
     turned the head away from the talker.
 
-    accept_range: (min, max) bearings the head can actually face, or a
-    callable returning that pair (so a safe range edited from the web app is
-    picked up without a restart). Estimates outside it are ignored rather
-    than clamped to an end stop. None accepts everything.
+    accept_range: (min, max) bearings to accept, or a callable returning
+    that pair. Estimates outside it are ignored. The deployed assistant
+    passes None: a talker off to the side, or behind the head, should still
+    get the head turning as far that way as the sweep allows, which is what
+    the servo's linear clamp does on its own. Study 1's harness sets it, so
+    that a trial the head cannot face is a recorded non-reaction rather than
+    a bearing pinned to an end stop.
 
     lock serializes USB control-transfer access to the ReSpeaker with any
     other thread reading the same device concurrently (see main.py's
