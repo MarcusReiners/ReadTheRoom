@@ -19,10 +19,16 @@ class LocalAddons:
             answering or storing it, None leaves it to the model.
         holds_tracking() -> bool
             True while the head should not follow voices.
+        holds_listening() -> bool
+            True while no recording may be opened; one already open is
+            discarded.
+        holds_voice() -> bool
+            True while replies go to the chat as text instead of being
+            spoken.
 
     An add-on that raises is logged and skipped. Without the folder this
-    does nothing. is_set() lets it stand in for a threading.Event wherever
-    head tracking takes a pause condition."""
+    does nothing. hold(name) returns a condition with is_set(), so each of
+    these can stand in for a threading.Event."""
 
     def __init__(self, ctx, directory: str = ADDON_DIR):
         self.addons = []
@@ -60,19 +66,32 @@ class LocalAddons:
                 return reply
         return None
 
-    def is_set(self) -> bool:
+    def hold(self, name: str) -> "Hold":
+        return Hold(self, name)
+
+    def holding(self, name: str) -> bool:
         for addon in self.addons:
-            method = getattr(addon, "holds_tracking", None)
+            method = getattr(addon, name, None)
             if method is None:
                 continue
             try:
                 if method():
                     return True
             except Exception:
-                if id(addon) not in self._failing:
-                    self._failing.add(id(addon))
-                    logger.exception("[Add-on] %s failed in holds_tracking().", type(addon).__name__)
+                if (id(addon), name) not in self._failing:
+                    self._failing.add((id(addon), name))
+                    logger.exception("[Add-on] %s failed in %s().", type(addon).__name__, name)
         return False
+
+
+class Hold:
+    """Reads as set while any add-on's method of this name returns True."""
+
+    def __init__(self, addons: LocalAddons, name: str):
+        self.addons, self.name = addons, name
+
+    def is_set(self) -> bool:
+        return self.addons.holding(self.name)
 
 
 class AnyOf:

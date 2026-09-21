@@ -214,7 +214,7 @@ def vad_input_loop(
     calibration_mode: threading.Event | None = None, composing_mode: threading.Event | None = None,
     turn_in_progress: threading.Event | None = None,
     servo_recentering: threading.Event | None = None,
-    visit_discretion=None,
+    visit_discretion=None, addon_hold=None,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
     onboard VAD and starts recording automatically once it detects speech,
@@ -253,6 +253,10 @@ def vad_input_loop(
     nor answered, and a recording already open is discarded. Anything the
     user wants from the assistant meanwhile goes through the chat.
 
+    addon_hold: set while a local add-on keeps the mic closed (see
+    service_layer/local_addons.py) - skipped the same way, and a recording
+    already open is discarded.
+
     servo_recentering is checked ONLY before opening a recording, never to
     abort one already in progress. Aborting was tried and was badly wrong:
     the head turns toward a speaker because they are speaking, so
@@ -278,6 +282,7 @@ def vad_input_loop(
             or (composing_mode is not None and composing_mode.is_set())
             or (servo_recentering is not None and servo_recentering.is_set())
             or (visit_discretion is not None and visit_discretion.is_set())
+            or (addon_hold is not None and addon_hold.is_set())
         ):
             time.sleep(poll_interval_s)
             continue
@@ -332,6 +337,9 @@ def vad_input_loop(
                     break
                 if visit_discretion is not None and visit_discretion.is_set():
                     abort_reason = "Besuch im Raum"
+                    break
+                if addon_hold is not None and addon_hold.is_set():
+                    abort_reason = "held by a local add-on"
                     break
                 try:
                     with doa_lock:
@@ -417,7 +425,8 @@ def handle_turn(
 
     # Speak aloud only while alone (or voice hasn't been muted from the chat
     # app) - otherwise just stream the answer as text into the chat.
-    should_speak = conversation.voice_enabled and conversation.modality == "voice"
+    should_speak = (conversation.voice_enabled and conversation.modality == "voice"
+                    and not (addons is not None and addons.holding("holds_voice")))
     deltas = mirrored_deltas()
     if should_speak:
         # speak_stream() stops reading on a TTS error (an unknown voice, a
@@ -605,7 +614,7 @@ def main() -> None:
             doa, turntable, face, lock=doa_lock,
             assistant_speaking=assistant_speaking, calibration_mode=calibration_mode,
             servo_recentering=servo_recentering, turn_in_progress=turn_in_progress,
-            paused=AnyOf(visit_discretion, addons),
+            paused=AnyOf(visit_discretion, addons.hold("holds_tracking")),
         )
         threading.Thread(
             target=_restart_on_error(vad_input_loop, "[VAD] input loop"),
@@ -614,6 +623,7 @@ def main() -> None:
                 "calibration_mode": calibration_mode, "composing_mode": composing_mode,
                 "servo_recentering": servo_recentering, "turn_in_progress": turn_in_progress,
                 "visit_discretion": visit_discretion, "trailing_silence_s": config.VAD_TRAILING_SILENCE_S,
+                "addon_hold": addons.hold("holds_listening"),
             },
             daemon=True,
         ).start()
