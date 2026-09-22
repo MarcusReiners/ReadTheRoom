@@ -105,6 +105,9 @@ LED_MATRIX_PWM_BITS = int(_env("LED_MATRIX_PWM_BITS", "5"))
 # --- Servo turntable (DS3225 digital 25kg servo on hardware PWM) ----------
 USE_SERVO = _env_bool("USE_SERVO", True)
 SERVO_GPIO_PIN = int(_env("SERVO_GPIO_PIN", "19"))
+USE_TOUCH = _env_bool("USE_TOUCH", True)
+TOUCH_GPIO_PIN = int(_env("TOUCH_GPIO_PIN", "5"))
+VIBRATION_GPIO_PIN = int(_env("VIBRATION_GPIO_PIN", "26"))
 # Safe operating clamp - every commanded angle is restricted to this window so the
 # head can never wind the cables running into it. NOT the servo's physical range.
 # Keep this CENTERED inside SERVO_HARDWARE_MIN/MAX_ANGLE below: the window's
