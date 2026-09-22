@@ -227,6 +227,33 @@ class PrivacyGuard:
         self.resume_speech("private_mode_off")
 
 
+def handle_head_tap(bus: EventBus, conversation, buzz, addons=None) -> str:
+    """One tap on the head. A local add-on gets it first (see
+    LocalAddons.on_tap). After a visit - answers still going to the chat - it
+    hands speech back, like the web app's Resume speaking button. Otherwise it
+    switches private mode. The motor says which: one long pulse for resuming,
+    one short pulse for private mode on, two for off, a short one for an
+    add-on. Returns what the tap did, for the log."""
+    if addons is not None and addons.on_tap():
+        buzz(0.15)
+        done = "handled by an add-on"
+    elif conversation.modality == "web":
+        bus.publish(ResumeSpeechRequested(source="touch"))
+        buzz(0.4)
+        done = "speech resumed"
+    else:
+        enabled = not conversation.confidential
+        conversation.set_private_mode(enabled)
+        bus.publish(PrivateModeChanged(enabled=enabled))
+        if enabled:
+            buzz(0.15)
+        else:
+            buzz(0.12, 0.12)
+        done = f"private mode {'on' if enabled else 'off'}"
+    logger.info("[Touch] Tap on the head - %s.", done)
+    return done
+
+
 class VisitDiscretion:
     """Reads as set while an answer has been moved to the chat and the user
     has not resumed speech - including after the radar judges the room clear

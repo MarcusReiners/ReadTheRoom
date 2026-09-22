@@ -27,6 +27,9 @@ class LocalAddons:
         holds_voice() -> bool
             True while replies go to the chat as text instead of being
             spoken.
+        on_tap() -> bool
+            A tap on the head; True if the add-on used it, so it does
+            nothing else.
 
     An add-on that raises is logged and skipped. Without the folder this
     does nothing. hold(name) returns a condition with is_set(), so each of
@@ -67,6 +70,18 @@ class LocalAddons:
             if reply is not None:
                 return reply
         return None
+
+    def on_tap(self) -> bool:
+        for addon in self.addons:
+            method = getattr(addon, "on_tap", None)
+            if method is None:
+                continue
+            try:
+                if method():
+                    return True
+            except Exception:
+                logger.exception("[Add-on] %s failed on a tap.", type(addon).__name__)
+        return False
 
     def hold(self, name: str) -> "Hold":
         return Hold(self, name)

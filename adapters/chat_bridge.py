@@ -151,6 +151,7 @@ class ChatBridgeAdapter:
         self._room_clear = False
         bus.subscribe(ModalitySwitched, self._on_modality_switched)
         bus.subscribe(RoomClearChanged, self._on_room_clear)
+        bus.subscribe(PrivateModeChanged, lambda e: self._broadcast({"type": "private_mode", "value": e.enabled}))
         bus.subscribe(VoiceDucked, lambda e: self._broadcast({"type": "voice_ducked", "value": e.active}))
         self._last_radar_broadcast = 0.0
         bus.subscribe(RadarTargetsUpdated, self._on_radar_targets)
@@ -347,7 +348,6 @@ class ChatBridgeAdapter:
         elif msg_type == "set_private_mode":
             self.conversation.set_private_mode(bool(data.get("value")))
             self.bus.publish(PrivateModeChanged(enabled=self.conversation.confidential))
-            self._broadcast({"type": "private_mode", "value": self.conversation.confidential})
         elif msg_type == "resume_speech":
             self.bus.publish(ResumeSpeechRequested(source="web"))
         elif msg_type == "set_calibration_mode":

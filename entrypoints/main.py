@@ -24,8 +24,8 @@ from domain.events import (
 )
 from service_layer.bus import EventBus
 from service_layer.local_addons import AnyOf, LocalAddons
-from service_layer.handlers import (VisitDiscretion, register_handlers, register_tie_led_handlers,
-                                   start_doa_tracking)
+from service_layer.handlers import (VisitDiscretion, handle_head_tap, register_handlers,
+                                   register_tie_led_handlers, start_doa_tracking)
 
 from adapters.factory import build_stt, build_tts, build_radar, build_turntable
 from adapters.app_settings import load_app_settings
@@ -644,6 +644,17 @@ def main() -> None:
             },
             daemon=True,
         ).start()
+
+    if config.USE_TOUCH and sys.platform != "darwin":
+        from adapters.hardware.touch_control import TouchControl
+        touch = None
+        try:
+            touch = TouchControl(config.TOUCH_GPIO_PIN, config.VIBRATION_GPIO_PIN,
+                                 on_tap=lambda: handle_head_tap(bus, conversation, touch.buzz, addons))
+            logger.info("[Touch] Touch pad on GPIO %d, vibration motor on GPIO %d.",
+                        config.TOUCH_GPIO_PIN, config.VIBRATION_GPIO_PIN)
+        except Exception as e:
+            logger.warning("[Touch] Not available (%s) - the head does not react to touch.", e)
 
     threading.Thread(target=console_input_loop, args=(bus, turn_queue, stt, mic_lock), daemon=True).start()
 

@@ -15,6 +15,8 @@ A desk voice assistant that "reads the room": a radar sensor detects how many pe
 
    Optionally, a second rectangle — the **door zone** — is drawn over the doorway in the same settings view. With it, entries and exits are decided only there: someone who comes through the door zone into the room is an entry, someone who goes from the room into the door zone and disappears has left — provided the radar measured them moving away at walking speed (≥ 0.5 m/s) on the way out, since the LD2450 sometimes lets a person's position drift towards the door while they stand still inside, which Study 2 showed can otherwise fake an exit — and movement anywhere else (someone getting up, a reflection near a wall) can no longer trigger anything. Someone who only stands in the doorway during a conversation makes the voice quieter within about 0.3 s instead of cutting the answer off; it returns to normal shortly after the doorway is clear. The door zone is stored on the Pi only (`app_settings.json`); the sensor keeps just the room zone.
 
+9. A capacitive touch pad on top of the head (GPIO 5) and a vibration motor module (GPIO 26) give a physical override (`adapters/hardware/touch_control.py`, `handle_head_tap` in `service_layer/handlers.py`). A tap after a visit hands speech back, like *Resume speaking* (one long pulse); otherwise it switches private mode (one short pulse for on, two for off). A local add-on can claim the tap first. Wiring: touch pad VCC to 3.3 V (pin 1, never 5 V, or its output would exceed the Pi's 3.3 V inputs), GND, OUT to GPIO 5 (pin 29); motor module VCC to 5 V (pin 2), GND, IN to GPIO 26 (pin 37). Runs through the pigpio daemon.
+
 ## Architecture
 
 The project follows a ports-and-adapters structure with a central event bus:
@@ -130,6 +132,7 @@ All settings live in [config.py](config.py) and are read from environment variab
 | `SPEAKER_DEVICE` | ALSA playback device (Pi only) |
 | `USE_LED_MATRIX`, `GPIO_SLOWDOWN`, `LED_MATRIX_BRIGHTNESS`, `LED_MATRIX_PWM_BITS` | Enable/disable the LED matrix (eyes) and its signal/refresh tuning |
 | `USE_SERVO`, `SERVO_GPIO_PIN` | Enable/disable the servo turntable and its GPIO pin |
+| `USE_TOUCH`, `TOUCH_GPIO_PIN`, `VIBRATION_GPIO_PIN` | Touch pad and vibration motor on the head (defaults on, GPIO 5 and 26) |
 | `SERVO_MIN_ANGLE`, `SERVO_MAX_ANGLE` | The safe sweep window every commanded angle is clamped to, so the head can't wind its own cabling. Keep it centered inside the hardware range below. Also editable live from the web app's settings tab |
 | `SERVO_HARDWARE_MIN_ANGLE`, `SERVO_HARDWARE_MAX_ANGLE` | The servo's **real** physical sweep. These are labels on a linear map onto the pulse widths below, not limits — if they don't match what the servo actually does, every commanded "degree" silently stops being a degree (see *Testing hardware*) |
 | `SERVO_MIN_PULSE_WIDTH`, `SERVO_MAX_PULSE_WIDTH` | Pulse widths (seconds) the two hardware angles map to. `0.0005`–`0.0025` is the DS3225's documented range |
