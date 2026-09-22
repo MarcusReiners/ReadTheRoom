@@ -38,7 +38,7 @@ GEMINI_API_KEY = _env_opt("GEMINI_API_KEY")
 # --- ElevenLabs settings ------------------------------------------------
 ELEVENLABS_VOICE_ID = _env("ELEVENLABS_VOICE_ID", "wDsJlOXPqcvIUKdLXjDs")
 ELEVENLABS_TTS_MODEL = _env("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
-ELEVENLABS_STT_MODEL = _env("ELEVENLABS_STT_MODEL", "scribe_v1")
+ELEVENLABS_STT_MODEL = _env("ELEVENLABS_STT_MODEL", "scribe_v2")
 # STT input language, ISO 639-3. Was "deu" - now "eng" to match the English-only
 # setup (see SYSTEM_PROMPT and ELEVENLABS_TTS_LANGUAGE_CODE below); a mismatch
 # here is costly, since Scribe forced to the wrong language returns mangled

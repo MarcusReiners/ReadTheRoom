@@ -10,7 +10,7 @@ class ElevenLabsSTTAdapter:
     def __init__(
         self,
         api_key: str,
-        model_id: str = "scribe_v1",
+        model_id: str = "scribe_v2",
         language_code: str = "eng",
     ) -> None:
         if not api_key:
