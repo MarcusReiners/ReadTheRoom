@@ -36,12 +36,35 @@ def _log_thread_stacks(reason: str) -> None:
 # log - see the except blocks in ask_stream().
 _SPOKEN_ERROR = "Sorry, something went wrong reaching the language model. The details are in the log."
 _SPOKEN_UNREACHABLE = "Sorry, I can't reach the language model right now."
+_SPOKEN_BUSY = "The language model is very busy right now. Please try again in a moment."
 
 # Replies that are apologies for a failure, not answers. main.py checks this
 # before writing a turn to the conversation store: persisting them poisons the
 # history, since every later turn then ships the failure back to the model as
 # if the assistant had really said it.
-ERROR_REPLIES = frozenset({_SPOKEN_ERROR, _SPOKEN_UNREACHABLE})
+ERROR_REPLIES = frozenset({_SPOKEN_ERROR, _SPOKEN_UNREACHABLE, _SPOKEN_BUSY})
+
+_BUSY_STATUS = (429, 503, 529)
+_BUSY_MARKERS = ("high demand", "overloaded", "resource exhausted", "resource_exhausted", "rate limit")
+
+
+def _is_busy(error: Exception) -> bool:
+    """The provider is up but turning requests away for now - Gemini's "high
+    demand" 503, a 429 rate limit, an "overloaded" 529 - as opposed to being
+    unreachable or rejecting the request itself. Follows wrapped exceptions:
+    litellm reports a 503 that arrives on an open stream as a
+    MidStreamFallbackError around the ServiceUnavailableError."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, (litellm.exceptions.ServiceUnavailableError, litellm.exceptions.RateLimitError)):
+            return True
+        if getattr(error, "status_code", None) in _BUSY_STATUS:
+            return True
+        if any(marker in str(error).lower() for marker in _BUSY_MARKERS):
+            return True
+        error = getattr(error, "original_exception", None) or error.__cause__
+    return False
 
 
 class _StreamStalled(Exception):
@@ -141,32 +164,42 @@ class LLMGatewayAdapter:
             for delta in self._ask_stream(self.model, None, user_text, history):
                 emitted_any = True
                 yield delta
-        except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout, _StreamStalled) as e:
+        except Exception as e:
+            unreachable = isinstance(e, (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout,
+                                         _StreamStalled))
             if emitted_any:
-                logger.warning("'%s' aborted mid-stream (%s) - no fallback, the reply stays incomplete.",
-                                self.model, e)
+                if unreachable:
+                    logger.warning("'%s' aborted mid-stream (%s) - no fallback, the reply stays incomplete.",
+                                   self.model, e)
+                else:
+                    logger.exception("LLM stream aborted after a partial reply: %s", e)
                 return
+            busy = not unreachable and _is_busy(e)
+            if not (unreachable or busy):
+                # The detail goes to the log, NOT to the speaker. Yielding the raw
+                # exception meant a provider error was read out loud verbatim -
+                # a model-retired 404 came through as several seconds of spoken
+                # JSON, punctuation and all.
+                logger.exception("LLM error: %s", e)
+                yield _SPOKEN_ERROR
+                return
+            reason = "is too busy" if busy else "is unreachable or too slow"
             if self.fallback_model:
-                logger.warning("'%s' unreachable or too slow (%s), falling back to '%s'.",
-                                self.model, e, self.fallback_model)
+                logger.warning("'%s' %s (%s), falling back to '%s'.", self.model, reason, e, self.fallback_model)
+                fallback_emitted = False
                 try:
-                    yield from self._ask_stream(self.fallback_model, self.fallback_api_base, user_text, history)
+                    for delta in self._ask_stream(self.fallback_model, self.fallback_api_base, user_text, history):
+                        fallback_emitted = True
+                        yield delta
                     return
-                except (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout,
-                        _StreamStalled) as fallback_error:
+                except Exception as fallback_error:
                     logger.warning("Fallback '%s' at %s failed too (%s).",
                                    self.fallback_model, self.fallback_api_base, fallback_error)
-            yield _SPOKEN_UNREACHABLE
-        except Exception as e:
-            if emitted_any:
-                logger.exception("LLM stream aborted after a partial reply: %s", e)
-                return
-            # The detail goes to the log, NOT to the speaker. Yielding the raw
-            # exception meant a provider error was read out loud verbatim -
-            # a model-retired 404 came through as several seconds of spoken
-            # JSON, punctuation and all.
-            logger.exception("LLM error: %s", e)
-            yield _SPOKEN_ERROR
+                    if fallback_emitted:
+                        return
+            else:
+                logger.warning("'%s' %s (%s) - no fallback model configured.", self.model, reason, e)
+            yield _SPOKEN_BUSY if busy else _SPOKEN_UNREACHABLE
 
     def _stream_with_deadline(self, completion_kwargs: dict) -> Iterator[str]:
         """Yields content deltas, raising _StreamStalled if the provider goes
