@@ -37,6 +37,9 @@ _PRIORITY_CHAT = 0
 
 logger = logging.getLogger(__name__)
 
+_ZONE_NOT_CONFIRMED = ("the sensor unit did not confirm it - is its power bank on and within "
+                       "reach of the bridge? The previous zone is still active.")
+
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "web" / "static"
 
 
@@ -174,24 +177,24 @@ class ChatBridgeAdapter:
         @self.app.post("/api/radar/zone")
         async def set_zone(request: Request):
             bounds = await request.json()
-            self.radar.send_command({
-                "cmd": "set_zone",
-                "min_x_mm": bounds.get("min_x_mm"),
-                "max_x_mm": bounds.get("max_x_mm"),
-                "min_y_mm": bounds.get("min_y_mm"),
-                "max_y_mm": bounds.get("max_y_mm"),
-            })
-            return JSONResponse({
-                "valid": True,
-                "min_x_mm": bounds.get("min_x_mm"),
-                "max_x_mm": bounds.get("max_x_mm"),
-                "min_y_mm": bounds.get("min_y_mm"),
-                "max_y_mm": bounds.get("max_y_mm"),
-            })
+            keys = ("min_x_mm", "max_x_mm", "min_y_mm", "max_y_mm")
+            try:
+                want = {k: int(round(float(bounds[k]))) for k in keys}
+            except (KeyError, TypeError, ValueError):
+                return JSONResponse({"error": "the zone needs min/max x and y in mm"}, status_code=400)
+
+            def confirmed(zone: dict) -> bool:
+                return bool(zone.get("valid")) and all(
+                    abs(float(zone.get(k, float("inf"))) - v) <= 1 for k, v in want.items())
+
+            if not await self._apply_zone({"cmd": "set_zone", **want}, confirmed):
+                return JSONResponse({"error": _ZONE_NOT_CONFIRMED}, status_code=504)
+            return JSONResponse(self.radar.get_zone())
 
         @self.app.post("/api/radar/zone/reset")
-        def reset_zone():
-            self.radar.send_command({"cmd": "reset_zone"})
+        async def reset_zone():
+            if not await self._apply_zone({"cmd": "reset_zone"}, lambda zone: not zone.get("valid")):
+                return JSONResponse({"error": _ZONE_NOT_CONFIRMED}, status_code=504)
             return JSONResponse({"valid": False})
 
         # The door zone lives only on the Pi (the sensor keeps just the room
@@ -233,7 +236,9 @@ class ChatBridgeAdapter:
             mode = int(body.get("mode", 0))
             if mode not in (0, 1, 2):
                 return JSONResponse({"error": "mode muss 0, 1 oder 2 sein"}, status_code=400)
-            self.radar.send_command({"cmd": "set_zone_mode", "mode": mode})
+            if not await self._apply_zone({"cmd": "set_zone_mode", "mode": mode},
+                                          lambda zone: zone.get("mode", 0) == mode):
+                return JSONResponse({"error": _ZONE_NOT_CONFIRMED}, status_code=504)
             return JSONResponse({"mode": mode})
 
         @self.app.post("/api/radar/calibrate/start")
@@ -526,6 +531,13 @@ class ChatBridgeAdapter:
         else:
             self._save_settings()
             self._broadcast_voices()
+
+    async def _apply_zone(self, command: dict, confirmed) -> bool:
+        apply = getattr(self.radar, "apply_zone_command", None)
+        if apply is None:
+            self.radar.send_command(command)
+            return True
+        return await asyncio.to_thread(apply, command, confirmed)
 
     def _save_settings(self) -> None:
         """Snapshots the whole settings file from the live adapters, rather

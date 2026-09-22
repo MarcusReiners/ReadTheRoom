@@ -80,6 +80,9 @@ class DummyRadarAdapter:
     def send_command(self, command: dict) -> None:
         pass
 
+    def apply_zone_command(self, command: dict, confirmed, timeout_s: float = 4.0) -> bool:
+        return True
+
 
 class RadarLD2450Adapter:
     """Reads newline-delimited JSON status lines from the ESP-NOW bridge
@@ -161,6 +164,24 @@ class RadarLD2450Adapter:
 
     def get_zone(self) -> dict:
         return dict(self._latest_zone)
+
+    def apply_zone_command(self, command: dict, confirmed, timeout_s: float = 4.0,
+                           resend_s: float = 0.7) -> bool:
+        """Sends a zone command and waits until the sensor unit's own reports
+        show it took effect, resending in between. The unit sits at the far
+        end of a radio link: a command that never reaches it (power bank off,
+        out of range) must not read as saved. Returns whether the unit
+        confirmed it within timeout_s."""
+        deadline = time.monotonic() + timeout_s
+        next_send = 0.0
+        while time.monotonic() < deadline:
+            if confirmed(self._latest_zone):
+                return True
+            if time.monotonic() >= next_send:
+                self.send_command(command)
+                next_send = time.monotonic() + resend_s
+            time.sleep(0.05)
+        return confirmed(self._latest_zone)
 
     def get_calibration_status(self) -> dict:
         return dict(self._latest_calibration)
