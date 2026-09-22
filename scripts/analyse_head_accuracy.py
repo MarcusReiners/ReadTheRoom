@@ -566,12 +566,55 @@ def report_trials(paths, analysed, show_moves=False, trajectories_until_s=None):
               f"{fmt_med_iqr(firsts):>24} {median(first_errs):>8.2f}  {len(rests):>5} {later:>5} "
               f"{fmt_med_iqr(rests):>24}  {fmt_med_iqr(settles):>24}")
 
+    print_sampling_split(details)
     print_tables(details)
     report_implied_bearings(details)
     if show_moves:
         print_moves(details)
     if trajectories_until_s:
         print_trajectories(details, trajectories_until_s)
+
+
+def print_sampling_split(details):
+    """Where the latency goes per noise condition (figure s1-latency in the thesis):
+    median time of each bearing sample that fed the first move, gap between samples,
+    and the servo ramp from its first PWM update to the head's settle time. The
+    "typical trial" is the one closest to its condition's medians of settle time,
+    servo ramp and sampling phase; the thesis figure draws those two trials."""
+    print("\nSampling split, seconds from the array's first voice report (first move only)")
+    print("  sample k = median time of the k-th reading after the onset skip that fed the first move")
+    print("  gap      = time between consecutive samples; a poll without voice yields none")
+    print("  servo    = settle_from_voice_s minus the first PWM update")
+    by_noise = defaultdict(lambda: {"k": defaultdict(list), "gap": [], "servo": [], "settle": [],
+                                    "trials": []})
+    for row, d in details:
+        track = [m for m in d["moves"] if m["kind"] == "track"]
+        readings = d["doa_samples"]
+        if not track or not readings or row.get("settle_from_voice_s") is None:
+            continue
+        t0 = readings[0]["t"]
+        k = int(d["config"].get("doa_samples") or 5)
+        fed = [s["t"] - t0 for s in readings[1:] if s["t"] <= track[0]["t"]][-k:]
+        cell = by_noise[row["noise_condition"]]
+        for i, t in enumerate(fed):
+            cell["k"][i].append(t)
+        cell["gap"].extend(b - a for a, b in zip(fed, fed[1:]))
+        if d["pwm_updates"]:
+            cell["servo"].append(row["settle_from_voice_s"] - (d["pwm_updates"][0]["t"] - t0))
+        cell["settle"].append(row["settle_from_voice_s"])
+        cell["trials"].append((d["trial_id"], fed, row["settle_from_voice_s"]))
+    for noise in sorted(by_noise):
+        cell = by_noise[noise]
+        samples = " ".join(f"{median(cell['k'][i]):.3f}" for i in sorted(cell["k"]))
+        print(f"  {noise:>8} n={len(cell['settle']):<3} samples {samples}  gap {median(cell['gap']):.3f}  "
+              f"servo {fmt_med_iqr(cell['servo'])}  settle {fmt_med_iqr(cell['settle'])}")
+        skip = 1.5
+        med = (median(cell["settle"]), median([st - f[-1] for _, f, st in cell["trials"]]),
+               median([f[-1] - skip for _, f, _ in cell["trials"]]))
+        tid, fed, settle = min(cell["trials"], key=lambda t: abs(t[2] - med[0])
+                               + abs(t[2] - t[1][-1] - med[1]) + abs(t[1][-1] - skip - med[2]))
+        print(f"  {'':>8} typical trial {tid}: samples {' '.join(f'{t:.3f}' for t in fed)}  "
+              f"settle {settle:.3f}")
 
 
 def factor_label(rec, factor):
