@@ -120,6 +120,51 @@ def panel(trial, door, t, t0, xlim, ylim, label, width):
     return "\n".join(out)
 
 
+def panel_turned(trial, door, t, depth, across, height_cm, label):
+    """One panel with the view turned a quarter clockwise: depth from the sensor
+    runs left to right (the doorway on the right) and the sensor's left is up.
+    That is a rotation, not a mirror, and it matches a camera looking along the
+    wall at the doorway, as in the entry video. The axis is sized by height so
+    the panel lines up with a photograph of the same height; the width follows
+    from keeping one metre the same length in both directions."""
+    room = trial["zone"]
+    frames = frames_of(trial)
+    f = frame_at(trial, t)
+    turn = lambda x, y: (y, -x)
+    def rect(zone, style):
+        if not zone:
+            return None
+        x0, x1 = sorted((zone["min_x_mm"] / M, zone["max_x_mm"] / M))
+        y0, y1 = sorted((zone["min_y_mm"] / M, zone["max_y_mm"] / M))
+        return (f"      \\draw[{style}] (axis cs:{y0:.2f},{-x1:.2f}) rectangle (axis cs:{y1:.2f},{-x0:.2f});")
+    width_cm = height_cm * (depth[1] - depth[0]) / (across[1] - across[0])
+    trail = [turn(p["x"] / M, p["y"] / M) for g in frames if g["t"] <= f["t"] for p in g["targets"]]
+    now = [turn(p["x"] / M, p["y"] / M) for p in f["targets"]]
+    out = [
+        "  \\begin{tikzpicture}",
+        "    \\begin{axis}[",
+        f"      scale only axis, width={width_cm:.2f}cm, height={height_cm:.2f}cm,",
+        f"      xmin={depth[0]:.2f}, xmax={depth[1]:.2f}, ymin={across[0]:.2f}, ymax={across[1]:.2f},",
+        "      xtick=\\empty, ytick=\\empty, axis line style={draw=black!45}, clip=true,",
+        "    ]",
+    ]
+    for line in (rect(room, "black!40, line width=0.6pt, fill=black!4"),
+                 rect(door, "black!55, line width=0.6pt, dashed, fill=black!10")):
+        if line:
+            out.append(line)
+    if trail:
+        pts = " ".join(f"({a:.2f},{b:.2f})" for a, b in trail)
+        out.append(f"      \\addplot[only marks, mark=*, mark size=1.1pt, black!30] coordinates {{{pts}}};")
+    if now:
+        pts = " ".join(f"({a:.2f},{b:.2f})" for a, b in now)
+        out.append(f"      \\addplot[only marks, mark=*, mark size=3.4pt, radarc] coordinates {{{pts}}};")
+    out.append(f"      \\node[anchor=north west, font=\\footnotesize, fill=white, fill opacity=0.85, text opacity=1,"
+               f" inner sep=2pt] at (rel axis cs:0.015,0.97) {{{label}}};")
+    out.append("    \\end{axis}")
+    out.append("  \\end{tikzpicture}")
+    return "\n".join(out)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -133,6 +178,16 @@ def main():
     parser.add_argument("--focus", action="store_true",
                         help="crop the view to the band the targets move through, instead of showing the "
                              "whole field down to the sensor; makes the panels wider than they are tall")
+    parser.add_argument("--turned", action="store_true",
+                        help="depth runs left to right with the doorway on the right, one panel per moment, "
+                             "each at a fixed height so it can sit beside a video frame")
+    parser.add_argument("--depth", type=float, nargs=2, metavar=("NEAR", "FAR"),
+                        help="with --turned: distance range from the sensor to show, in metres")
+    parser.add_argument("--across", type=float, nargs=2, metavar=("LOW", "HIGH"),
+                        help="with --turned: range across the view, in metres, positive to the sensor's left")
+    parser.add_argument("--height", type=float, default=4.8, help="with --turned: panel height in cm (default 4.8)")
+    parser.add_argument("--split", metavar="PREFIX",
+                        help="with --turned: write panel i to PREFIX-i.tex instead of printing all panels")
     args = parser.parse_args()
 
     study = os.path.join(ROOT, "study")
@@ -160,6 +215,31 @@ def main():
         ylim = (min(ty) - 0.6, max(ty + zy) + 0.3)
     else:
         ylim = (min(ty + zy + [0.0]) - 0.3, max(ty + zy) + 0.3)
+
+    if args.turned:
+        marks = first_events(trial)
+        sighted = next((f["t"] for f in frames if f["targets"]), None)
+        depth = args.depth or (min(ty) - 0.3, max(ty + zy) + 0.3)
+        across = args.across or (min(-x for x in tx + zx) - 0.3, max(-x for x in tx + zx) + 0.3)
+        for i, t in enumerate(times, 1):
+            note = next((n for k, n in (("enter", "entering"), ("modality", "switch"), ("door", "at the door"))
+                         if k in marks and abs(marks[k] - t) < 0.35), "")
+            if not note and sighted is not None and abs(sighted - t) < 0.35:
+                note = "first seen"
+            label = f"{t - t0:.1f}\\,s" + (f", {note}" if note else "")
+            body = "\n".join([
+                f"% radar view of trial {args.trial} in {os.path.basename(path)}, moment {i} ({t - t0:.1f} s)",
+                "% generated by scripts/render_radar_frames.py --turned -- regenerate rather than edit",
+                "\\definecolor{radarc}{HTML}{2A78D6}%",
+                panel_turned(trial, door, t, depth, across, args.height, label) + "%",
+            ])
+            if args.split:
+                with open(f"{args.split}-{i}.tex", "w") as fh:
+                    fh.write(body + "\n")
+                print(f"wrote {args.split}-{i}.tex  ({label.replace(chr(92) + ',', ' ')})")
+            else:
+                print(body)
+        return
 
     print(f"% radar view of trial {args.trial} in {os.path.basename(path)}")
     print("% generated by scripts/render_radar_frames.py -- regenerate rather than edit")

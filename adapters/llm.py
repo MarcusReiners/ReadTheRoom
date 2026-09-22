@@ -37,12 +37,13 @@ def _log_thread_stacks(reason: str) -> None:
 _SPOKEN_ERROR = "Sorry, something went wrong reaching the language model. The details are in the log."
 _SPOKEN_UNREACHABLE = "Sorry, I can't reach the language model right now."
 _SPOKEN_BUSY = "The language model is very busy right now. Please try again in a moment."
+_SPOKEN_SLOW = "The language model is taking too long to answer right now. Please try again in a moment."
 
 # Replies that are apologies for a failure, not answers. main.py checks this
 # before writing a turn to the conversation store: persisting them poisons the
 # history, since every later turn then ships the failure back to the model as
 # if the assistant had really said it.
-ERROR_REPLIES = frozenset({_SPOKEN_ERROR, _SPOKEN_UNREACHABLE, _SPOKEN_BUSY})
+ERROR_REPLIES = frozenset({_SPOKEN_ERROR, _SPOKEN_UNREACHABLE, _SPOKEN_BUSY, _SPOKEN_SLOW})
 
 _BUSY_STATUS = (429, 503, 529)
 _BUSY_MARKERS = ("high demand", "overloaded", "resource exhausted", "resource_exhausted", "rate limit")
@@ -165,8 +166,8 @@ class LLMGatewayAdapter:
                 emitted_any = True
                 yield delta
         except Exception as e:
-            unreachable = isinstance(e, (litellm.exceptions.APIConnectionError, litellm.exceptions.Timeout,
-                                         _StreamStalled))
+            slow = isinstance(e, (litellm.exceptions.Timeout, _StreamStalled))
+            unreachable = slow or isinstance(e, litellm.exceptions.APIConnectionError)
             if emitted_any:
                 if unreachable:
                     logger.warning("'%s' aborted mid-stream (%s) - no fallback, the reply stays incomplete.",
@@ -183,7 +184,7 @@ class LLMGatewayAdapter:
                 logger.exception("LLM error: %s", e)
                 yield _SPOKEN_ERROR
                 return
-            reason = "is too busy" if busy else "is unreachable or too slow"
+            reason = "is too busy" if busy else "is too slow" if slow else "is unreachable"
             if self.fallback_model:
                 logger.warning("'%s' %s (%s), falling back to '%s'.", self.model, reason, e, self.fallback_model)
                 fallback_emitted = False
@@ -199,7 +200,7 @@ class LLMGatewayAdapter:
                         return
             else:
                 logger.warning("'%s' %s (%s) - no fallback model configured.", self.model, reason, e)
-            yield _SPOKEN_BUSY if busy else _SPOKEN_UNREACHABLE
+            yield _SPOKEN_BUSY if busy else _SPOKEN_SLOW if slow else _SPOKEN_UNREACHABLE
 
     def _stream_with_deadline(self, completion_kwargs: dict) -> Iterator[str]:
         """Yields content deltas, raising _StreamStalled if the provider goes
@@ -238,8 +239,8 @@ class LLMGatewayAdapter:
             if opened_after is None:
                 return _StreamStalled(f"{model} had not even answered the request after {elapsed:.0f}s")
             return _StreamStalled(
-                f"{model} answered the request after {opened_after:.1f}s but sent no text "
-                f"within {elapsed:.0f}s ({empty_chunks} empty chunks)"
+                f"{model} sent no text within {elapsed:.0f}s (litellm set up the stream after "
+                f"{opened_after:.1f}s, {empty_chunks} empty chunks)"
             )
 
         # The first-token limit is an ABSOLUTE deadline, not a per-chunk one.

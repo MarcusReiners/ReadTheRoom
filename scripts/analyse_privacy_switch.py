@@ -422,6 +422,34 @@ def print_geometry(res, logs, baselines, door, room):
                   f"{b['r']:.0f} mm of that")
 
 
+def seated_dropouts(res, logs, baselines):
+    """Runs of frames in which the seated person was not reported, as (seconds,
+    trial id, metres from the seat to the nearest other target). A gap with
+    another target close to the seat is more likely the same person reported a
+    little off their usual position than a loss; one with nobody near is a loss."""
+    out = []
+    for x in res:
+        seat = seat_of(logs[x["id"]], baselines)
+        if not seat:
+            continue
+        frames = x["frames"]
+        seen = [any(near_seat(t, seat) for t in f["targets"]) for f in frames]
+        i = 0
+        while i < len(frames):
+            if seen[i]:
+                i += 1
+                continue
+            j = i
+            while j < len(frames) and not seen[j]:
+                j += 1
+            end = frames[j]["t"] if j < len(frames) else frames[-1]["t"] + 0.1
+            near = [math.hypot(t["x"] - seat["median_x_mm"], t["y"] - seat["median_y_mm"]) / 1000
+                    for f in frames[i:j] for t in f["targets"]]
+            out.append((end - frames[i]["t"], x["id"], min(near) if near else None))
+            i = j
+    return sorted(out, reverse=True)
+
+
 def print_seated(res, logs, baselines, door, room, path):
     section("Seated person and a second person moving")
     for key, b in sorted(baselines.items()):
@@ -437,6 +465,13 @@ def print_seated(res, logs, baselines, door, room, path):
     hf, fr = sum(s["helper_frames"] for _, s in per), sum(s["frames"] for _, s in per)
     print(f"  seated person reported in {hf}/{fr} trial frames ({100 * hf / fr:.1f}%) - frames are not "
           f"independent, so no interval")
+    drops = seated_dropouts(res, logs, baselines)
+    lost = [d for d in drops if d[2] is None or d[2] > 1.0]
+    print(f"  gaps in which the seated person was not reported: {len(drops)}; with nobody within 1 m of the "
+          f"seat (a loss rather than a shifted report): {len(lost)}")
+    for dur, tid, near in lost:
+        print(f"    {dur:5.1f} s in trial {tid}, nearest other target "
+              f"{'none' if near is None else f'{near:.2f} m'} from the seat")
     shares = [(s["helper_frames"] / s["frames"], x["id"]) for x, s in per]
     print(f"  per trial: every frame in {sum(1 for v, _ in shares if v == 1)}/{len(shares)} trials, "
           f"lowest {100 * min(shares)[0]:.1f}% (trial {min(shares)[1]})")
