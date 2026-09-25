@@ -1,7 +1,11 @@
 """Renders, for the second installation of Study 2, when the radar reported the
-person sitting between the sensor and the doorway: one row per trial, time in
-the trial along the axis. Output is a pgfplots figure body on stdout, in the
-style of the thesis's other plots.
+person sitting between the sensor and the doorway. Output is a TikZ figure body
+on stdout, in the style of the thesis's other plots:
+
+  top     one bar for all trials: the share of frames in each class
+  below   a timeline for each trial with any gap, grouped by the kind of gap,
+          time in the trial along the axis; the remaining trials are counted
+          but not drawn, since they were reported throughout
 
 Each frame falls into one of three classes, as in seated_dropouts() of
 analyse_privacy_switch.py:
@@ -24,9 +28,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import analyse_privacy_switch as analysis
 
 CSV = os.path.join(ROOT, "study", "privacy_switch_study2_holdout.csv")
-XMAX = 30.0          # seconds shown; later frames in the three long trials are all "reported"
+XMAX = 30.0          # seconds shown; later frames in the long trials are all "reported"
 NEAR_M = 1.0         # a gap with another target this close to the seat counts as shifted
-FILL = {"reported": "seatc!35", "shifted": "black!30", "lost": "lossc"}
+FILL = {"reported": "seatc!35", "shifted": "black!35", "lost": "lossc"}
+X0, XW = 2.6, 10.6   # left edge and width (cm) of the time axis, which spans XMAX seconds
+ROW = 0.52           # pitch of the trial rows (cm)
+BAR = 0.34           # height of a bar (cm)
 
 
 def classes(x, seat):
@@ -62,54 +69,100 @@ def runs(times, cls):
     return out
 
 
+def x_of(t):
+    return X0 + XW * min(t, XMAX) / XMAX
+
+
+def bar(y, a, b, fill):
+    return (f"  \\fill[{fill}] ({x_of(a):.3f},{y - BAR / 2:.3f}) rectangle "
+            f"({x_of(b):.3f},{y + BAR / 2:.3f});")
+
+
 def main():
     rows, logs, door = analysis.load(CSV, None)
     baselines = analysis.load_baselines(CSV)
     res = [analysis.analyse_trial(r, logs[r["trial_id"]], door) for r in rows if r["trial_id"] in logs]
     res.sort(key=lambda x: int(x["id"]))
 
-    body, long_trials = [], []
+    frames = {"reported": 0, "shifted": 0, "lost": 0}
+    trials, gappy = 0, []
     for x in res:
         seat = analysis.seat_of(logs[x["id"]], baselines)
         if not seat:
             continue
-        y = int(x["id"])
+        trials += 1
         times, cls = classes(x, seat)
-        for a, b, c in runs(times, cls):
-            if a >= XMAX:
-                continue
-            body.append(f"      \\fill[{FILL[c]}] (axis cs:{a:.2f},{y - 0.38:.2f}) rectangle "
-                        f"(axis cs:{min(b, XMAX):.2f},{y + 0.38:.2f});")
-        if times[-1] > XMAX:
-            long_trials.append((y, times[-1]))
+        for c in cls:
+            frames[c] += 1
+        spans = runs(times, cls)
+        if any(c != "reported" for _, _, c in spans):
+            gappy.append((int(x["id"]), times[-1] + 0.1, spans))
+    total = sum(frames.values())
+    share = {c: 100.0 * n / total for c, n in frames.items()}
+    lost = [g for g in gappy if any(c == "lost" for _, _, c in g[2])]
+    shifted = [g for g in gappy if g not in lost]
 
-    n = len(res)
+    out = []
+    # the share of all frames, as one bar
+    left = 0.0
+    for c in ("reported", "shifted", "lost"):
+        width = XW * share[c] / 100
+        out.append(f"  \\fill[{FILL[c]}] ({X0 + left:.3f},{-BAR / 2:.3f}) rectangle "
+                   f"({X0 + left + width:.3f},{BAR / 2:.3f});")
+        left += width
+    out.append(f"  \\node[anchor=east, font=\\footnotesize\\bfseries] at ({X0 - 0.15},0) "
+               f"{{All {trials} trials}};")
+    out.append(f"  \\node[anchor=south west, inner sep=1pt] at ({X0},{BAR / 2 + 0.05:.2f}) "
+               f"{{\\textbf{{{share['reported']:.1f}\\,\\%}} reported at the seat}};")
+    out.append(f"  \\node[anchor=south east, inner sep=1pt] at ({X0 + XW},{BAR / 2 + 0.05:.2f}) "
+               f"{{\\textcolor{{black!60}}{{\\textbf{{{share['shifted']:.1f}\\,\\%}} about 0.5\\,m off}}"
+               f"\\quad\\textcolor{{lossc!85!black}}{{\\textbf{{{share['lost']:.1f}\\,\\%}} not reported}}}};")
+
+    # one row per trial with a gap, grouped by the kind of gap
+    y = -1.05
+    grid = []
+    for title, colour, group in (("Not reported, nobody near", "lossc!85!black", lost),
+                                 ("Reported about 0.5\\,m from the seat", "black!60", shifted)):
+        out.append(f"  \\node[anchor=west, font=\\footnotesize\\bfseries, text={colour}] "
+                   f"at (0,{y:.3f}) {{{title}}};")
+        y -= ROW
+        first = y
+        for tid, length, spans in group:
+            out.append(f"  \\node[anchor=east] at ({X0 - 0.15},{y:.3f}) {{Trial {tid}}};")
+            out.append(bar(y, 0, length, FILL["reported"]))
+            for a, b, c in spans:
+                if c == "reported" or a >= XMAX:
+                    continue
+                out.append(bar(y, a, b, FILL[c]))
+                if c == "lost":
+                    whole = a < 0.2 and b >= length - 0.2
+                    label = f"{b - a:.1f}\\,s" + (", the whole trial" if whole else "")
+                    out.append(f"  \\node[text=white, font=\\scriptsize\\bfseries] "
+                               f"at ({(x_of(a) + x_of(b)) / 2:.3f},{y:.3f}) {{{label}}};")
+            if length > XMAX:
+                out.append(f"  \\node[anchor=west, text=black!55, font=\\scriptsize] "
+                           f"at ({x_of(XMAX) + 0.05:.3f},{y:.3f}) {{$\\rightarrow$ {length:.0f}\\,s}};")
+            y -= ROW
+        grid += [f"  \\draw[black!12, line width=0.3pt] ({x_of(t):.3f},{first + ROW / 2:.3f}) -- ({x_of(t):.3f},{y + ROW / 2:.3f});"
+                 for t in range(0, int(XMAX) + 1, 5)]
+        y -= 0.15
+    out.append(f"  \\node[anchor=west, text=black!60] at (0,{y + 0.1:.3f}) "
+               f"{{The other {trials - len(gappy)} trials: reported at the seat throughout.}};")
+    axis = y - 0.35
+    # grid, axis and ticks
+    out.append(f"  \\draw[black!45, line width=0.4pt] ({X0},{axis:.3f}) -- ({X0 + XW},{axis:.3f});")
+    for t in range(0, int(XMAX) + 1, 5):
+        out.append(f"  \\draw[black!45, line width=0.4pt] ({x_of(t):.3f},{axis:.3f}) -- ++(0,-0.08) "
+                   f"node[below, font=\\scriptsize, text=black] {{{t}}};")
+    out.append(f"  \\node[font=\\footnotesize] at ({X0 + XW / 2:.3f},{axis - 0.7:.3f}) {{Time in trial (s)}};")
+
     print("% when the radar reported the seated person, second installation of Study 2")
     print("% generated by scripts/render_seated_timeline.py -- regenerate rather than edit")
     print("\\definecolor{seatc}{HTML}{2A78D6}%")
     print("\\definecolor{lossc}{HTML}{EB6834}%")
-    print("\\begin{tikzpicture}")
-    print("  \\begin{axis}[")
-    print("      width=0.92\\textwidth, height=8.5cm, scale only axis=false,")
-    print(f"      xmin=0, xmax={XMAX:g}, ymin=0.4, ymax={n + 0.6}, y dir=reverse,")
-    print("      xtick={0,5,...,30}, ytick={1,10,20,30,40,50},")
-    print("      xlabel={Time in trial (s)}, ylabel={Trial},")
-    print("      tick label style={font=\\footnotesize}, label style={font=\\footnotesize},")
-    print("      xmajorgrids, grid style={line width=0.2pt, draw=black!12},")
-    print("      axis line style={draw=black!45}, tick style={draw=black!45},")
-    print("      clip=false,  % bars stop at XMAX already; the labels for the long trials sit outside")
-    print("      legend columns=3, legend cell align=left,")
-    print("      legend style={at={(0.5,1.02)}, anchor=south, draw=none, font=\\footnotesize,")
-    print("                    /tikz/every even column/.append style={column sep=0.6em}},")
-    print("    ]")
-    print("      \\addlegendimage{area legend, fill=seatc!35, draw=none}\\addlegendentry{reported at the seat}")
-    print("      \\addlegendimage{area legend, fill=black!30, draw=none}\\addlegendentry{reported about 0.5\\,m from it}")
-    print("      \\addlegendimage{area legend, fill=lossc, draw=none}\\addlegendentry{not reported, nobody near}")
-    print("\n".join(body))
-    for y, total in long_trials:
-        print(f"      \\node[anchor=west, font=\\scriptsize, text=black!60, inner sep=1pt] "
-              f"at (axis cs:{XMAX:g},{y}) {{$\\rightarrow$ {total:.0f}\\,s}};")
-    print("  \\end{axis}")
+    print("\\begin{tikzpicture}[font=\\footnotesize]")
+    print("\n".join(grid))
+    print("\n".join(out))
     print("\\end{tikzpicture}%")
 
 
