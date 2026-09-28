@@ -1,19 +1,21 @@
 # ReadTheRoom
 
-A desk voice assistant that "reads the room": a radar sensor detects how many people are present, and when the conversation is confidential, output automatically switches from speech to a display. Speech recognition, the LLM, and speech synthesis all run through pluggable APIs — cloud by default, with a local Mac fallback for when there's no internet.
+A desk voice assistant that "reads the room": when someone enters the office while it is answering, it moves the rest of the answer from speech to a text chat in a web app, and while someone only stands in the doorway, it lowers its voice. A millimetre-wave radar in a separate sensor unit watches the doorway, and the assistant's head turns towards whoever is speaking. Speech recognition, the LLM, and speech synthesis all run through pluggable APIs — cloud by default, with a local Mac fallback for when there's no internet.
+
+This repository contains the prototype and study tooling of the Master's thesis *Read the Room: Design and Technical Evaluation of a Co-Presence-Aware Tangible AI Assistant* (Marcus Reiners, LMU Munich, 2026): the assistant's software, the firmware of the radar unit, and the harnesses, data and analysis scripts of the two technical studies ([study/README.md](study/README.md)).
 
 ## How it works
 
-1. Recording starts automatically when the mic array's onboard VAD hears speech, including the fraction of a second before it was detected (`MIC_PREROLL_S`), and stops after a short trailing silence (`vad_input_loop`). Pressing ENTER still works as a manual override. Audio via arecord + sox with a channel downmix to mono; `sox -d` on macOS
+1. Recording starts automatically when the mic array's onboard VAD hears speech, including the fraction of a second before it was detected (`MIC_PREROLL_S`), and stops after a short trailing silence (`vad_input_loop`). Pressing ENTER starts and stops a recording by hand. Audio via arecord + sox with a channel downmix to mono; `sox -d` on macOS
 2. Transcription via a swappable STT provider (default: ElevenLabs Scribe; local `faster-whisper` fallback)
 3. Response from a swappable LLM provider via [LiteLLM](https://github.com/BerriAI/litellm) (default: OpenAI; any LiteLLM-supported provider works by changing one config value, incl. local Ollama)
 4. Speech synthesis via a swappable TTS provider (default: ElevenLabs; local Piper fallback), streamed sentence by sentence while the LLM is still generating
 5. A single LED matrix panel shows eyes that blink and track the last known speaker direction. Status (idle/listening/speaking) is shown separately on a 7-LED "tie" strip driven by the bridge ESP32
 6. A DS3225 digital servo pans the head towards that same direction, for gesturing or turning to face incoming speech
-7. A [Seeed XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/) running the LD2450 firmware (`firmware/mmWave/`) reads the sensor over UART and sends target data over **ESP-NOW** (no WiFi AP/router involved — sidesteps the association/isolation issues plain WiFi ran into). A second XIAO ESP32S3 running the bridge firmware (`firmware/mmWaveBridge/`) receives those packets and relays them to the Pi as newline-delimited JSON over USB serial. The Pi reads that (`adapters/hardware/radar_ld2450.py::RadarLD2450Adapter`) and publishes `PersonCountChanged`/`RadarTargetsUpdated`.
+7. A [Seeed XIAO ESP32S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/) running the LD2450 firmware (`firmware/mmWave/`) reads the sensor over UART and sends target data over **ESP-NOW** (no WiFi access point or router involved). A second XIAO ESP32S3 running the bridge firmware (`firmware/mmWaveBridge/`) receives those packets and relays them to the Pi as newline-delimited JSON over USB serial. The Pi reads that (`adapters/hardware/radar_ld2450.py::RadarLD2450Adapter`) and publishes `PersonCountChanged`/`RadarTargetsUpdated`.
 8. A small web app (`adapters/chat_bridge.py`, served at `http://<pi-address>:8765`) mirrors the conversation as text, accepts typed messages, and has a settings tab for the radar zone and enforcement mode, servo calibration and turning range, private mode, the voice library and volume, the system prompt, the LLM model and its thinking level, and the speech-recognition language. When someone walks into the radar zone during a conversation, the current/next answer is automatically redirected from speech to that chat. The eyes close and the tie strip goes dark; the head stops following voices and nothing is recorded. Speech does not come back on its own: once the radar judges the room clear again the strip glows faintly, and the user resumes with the chat's *Resume speaking* button (or by turning private mode off) — Study 2 showed the radar's exit judgement can be premature, so the last word stays with the user. The switch is decided by who *crosses the zone edge*, not by a headcount: the LD2450 loses still, seated people, so the user's own presence is taken from the fact that they are talking, and only someone tracked moving in from outside counts as a newcomer (`service_layer/handlers.py`, `PrivacyGuard`). This needs the zone's *Enforced by* set to **Software** — sensor-side enforcement hides everyone outside the zone, so no entry can be seen. A voice on/off toggle overrides this manually regardless of who's in the room.
 
-   Optionally, a second rectangle — the **door zone** — is drawn over the doorway in the same settings view. With it, entries and exits are decided only there: someone who comes through the door zone into the room is an entry, someone who goes from the room into the door zone and disappears has left — provided the radar measured them moving away at walking speed (≥ 0.5 m/s) on the way out, since the LD2450 sometimes lets a person's position drift towards the door while they stand still inside, which Study 2 showed can otherwise fake an exit — and movement anywhere else (someone getting up, a reflection near a wall) can no longer trigger anything. Someone who only stands in the doorway during a conversation makes the voice quieter within about 0.3 s instead of cutting the answer off; it returns to normal shortly after the doorway is clear. The door zone is stored on the Pi only (`app_settings.json`); the sensor keeps just the room zone.
+   Optionally, a second rectangle — the **door zone** — is drawn over the doorway in the same settings view. With it, entries and exits are decided only there: someone who comes through the door zone into the room is an entry, someone who goes from the room into the door zone and disappears has left — provided the radar measured them moving away at walking speed (≥ 0.5 m/s) on the way out, since the LD2450 sometimes lets a person's position drift towards the door while they stand still inside, which Study 2 showed can otherwise fake an exit — and movement anywhere else (someone getting up, a reflection near a wall) can no longer trigger anything. Someone who only stands in the doorway during a conversation makes the voice quieter instead of cutting the answer off; it returns to normal shortly after the doorway is clear. The door zone is stored on the Pi only (`app_settings.json`); the sensor keeps just the room zone.
 
 9. A capacitive touch pad on top of the head (GPIO 5) and a vibration motor module (GPIO 26) give a physical override (`adapters/hardware/touch_control.py`, `handle_head_tap` in `service_layer/handlers.py`). A tap after a visit hands speech back, like *Resume speaking* (one long pulse); otherwise it switches private mode (one short pulse for on, two for off). A local add-on can claim the tap first. Wiring: touch pad VCC to 3.3 V (pin 1, never 5 V, or its output would exceed the Pi's 3.3 V inputs), GND, OUT to GPIO 5 (pin 29); motor module VCC to 5 V (pin 2), GND, IN to GPIO 26 (pin 37). Runs through the pigpio daemon.
 
@@ -53,7 +55,7 @@ STT and TTS each have three interchangeable adapters, selected via `STT_PROVIDER
 
 All TTS adapters share sentence-buffering, `aplay` piping, and takeover handling (muting mid-stream when someone enters the room) via `adapters/tts/base.py::StreamingTTSAdapter` — a new TTS provider only has to implement `_synthesize_chunks()` and `sample_rate`.
 
-The LLM stays on [LiteLLM](https://github.com/BerriAI/litellm): change `LLM_MODEL` (e.g. `openai/gpt-4o-mini`, `anthropic/claude-sonnet-4-5`, `ollama_chat/qwen3.5:9b`) to swap providers. `LLM_FALLBACK_MODEL`/`LLM_FALLBACK_API_BASE` let it fail over automatically to a local Ollama server if the cloud API is unreachable.
+The LLM runs through [LiteLLM](https://github.com/BerriAI/litellm): change `LLM_MODEL` (e.g. `openai/gpt-4o-mini`, `anthropic/claude-sonnet-4-5`, `ollama_chat/qwen3.5:9b`) to swap providers. `LLM_FALLBACK_MODEL`/`LLM_FALLBACK_API_BASE` let it fail over automatically to a local Ollama server if the cloud API is unreachable.
 
 | Adapter | Purpose | Status |
 |---|---|---|
@@ -95,7 +97,7 @@ You can also run the whole pipeline directly on the Mac (e.g. for development wi
 
 ## Target hardware
 
-- Raspberry Pi (Linux, ALSA) or macOS (for local/dev runs)
+- Raspberry Pi 4 (Linux, ALSA) or macOS (for local/dev runs)
 - ReSpeaker USB Mic Array v2.0 (`ArrayUAC10`, 6 channels) as microphone and speaker (Pi) — also provides onboard direction-of-arrival (DOA) over USB HID, independent of the audio stream
 - 1x Waveshare RGB LED matrix 96x48 (rpi-rgb-led-matrix / `rgbmatrix`) — eyes only; status is shown on a separate tie LED strip driven by the bridge ESP32
 - DS3225 digital servo on GPIO19 (hardware PWM) for head panning — GPIO18 is taken by the LED matrix's OE- signal. Note the DS3225 ships in 180° and 270° variants using the same 500–2500µs pulse range, so `SERVO_HARDWARE_MIN_ANGLE`/`SERVO_HARDWARE_MAX_ANGLE` must match the sweep *your* unit actually performs (see below)
@@ -105,8 +107,18 @@ You can also run the whole pipeline directly on the Mac (e.g. for development wi
 
 - Python 3.10+
 - System tools: `arecord`, `aplay` (ALSA, Pi) or `sox` (macOS)
-- Python packages: `litellm`, `requests`, `elevenlabs` (for the default cloud providers); `fastapi`, `uvicorn` (chat bridge, always required now; `python-multipart` additionally for the Mac server); `pyserial` (radar bridge link); optionally `faster-whisper`, `piper-tts` (for local fallback), `python-dotenv`, `numpy` (TTS volume scaling — without it the volume slider is a no-op), `rgbmatrix`, `gpiozero` (servo; `pigpio` strongly recommended as the PWM backend, see below), `pyusb` (ReSpeaker DOA)
+- Python packages: `litellm`, `requests`, `elevenlabs` (for the default cloud providers); `fastapi`, `uvicorn` (chat bridge, always required; `python-multipart` additionally for the Mac server); `pyserial` (radar bridge link); optionally `faster-whisper`, `piper-tts` (for local fallback), `python-dotenv`, `numpy` (TTS volume scaling — without it the volume slider is a no-op), `rgbmatrix`, `gpiozero` (servo; `pigpio` strongly recommended as the PWM backend, see below), `pyusb` (ReSpeaker DOA)
 - A reachable LLM API (OpenAI/Anthropic/etc., or a local/LAN Ollama server)
+
+## Installation
+
+```bash
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+cp .env.example .env    # then fill in the API keys
+```
+
+`requirements.txt` pins the versions used during development. The optional local models and the Pi-only hardware packages are listed there as comments; on the Pi, also install the pigpio daemon (`sudo apt install pigpio`, see below) and build `rgbmatrix` from [rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix).
 
 ## Configuration
 
@@ -128,7 +140,7 @@ All settings live in [config.py](config.py) and are read from environment variab
 | `WHISPER_MODEL`, `WHISPER_THREADS`, `WHISPER_VAD` | Local STT fallback: path to the CT2 model, CPU threads, VAD filter |
 | `PIPER_MODEL` | Local TTS fallback: path to the Piper voice (.onnx) |
 | `MIC_DEVICE`, `MIC_CHANNELS`, `MIC_RATE` | ALSA capture device (Pi only) |
-| `MIC_PREROLL_S` | Seconds of audio from before voice was detected that a recording starts with (default `0.6`), so the first syllable isn't cut off. The mic stays open for this while listening is allowed and keeps only that last fraction of a second in memory; during a visit, the settings tab, typing in the chat or an add-on hold it is closed completely, and nothing the assistant says ends up in it. `0` starts the recorder only on detection, as before (Pi only) |
+| `MIC_PREROLL_S` | Seconds of audio from before voice was detected that a recording starts with (default `0.6`), so the first syllable isn't cut off. The mic stays open for this while listening is allowed and keeps only that last fraction of a second in memory; during a visit, the settings tab, typing in the chat or an add-on hold it is closed completely, and nothing the assistant says ends up in it. `0` starts the recorder only on detection (Pi only) |
 | `SPEAKER_DEVICE` | ALSA playback device (Pi only) |
 | `USE_LED_MATRIX`, `GPIO_SLOWDOWN`, `LED_MATRIX_BRIGHTNESS`, `LED_MATRIX_PWM_BITS` | Enable/disable the LED matrix (eyes) and its signal/refresh tuning |
 | `USE_SERVO`, `SERVO_GPIO_PIN` | Enable/disable the servo turntable and its GPIO pin |
@@ -174,7 +186,7 @@ Typed messages from the web app take priority over speech: sending one interrupt
 
 A recording runs until `trailing_silence_s` (0.8s) of quiet, then is kept only if at least `min_voice_polls` polls across the whole recording reported voice. That count is **cumulative, not consecutive** — pauses inside a sentence cost nothing, while a knock never reaches the total. Raise `min_voice_polls` if noise gets transcribed; raise `trailing_silence_s` if you are being cut off mid-sentence.
 
-A failed LLM call is spoken as a short apology and deliberately **not** written to the conversation history — persisting it fed the failure back as context on every later turn.
+A failed LLM call is spoken as a short apology and deliberately **not** written to the conversation history — otherwise the failure would be fed back as context on every later turn.
 
 ## Testing hardware
 
@@ -239,18 +251,18 @@ sudo apt install pigpio
 sudo systemctl enable --now pigpiod
 ```
 
-A one-off `sudo pigpiod` also works but doesn't persist across a reboot, so prefer the `systemctl` form. `ServoTurntableAdapter` logs which PWM backend actually ended up active at startup (`[Servo] PWM-Backend: ...`) — check that line if twitching shows up again: `PiGPIOFactory` is the jitter-free DMA-timed one, anything else means `SERVO_USE_PIGPIO` isn't taking effect and it's still on software-timed PWM.
+A one-off `sudo pigpiod` also works but doesn't persist across a reboot, so prefer the `systemctl` form. `ServoTurntableAdapter` logs which PWM backend actually ended up active at startup (`[Servo] PWM-Backend: ...`) — check that line if the servo twitches: `PiGPIOFactory` is the jitter-free DMA-timed one, anything else means `SERVO_USE_PIGPIO` isn't taking effect and it's still on software-timed PWM.
 
 ### Servo angles are a scale, not just a limit
 
 `SERVO_HARDWARE_MIN_ANGLE`/`SERVO_HARDWARE_MAX_ANGLE` map linearly onto `SERVO_MIN_PULSE_WIDTH`/`SERVO_MAX_PULSE_WIDTH`. They are **not** a safety clamp (that's `SERVO_MIN_ANGLE`/`SERVO_MAX_ANGLE`) — they define what a "degree" means. If they claim a wider sweep than the servo really performs, every commanded degree moves proportionally less, silently and with no error:
 
-> This bit us: `SERVO_HARDWARE_MAX_ANGLE` was `360` on a servo that sweeps 180°, so every commanded degree moved *half* a real degree and the head only ever had 90° of usable travel. Tracking looked inaccurate because each move under-turned by 2×.
+For example, with `SERVO_HARDWARE_MAX_ANGLE` set to `360` on a servo that sweeps 180°, every commanded degree moves only *half* a real degree, the head has only 90° of usable travel, and tracking looks inaccurate because every move under-turns by a factor of two.
 
 To verify: run `scripts/sweep_servo.py` and measure the actual sweep. If commanding the full window doesn't produce that many physical degrees, set `SERVO_HARDWARE_MAX_ANGLE` to what you measured. Use `scripts/probe_servo_range.py` to find the true mechanical limits first if you don't know them.
 
 ### LED matrix
 
-If the matrix flickers, `LedMatrix`'s `pwm_bits` (default 5, down from the library's default 11) trades unneeded color depth for a higher refresh rate, and `limit_refresh_rate_hz` (default 0 = uncapped) no longer artificially caps how fast it can refresh — lower `pwm_bits` further if it still flickers, or raise it for smoother gradients if you can spare the refresh rate. The library's own startup hint about adding `isolcpus=3` to `/boot/cmdline.txt` (dedicating a CPU core to the matrix refresh thread, reboot required) is a bigger lever if `pwm_bits` alone isn't enough — worth it now that STT/LLM/TTS run in the cloud rather than competing for CPU on the Pi.
+If the matrix flickers, `LedMatrix`'s `pwm_bits` (default 5, down from the library's default 11) trades unneeded color depth for a higher refresh rate, and `limit_refresh_rate_hz` (default 0 = uncapped) does not cap how fast it can refresh — lower `pwm_bits` further if it still flickers, or raise it for smoother gradients if you can spare the refresh rate. The library's own startup hint about adding `isolcpus=3` to `/boot/cmdline.txt` (dedicating a CPU core to the matrix refresh thread, reboot required) is a bigger lever if `pwm_bits` alone isn't enough — affordable when STT/LLM/TTS run in the cloud rather than competing for CPU on the Pi.
 
 If the panel shows ghosting or stray static pixels while otherwise rendering correctly, that's a signal-timing symptom, not a dead panel/cable — try raising `GPIO_SLOWDOWN` (default 5) a step or two at a time; it trades max refresh rate for cleaner signal integrity.

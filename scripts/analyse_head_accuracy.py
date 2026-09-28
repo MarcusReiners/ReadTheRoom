@@ -98,8 +98,8 @@ def kruskal_wallis(groups):
     if correction > 0:
         h /= correction
     df = k - 1
-    eps2 = (h - k + 1) / (n - k) if n > k else float("nan")
-    return {"H": h, "df": df, "p": chi2_sf(h, df), "n": n, "k": k, "eps2": eps2}
+    eta2_h = (h - k + 1) / (n - k) if n > k else float("nan")  # eta^2_H (Tomczak & Tomczak 2014)
+    return {"H": h, "df": df, "p": chi2_sf(h, df), "n": n, "k": k, "eta2_h": eta2_h}
 
 
 def median(vals):
@@ -842,7 +842,7 @@ def run_kruskal(analysed, value=None, label="unsigned error |total|"):
             continue
         stars = "***" if res["p"] < .001 else "**" if res["p"] < .01 else "*" if res["p"] < .05 else "n.s."
         print(f"   H({res['df']}) = {res['H']:.3f}, p = {res['p']:.4f} {stars}, "
-              f"eps^2 = {res['eps2']:.3f}, N = {res['n']}")
+              f"eta^2_H = {res['eta2_h']:.3f}, N = {res['n']}")
         if res["p"] < .05 and len(levels) > 2:
             print("   pairwise (Bonferroni-corrected):")
             pairs = [(a, b) for i, a in enumerate(levels) for b in levels[i + 1:]]
