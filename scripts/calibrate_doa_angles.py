@@ -66,7 +66,7 @@ def main() -> None:
 
     turntable = build_turntable(config)
     doa = RespeakerDOAAdapter(front_reference_degrees=config.DOA_FRONT_REFERENCE_DEGREES)
-    home = (turntable.safe_min_angle + turntable.safe_max_angle) / 2.0
+    home = turntable.home_angle
 
     os.makedirs(STUDY_DIR, exist_ok=True)
     path = os.path.join(STUDY_DIR, f"doa_angle_response_{args.session}.csv")

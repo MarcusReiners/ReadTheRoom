@@ -24,11 +24,18 @@ class DummyTurntableAdapter:
     def track_relative_angle(self, target_angle_degrees: float, ramp_duration_s: float | None = None) -> None:
         self.current_heading_degrees = self.current_heading_degrees + (target_angle_degrees - 90.0)
 
+    def predict_relative_turn(self, target_angle_degrees: float) -> float:
+        return target_angle_degrees - 90.0
+
     def predict_relative_move(self, target_angle_degrees: float) -> float:
         return abs(target_angle_degrees - 90.0)
 
     def predict_home_move(self) -> float:
         return abs(self.current_heading_degrees - 90.0)
+
+    @property
+    def home_angle(self) -> float:
+        return 90.0
 
     @property
     def safe_min_angle(self) -> float:
@@ -157,7 +164,7 @@ class ServoTurntableAdapter:
         self.home_offset_degrees = home_offset_degrees
         self._min_angle, self._max_angle = self._windowed_range(home_offset_degrees)
 
-        self.current_heading_degrees = (self._min_angle + self._max_angle) / 2
+        self.current_heading_degrees = self.home_angle
         self._servo = AngularServo(
             pin,
             initial_angle=self.current_heading_degrees if move_to_home_on_start else None,
@@ -210,6 +217,25 @@ class ServoTurntableAdapter:
 
         return lo, hi
 
+    def _home_angle_for(self, offset_degrees: float) -> float:
+        """Where straight ahead sits for a given home offset.
+
+        Taken from the offset itself rather than from the middle of the
+        window, because the two part company exactly when the window cannot
+        be shifted: a safe range as wide as the servo's whole travel (the
+        0-180 the web app saves by default) always comes back as the full
+        hardware range from _windowed_range(), so its midpoint is 90 whatever
+        the horn is mounted at, and the calibrated offset was silently
+        thrown away - home, every recenter and the calibration screen's
+        starting point all ignored it. Clamped into the window so home stays
+        a position the head is allowed to hold."""
+        lo, hi = self._windowed_range(offset_degrees)
+        return max(lo, min(hi, self._default_center_angle + offset_degrees))
+
+    @property
+    def home_angle(self) -> float:
+        return self._home_angle_for(self.home_offset_degrees)
+
     @property
     def safe_min_angle(self) -> float:
         return self._base_min_angle
@@ -241,9 +267,15 @@ class ServoTurntableAdapter:
         self._base_min_angle = min_angle
         self._base_max_angle = max_angle
         self._min_angle, self._max_angle = self._windowed_range(self.home_offset_degrees)
-        self.current_heading_degrees = max(
-            self._min_angle, min(self._max_angle, self.current_heading_degrees)
-        )
+        clamped = max(self._min_angle, min(self._max_angle, self.current_heading_degrees))
+        if clamped != self.current_heading_degrees:
+            # Narrowing the window while the head is outside it used to move
+            # only the bookkeeping, leaving the servo physically where it was
+            # - and since every tracking move is relative to
+            # current_heading_degrees, all of them were then off by that
+            # difference until the next recenter. Drive it to the position we
+            # are about to claim it holds.
+            self.set_angle_immediate(clamped)
         logger.info(
             "[Servo] Sicherer Bereich jetzt %.0f-%.0f Grad (Fenster %.0f-%.0f).",
             min_angle, max_angle, self._min_angle, self._max_angle,
@@ -298,10 +330,8 @@ class ServoTurntableAdapter:
     def raw_angle_for_offset(self, offset_degrees: float) -> float:
         """The real hardware angle a given home offset currently resolves to
         - e.g. to resume calibration from wherever the last saved offset
-        actually sits. _windowed_range() already keeps lo/hi inside
-        [0, 360], so their midpoint needs no further normalization."""
-        lo, hi = self._windowed_range(offset_degrees)
-        return (lo + hi) / 2
+        actually sits."""
+        return self._home_angle_for(offset_degrees)
 
     @property
     def _default_center_angle(self) -> float:
@@ -324,7 +354,7 @@ class ServoTurntableAdapter:
     def home(self, ramp_duration_s: float | None = None) -> None:
         """Return to the front-facing center position - a deliberate command,
         not a DOA reading."""
-        center = (self._min_angle + self._max_angle) / 2
+        center = self.home_angle
         if ramp_duration_s and ramp_duration_s > 0:
             self._ramp_to(center, ramp_duration_s)
         else:
@@ -352,8 +382,7 @@ class ServoTurntableAdapter:
         coordinates, applied relative to HOME - for one-off test/calibration
         moves (e.g. home_servo.py --angle), not live tracking. See
         track_relative_angle() for why live DOA tracking can't use this."""
-        center = (self._min_angle + self._max_angle) / 2
-        raw_target = center + (target_angle_degrees - 90.0)
+        raw_target = self.home_angle + (target_angle_degrees - 90.0)
         self.set_angle_immediate(raw_target)
 
     def track_relative_angle(self, target_angle_degrees: float, ramp_duration_s: float | None = None) -> None:
@@ -381,7 +410,7 @@ class ServoTurntableAdapter:
         - confirmed on the bench that a single instant update looks abrupt
         (the servo moves at its own max speed), where a short eased glide
         looks like natural head motion instead."""
-        raw_target = self.current_heading_degrees + (target_angle_degrees - 90.0)
+        raw_target = self._resolve_raw_target(target_angle_degrees)
         logger.debug(
             "[Servo] track_relative_angle: current=%.1f target=%.1f raw_target=%.1f (window %.1f-%.1f)",
             self.current_heading_degrees, target_angle_degrees, raw_target,
@@ -392,20 +421,48 @@ class ServoTurntableAdapter:
         else:
             self.set_angle_immediate(raw_target)
 
+    def _resolve_raw_target(self, target_angle_degrees: float) -> float:
+        """The window position that leaves the nose pointing as close to the
+        requested bearing as the sweep allows.
+
+        A bearing and that bearing minus a full turn are the same direction
+        in the room but two opposite commands to a servo that cannot wrap, so
+        which of them the caller happens to hand over must not decide where
+        the head goes. It did: the conversion into DOA convention cuts the
+        circle dead astern, so a source directly behind the head came out as
+        +180 or -180 depending on a degree of acoustic jitter, and the head
+        swung to whichever end stop that branch pointed at - on the bench, 265
+        degrees sent it one way and 268 the other. Both candidates are
+        clamped into the window here and the one that ends up facing nearest
+        the real direction wins, with the shorter move breaking a tie."""
+        delta = target_angle_degrees - 90.0
+        best_key, best_target = None, self.current_heading_degrees
+        for candidate in (delta, delta - 360.0, delta + 360.0):
+            clamped = max(self._min_angle, min(self._max_angle, self.current_heading_degrees + candidate))
+            moved = clamped - self.current_heading_degrees
+            residual = abs((moved - delta + 180.0) % 360.0 - 180.0)
+            key = (round(residual, 6), abs(moved))
+            if best_key is None or key < best_key:
+                best_key, best_target = key, clamped
+        return best_target
+
+    def predict_relative_turn(self, target_angle_degrees: float) -> float:
+        """The SIGNED turn track_relative_angle() would make after clamping.
+        Tells a caller how much of the requested bearing the sweep cannot
+        deliver, which is the part the eyes have to hold on their own."""
+        return self._resolve_raw_target(target_angle_degrees) - self.current_heading_degrees
+
     def predict_relative_move(self, target_angle_degrees: float) -> float:
         """How far track_relative_angle(target_angle_degrees) would actually
         move the servo (after clamping), without moving it - lets a caller
         size a ramp/settle duration before committing to the move."""
-        raw_target = self.current_heading_degrees + (target_angle_degrees - 90.0)
-        clamped = max(self._min_angle, min(self._max_angle, raw_target))
-        return abs(clamped - self.current_heading_degrees)
+        return abs(self.predict_relative_turn(target_angle_degrees))
 
     def predict_home_move(self) -> float:
         """How far home() would actually move the servo, without moving it -
         lets a caller size a ramp/settle duration before committing, same
         idea as predict_relative_move()."""
-        center = (self._min_angle + self._max_angle) / 2
-        return abs(center - self.current_heading_degrees)
+        return abs(self.home_angle - self.current_heading_degrees)
 
     def _ramp_to(self, target_angle_degrees: float, duration_s: float, steps_per_s: float = 20.0) -> None:
         # 50 steps/s (previous default) sent PWM updates faster than this

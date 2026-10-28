@@ -333,7 +333,7 @@ def run_trial(recorder, turntable, session, trial_id, condition, rep, settle_qui
     if paused is not None:
         paused.set()
     print("Homing...")
-    home_angle = (turntable.safe_min_angle + turntable.safe_max_angle) / 2.0
+    home_angle = turntable.home_angle
     for attempt in range(HOME_ATTEMPTS):
         turntable.home(ramp_duration_s=0.4)
         time.sleep(HOME_SETTLE_S)
