@@ -10,7 +10,12 @@ import usb.util
 
 _VENDOR_ID = 0x2886
 _PRODUCT_ID = 0x0018
-_TIMEOUT_MS = 100000
+# A healthy control transfer answers in about a millisecond, and both callers
+# poll the array several times a second, so a reply that takes longer than
+# this is already too late to use. The previous 100 s meant a single wedged
+# transfer froze the tracking loop AND (through the shared lock) the recorder
+# for a minute and a half, with nothing in the log but silence.
+_TIMEOUT_MS = 250
 _RETRY_ATTEMPTS = 3
 _RETRY_DELAY_S = 0.05
 _RECONNECT_MIN_S = 2.0
@@ -142,7 +147,49 @@ def median_angle(angles: list[float]) -> float:
         raise ValueError("median_angle() braucht mindestens einen Wert.")
     base = angles[0]
     unwrapped = [base + ((a - base + 180.0) % 360.0 - 180.0) for a in angles]
-    return 90.0 + ((statistics.median(unwrapped) - 90.0 + 180.0) % 360.0 - 180.0)
+    return 90.0 + _wrap180(statistics.median(unwrapped) - 90.0)
+
+
+def _wrap180(degrees: float) -> float:
+    return (degrees + 180.0) % 360.0 - 180.0
+
+
+def _offset_from_nose(angle: float) -> float:
+    """How far off the array's own axis a DOA-convention bearing is, signed
+    and in (-180, 180] - the turn the head would have to make to face it."""
+    return _wrap180(angle - 90.0)
+
+
+def settled_angle(angles: list[float], tolerance_degrees: float = 25.0,
+                  astern_band_degrees: float = 5.0) -> tuple[float | None, list[float], str]:
+    """The one bearing a set of readings agrees on, or None if they do not.
+
+    Two kinds of reading are discarded before the median is taken.
+
+    A bearing within astern_band_degrees of dead astern cannot say which way
+    to turn: a degree of jitter there reverses the answer by half a turn, and
+    a head that cannot spin has no basis to pick a side. It is also what the
+    array emits when it has no lock at all. The band stays narrow on purpose
+    - with the servo defining the angles, a talker directly behind the head
+    was placed to within 0 degrees over 12 seconds on 25 October 2026, so the
+    rear itself is usable.
+
+    Readings further than tolerance_degrees from the median are then dropped
+    as reflections: inside a single utterance the array's spread is a couple
+    of degrees (measured), so nothing legitimate is anywhere near that cut.
+    What is left has to be at least two readings and at least half of the
+    usable ones, otherwise there is no majority left to believe.
+
+    Returns (bearing or None, the readings it was taken over, and why there
+    is no bearing)."""
+    usable = [a for a in angles if abs(_offset_from_nose(a)) < 180.0 - astern_band_degrees]
+    if not usable:
+        return None, [], "they all sit behind the head, where the array cannot tell one side from the other"
+    median = median_angle(usable)
+    kept = [a for a in usable if abs(_wrap180(a - median)) <= tolerance_degrees]
+    if len(kept) < 2 or 2 * len(kept) < len(usable):
+        return None, kept, "they disagree too much to place a talker"
+    return median_angle(kept), kept, ""
 
 
 class RespeakerDOAAdapter:
@@ -179,6 +226,9 @@ class RespeakerDOAAdapter:
                                 len(self._calibration), calibration_path)
                 except ValueError as e:
                     logger.warning("[DOA] calibration unusable (%s) - using raw bearings.", e)
+        else:
+            logger.info("[DOA] no angle calibration set (DOA_CALIBRATION_PATH) - using raw bearings; "
+                        "the measured table halves the bearing error.")
         self._dev = usb.core.find(idVendor=_VENDOR_ID, idProduct=_PRODUCT_ID)
         if self._dev is None:
             raise RuntimeError(
