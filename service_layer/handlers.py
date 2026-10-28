@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 
+from domain.aim import IdleGaze, fuse_bearing, glance_bearing
 from domain.conversation import ConversationState
 from domain.events import (
     DoorCleared,
@@ -362,24 +363,84 @@ def start_doa_tracking(
     doa, turntable, face, poll_interval_s: float = 0.3, lock=None, assistant_speaking=None,
     settle_base_s: float = 0.15, settle_deg_per_s: float = 200.0, eye_lead_s: float = 0.15,
     silence_timeout_s: float = 5.0, calibration_mode=None, doa_samples: int = 5,
-    post_move_quiet_s: float = 1.5, servo_recentering=None, min_doa_samples: int = 3,
-    accept_range=None, paused=None, sample_window_s: float = 6.0,
-    doa_sample_interval_s=0.25, doa_onset_skip_s: float = 1.5, turn_in_progress=None,
+    post_move_quiet_s: float = 1.5, servo_recentering=None, min_doa_samples: int = 2,
+    accept_range=None, paused=None, sample_window_s: float = 3.0,
+    doa_sample_interval_s=0.25, doa_onset_skip_s: float = 0.75, turn_in_progress=None,
+    doa_quiet_give_up_s: float = 0.75, doa_agreement_degrees: float = 25.0,
+    doa_astern_band_degrees: float = 5.0, radar_targets=None, radar_agree_weight: float = 0.25,
+    radar_agree_degrees: float = 10.0, radar_gate_degrees: float = 45.0,
+    radar_near_mm: float = 2500.0, aim_bias=None, idle_gaze=None,
+    idle_gaze_glide_s: float = 0.45, glance_hold_s: float = 1.5,
+    glance_glide_s: float = 0.25, recenter_request=None,
+    require_speech_flag: bool = True, speech_share: float = 0.3,
 ) -> None:
     """Continuously polls the ReSpeaker's onboard DOA/VAD on a background
     thread for the lifetime of the process, turning the head/eyes toward
     detected speech - same logic as scripts/test_hardware.py's
     live_doa_tracking().
 
-    The sampling defaults are the configuration Study 1's main session
-    measured: skip the first 1.5s after voice starts, then take readings
-    250ms apart (at least three, up to doa_samples), and stay deaf for 1.5s
-    after a move. The head waits for the array's estimate to settle and turns
-    once, instead of turning on the onset readings and again while the person
-    is still talking - fewer moves mid-utterance means less servo noise in the
+    The sampling defaults follow Study 1's settle-first configuration: ignore
+    what the array says at the very onset of speech, then take readings 250ms
+    apart (at least three, up to doa_samples), and stay deaf for 1.5s after a
+    move. The head waits for the array's estimate to settle and turns once,
+    instead of turning on the onset readings and again while the person is
+    still talking - fewer moves mid-utterance means less servo noise in the
     recording. The earlier defaults sampled from the onset (37.5ms apart within
     0.6s, no skip); on the bench that made a coarse first move and, once,
     turned the head away from the talker.
+
+    doa_onset_skip_s is 0.75 rather than the 1.5 the study ran with. The
+    recorded samples of 14 September 2026 put the lock-on time at well under
+    that: a single reading taken in the first 0.25s of speech is off by 11
+    degrees at the median and by 45 at the ninth decile, while from 0.75s on
+    the median is 2 degrees and the ninth decile 8 - no better at 1.5s. The
+    whole second of waiting bought nothing and cost every utterance shorter
+    than about two seconds, which was dropped for want of readings.
+
+    doa_quiet_give_up_s ends a sample window early once the array has
+    reported no voice for that long. Without it the window ran to
+    sample_window_s whatever happened, and the samples in it did not have to
+    belong to the sound that opened it: on 22 September a 0.8s blip opened a
+    window at 18:42:00.9, the real question that followed at 18:42:07.4 went
+    entirely unheard because the loop was still inside that window, and the
+    bearing it finally acted on was built from a book closing at 18:42:16.
+
+    doa_agreement_degrees is how far a single reading may sit from the median
+    before it is treated as a reflection rather than the talker - see
+    settled_angle() in the DOA adapter.
+
+    radar_targets: a callable returning the people the radar can currently
+    see, as (bearing, distance_mm) in the head's own frame - see
+    adapters/radar_alignment.py. Given one, the sound's bearing is fused with
+    it rather than used raw: domain/aim.py has the rule and the reasoning,
+    the short version being that the sound leads while the two agree to
+    radar_agree_degrees and the radar takes over as they diverge. None falls
+    back to the microphone array alone, which is also what happens whenever
+    the radar sees nobody - a motionless person at the desk is invisible to
+    it.
+
+    aim_bias: a callable returning the operator's own correction in degrees,
+    added to every bearing. Set from the web app's Aim card, for the case the
+    head lands off the talker the same way every time.
+
+    doa_astern_band_degrees covers only the knife edge at dead astern, where
+    a degree of jitter reverses the turn and the servo has no basis to choose
+    a side - a property of a head that cannot spin, not of the array. It is
+    deliberately NOT wide: with the servo defining the angles, a talker
+    directly behind the head was placed to within 0 degrees over 12 seconds
+    on 25 October 2026, so the rear as such is usable. The same run also
+    showed the failure a band cannot catch - at 120 degrees round, the array
+    reported 63 degrees the other way, stably and well inside the sweep,
+    after being correct for the first second.
+
+    min_doa_samples is two, not three. A question of ordinary length leaves
+    very little behind the onset skip: "Hey, how are you feeling?" was 1.9s
+    of recording on 25 October but only 1.1s of reported voice activity, so
+    at 250ms spacing it produced exactly two settled readings and a minimum
+    of three threw the whole utterance away. Two is still real evidence
+    rather than a single blip - settled_angle() requires both of them to
+    agree, a transient shorter than the onset skip produces none at all, and
+    a reading taken this late is off by 2 degrees at the median.
 
     accept_range: (min, max) bearings to accept, or a callable returning
     that pair. Estimates outside it are ignored. The deployed assistant
@@ -470,13 +531,16 @@ def start_doa_tracking(
     # Imported here rather than at module scope: doa_respeaker pulls in
     # usb.core, and handlers.py is imported unconditionally by main.py even
     # when USE_SERVO is off (or on a dev machine with no pyusb at all).
-    from adapters.hardware.doa_respeaker import DOAUnavailable, median_angle
+    from adapters.hardware.doa_respeaker import DOAUnavailable, median_angle, settled_angle
 
     lock = lock or contextlib.nullcontext()
     moving_until = 0.0
+    glance_until = 0.0
+    if aim_bias is None:
+        aim_bias = lambda: 0.0
 
     def _tracking_loop() -> None:
-        nonlocal moving_until
+        nonlocal moving_until, glance_until
         logger.info("[DOA] Tracking started.")
         last_active_time = time.monotonic()
         was_speaking = False
@@ -501,6 +565,25 @@ def start_doa_tracking(
                     at_home = True
                     last_active_time = time.monotonic()
                 was_calibrating = calibrating
+                if (recenter_request is not None and recenter_request.is_set()
+                        and not speaking and not calibrating):
+                    # Something that turned the head has since been judged not
+                    # to be speech - by the recogniser, which is the only
+                    # thing here that can actually tell. It says so a second
+                    # or two late, far too late to gate the turn, but not too
+                    # late to take it back.
+                    recenter_request.clear()
+                    if not at_home:
+                        logger.info("[DOA] It was not speech after all - head returning to home.")
+                        settle_s = settle_base_s + turntable.predict_home_move() / settle_deg_per_s
+                        moving_until = time.monotonic() + settle_s + post_move_quiet_s
+                        if servo_recentering is not None:
+                            servo_recentering.set()
+                        face.animate_eye_direction(90.0, duration_s=settle_s)
+                        turntable.home(ramp_duration_s=settle_s)
+                        at_home = True
+                        last_active_time = time.monotonic()
+
                 settling = time.monotonic() < moving_until
                 # Mirror the settle gate onto the shared flag so the recorder
                 # thread ignores exactly the window this loop already does.
@@ -528,59 +611,167 @@ def start_doa_tracking(
                         # head starts physically catching up.
                         face.set_eye_direction(angle_degrees=angle)
 
-                        # That eye-lead pause used to be a plain sleep. It's
-                        # now spent collecting more DOA samples instead, which
-                        # costs no extra latency and is a large accuracy win:
-                        # the single reading taken the instant VAD trips is
-                        # the worst one of the whole utterance - it lands on
-                        # the speech onset (a plosive/breath, often a poor
-                        # bearing estimate) and gets no chance to be checked
-                        # against a second opinion. A median over the window
-                        # both averages down per-sample noise and discards the
-                        # occasional wall-reflection outlier.
-                        # A dropout mid-utterance is normal - the VAD flutters
-                        # between phonemes, and harder in noise. Bailing out on
-                        # the first inactive poll (as this used to) yields one or
-                        # two samples in exactly the conditions where a stable
-                        # median matters most. Skip the quiet polls instead and
-                        # keep gathering until either enough samples or the
-                        # window runs out.
+                        # The single reading taken the instant VAD trips is the
+                        # worst of the whole utterance: it lands on the speech
+                        # onset, before the array has locked on, and is
+                        # routinely impossible (a rear bearing for a source in
+                        # front). A median over several later ones averages
+                        # down per-sample noise and survives a wall reflection.
                         # Spacing is deliberately NOT tied to eye_lead_s (an
                         # animation timing) - samples closer together than the
-                        # array's own DOA update period are the same estimate
-                        # read twice, and a median over duplicates averages
-                        # nothing away.
-                        # The bearings reported in the first fraction of a
-                        # second after VAD trips are produced before the array
-                        # has locked on, and are routinely impossible (rear
-                        # bearings for a source in front). Including them drags
-                        # the median toward a direction nothing was ever in.
+                        # array's own update period are the same estimate read
+                        # twice, and a median over duplicates averages nothing
+                        # away. A dropout mid-utterance is normal, since the
+                        # VAD flutters between phonemes, so quiet polls are
+                        # skipped rather than ending the window - but only up
+                        # to doa_quiet_give_up_s of them, or the window stops
+                        # belonging to the sound that opened it.
                         step = (doa_sample_interval_s if doa_sample_interval_s
                                 else eye_lead_s / max(1, doa_samples - 1))
-                        if doa_onset_skip_s > 0:
-                            samples = []
-                            time.sleep(doa_onset_skip_s)
-                        else:
-                            samples = [angle]
-                        sample_deadline = time.monotonic() + sample_window_s
-                        while len(samples) < doa_samples and time.monotonic() < sample_deadline:
+                        # Every reading is kept with its age, so the ones from
+                        # before the array had locked on can be left out of
+                        # the median without a blind sleep over them - a sleep
+                        # cannot tell a talker who stopped from one who is
+                        # still going.
+                        started_sampling = time.monotonic()
+                        readings = [(0.0, angle)]
+                        sample_deadline = started_sampling + doa_onset_skip_s + sample_window_s
+                        quiet_since = None
+                        interrupted = ""
+                        speech_polls = 0
+                        while time.monotonic() < sample_deadline:
+                            settled = [a for age, a in readings if age >= doa_onset_skip_s]
+                            if len(settled) >= doa_samples:
+                                break
                             time.sleep(step)
+                            if ((paused is not None and paused.is_set())
+                                    or (assistant_speaking is not None and assistant_speaking.is_set())
+                                    or (calibration_mode is not None and calibration_mode.is_set())):
+                                interrupted = "tracking was paused while it was sampled"
+                                break
                             with lock:
                                 if doa.get_voice_active():
-                                    samples.append(doa.get_direction_degrees())
-                        if not samples or len(samples) < min_doa_samples:
-                            # VAD dropped again almost immediately: a knock, a
-                            # chair, the servo's own settling - not speech. The
-                            # single reading taken on such a blip is meaningless
-                            # (the array reports a stale/defaulted bearing) and
-                            # used to be enough to swing the head.
-                            logger.info(
-                                "[DOA] Only %d reading(s) after the onset window - "
-                                "too short to be speech, ignored.", len(samples),
-                            )
+                                    heard = doa.get_direction_degrees()
+                                    speechy = (doa.get_speech_detected() if require_speech_flag
+                                               else True)
+                                else:
+                                    heard, speechy = None, False
+                            now = time.monotonic()
+                            if heard is None:
+                                if quiet_since is None:
+                                    quiet_since = now
+                                elif now - quiet_since >= doa_quiet_give_up_s:
+                                    break
+                                continue
+                            quiet_since = None
+                            last_active_time = now
+                            readings.append((now - started_sampling, heard))
+                            speech_polls += int(speechy)
+                        settled = [a for age, a in readings if age >= doa_onset_skip_s]
+                        if interrupted:
+                            logger.info("[DOA] Estimate dropped - %s.", interrupted)
+                            face.set_eye_direction(angle_degrees=90.0)
                             time.sleep(poll_interval_s)
                             continue
-                        angle = median_angle(samples)
+                        # Over the sampled polls, not the readings: the one
+                        # that opened the window was taken before the speech
+                        # flag was ever read.
+                        sampled = max(1, len(readings) - 1)
+                        was_speech = (not require_speech_flag
+                                      or speech_polls >= max(1, round(speech_share * sampled)))
+                        if len(settled) < min_doa_samples or not was_speech:
+                            # Two ways a sound does not earn a head turn. Too
+                            # short to place: a knock, a chair, the servo's own
+                            # settling, where the readings are far too poor to
+                            # turn on. Or the array's speech flag stayed quiet
+                            # through it, which on 25 October 2026 measured 0%
+                            # of polls for footsteps, 4% for clapping and 6%
+                            # for objects, against 65-73% for speech - the
+                            # flag everything else is gated on reports 24-59%
+                            # for those same noises, which is why the head used
+                            # to follow them. Either way the eyes still glance:
+                            # the readings are good enough for that.
+                            if not was_speech:
+                                logger.info(
+                                    "[DOA] Not speech - the speech flag was up in %d of %d poll(s), "
+                                    "so the head stays put.", speech_polls, sampled,
+                                )
+                            else:
+                                logger.info(
+                                    "[DOA] Only %d reading(s) once the array had settled (%.1f s of "
+                                    "voice) - too short to place, ignored.",
+                                    len(settled), readings[-1][0],
+                                )
+                            rough = [a for _, a in readings
+                                     if abs((a - 90.0 + 180.0) % 360.0 - 180.0)
+                                     < 180.0 - doa_astern_band_degrees]
+                            if glance_hold_s > 0 and rough:
+                                heading = getattr(turntable, "current_heading_degrees", 90.0)
+                                nearby = ([(bearing - heading + 90.0, distance)
+                                           for bearing, distance in radar_targets()]
+                                          if radar_targets is not None else [])
+                                look, why = glance_bearing(median_angle(rough), nearby,
+                                                           near_mm=radar_near_mm)
+                                logger.info("[Aim] Glanced at %s.", why)
+                                face.animate_eye_direction(look, duration_s=glance_glide_s)
+                                if idle_gaze is not None:
+                                    idle_gaze.note_eyes(look)
+                                glance_until = time.monotonic() + glance_hold_s
+                            else:
+                                face.set_eye_direction(angle_degrees=90.0)
+                            time.sleep(poll_interval_s)
+                            continue
+                        angle, kept, no_bearing = settled_angle(
+                            settled, doa_agreement_degrees, doa_astern_band_degrees)
+                        if angle is None:
+                            logger.info(
+                                "[DOA] Readings ignored - %s (%s).",
+                                no_bearing, " ".join(f"{s:.0f}" for s in settled),
+                            )
+                            face.set_eye_direction(angle_degrees=90.0)
+                            time.sleep(poll_interval_s)
+                            continue
+                        if len(kept) < len(settled):
+                            logger.info(
+                                "[DOA] %d of %d reading(s) discarded as reflections, no-lock or behind the head (%s).",
+                                len(settled) - len(kept), len(settled),
+                                " ".join(f"{s:.0f}" for s in settled),
+                            )
+                        samples = kept
+                        if radar_targets is not None:
+                            # The sound says who is talking, the radar says
+                            # where the people are - see domain/aim.py for why
+                            # the radar is not simply averaged in.
+                            #
+                            # The two arrive in different frames and have to be
+                            # put in the same one first. A radar bearing is
+                            # absolute: it is measured from the head's home
+                            # direction and does not change when the head
+                            # turns. The array's bearing is relative to
+                            # wherever the nose points right now. Fusing them
+                            # raw made the head drift further every round -
+                            # once it had turned to 135, a talker it was
+                            # already facing read as 90 from the array and
+                            # still 135 from the radar, and the "disagreement"
+                            # moved it another 34 degrees.
+                            heading = getattr(turntable, "current_heading_degrees", 90.0)
+                            relative = [(90.0 + (bearing - heading), distance)
+                                        for bearing, distance in radar_targets()]
+                            fused, why = fuse_bearing(
+                                angle, relative,
+                                agree_weight=radar_agree_weight,
+                                agree_degrees=radar_agree_degrees,
+                                gate_degrees=radar_gate_degrees,
+                                near_mm=radar_near_mm, bias_degrees=aim_bias(),
+                            )
+                            logger.info("[Aim] %s.", why)
+                            if fused is None:
+                                face.set_eye_direction(angle_degrees=90.0)
+                                time.sleep(poll_interval_s)
+                                continue
+                            angle = fused
+                        elif aim_bias() != 0.0:
+                            angle += aim_bias()
                         bounds = accept_range() if callable(accept_range) else accept_range
                         if bounds is not None and not (bounds[0] <= angle <= bounds[1]):
                             # Physically impossible for this mount: the head
@@ -607,14 +798,22 @@ def start_doa_tracking(
                             time.sleep(poll_interval_s)
                             continue
 
-                        moved = turntable.predict_relative_move(angle)
+                        # Whatever the sweep cannot deliver stays with the
+                        # eyes: a talker further round than the head can turn
+                        # leaves the head at its end stop, and the eyes hold
+                        # the leftover angle instead of drifting back to
+                        # centre as if the head had arrived. 90 means centred,
+                        # so an exactly reached target leaves them centred.
+                        delivered = turntable.predict_relative_turn(angle)
+                        moved = abs(delivered)
+                        residual = angle - delivered
                         if moved > 0.5:
                             ramp_s = settle_base_s + moved / settle_deg_per_s
-                            # Eyes drift back to center over the same span the
-                            # head takes to physically arrive, so both land
-                            # aligned together instead of the eyes staying
-                            # cocked to the side after the head catches up.
-                            face.animate_eye_direction(90.0, duration_s=ramp_s)
+                            # Eyes travel to where the head will not reach
+                            # over the same span the head takes to physically
+                            # arrive, so both land together instead of the
+                            # eyes snapping somewhere before it moves.
+                            face.animate_eye_direction(residual, duration_s=ramp_s)
                             # Glides there over ramp_s instead of jumping in
                             # one PWM update - an instant snap looks abrupt,
                             # this reads as natural head motion. BLOCKS this
@@ -623,13 +822,26 @@ def start_doa_tracking(
                             turntable.rotate_towards(target_angle_degrees=angle, ramp_duration_s=ramp_s)
                         else:
                             turntable.rotate_towards(target_angle_degrees=angle)
-                            face.set_eye_direction(angle_degrees=90.0)
+                            face.set_eye_direction(angle_degrees=residual)
                         moving_until = time.monotonic() + post_move_quiet_s
-                    elif (
+                    if (not active and idle_gaze is not None and radar_targets is not None
+                            and time.monotonic() >= glance_until):
+                        # Between utterances the eyes follow whoever the radar
+                        # can see. Eyes only: a servo that tracks a body
+                        # around the room is restless, noisy in the recording,
+                        # and keeps moving the microphone array for nothing.
+                        heading = getattr(turntable, "current_heading_degrees", 90.0)
+                        look = idle_gaze.update([(90.0 + (bearing - heading), distance)
+                                                 for bearing, distance in radar_targets()])
+                        if look is not None:
+                            face.animate_eye_direction(look, duration_s=idle_gaze_glide_s)
+
+                    if (
                         not at_home
                         and silence_timeout_s
                         and silence_timeout_s > 0
                         and time.monotonic() - last_active_time >= silence_timeout_s
+                        and not active
                         and not (turn_in_progress is not None and turn_in_progress.is_set())
                     ):
                         logger.info("[DOA] %.0fs of silence - head returning to home.", silence_timeout_s)

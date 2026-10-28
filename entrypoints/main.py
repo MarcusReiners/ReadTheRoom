@@ -146,7 +146,8 @@ def _strip_non_speech_annotations(text: str) -> str:
 
 
 def _transcribe_and_enqueue(stt, turn_queue: "queue.PriorityQueue", temp_in: str, log_prefix: str,
-                            turn_in_progress: threading.Event | None = None) -> None:
+                            turn_in_progress: threading.Event | None = None,
+                            recenter_request: threading.Event | None = None) -> None:
     # Set before transcription, not after: STT plus the LLM call is several
     # seconds of silence, and the head must not recenter during it.
     if turn_in_progress is not None:
@@ -169,6 +170,8 @@ def _transcribe_and_enqueue(stt, turn_queue: "queue.PriorityQueue", temp_in: str
         # Nothing was queued, so nothing will clear this later.
         if turn_in_progress is not None:
             turn_in_progress.clear()
+        if recenter_request is not None:
+            recenter_request.set()
         return
 
     logger.info("[%s] You said: '%s'", log_prefix, user_text)
@@ -220,7 +223,7 @@ def vad_input_loop(
     calibration_mode: threading.Event | None = None, composing_mode: threading.Event | None = None,
     turn_in_progress: threading.Event | None = None,
     servo_recentering: threading.Event | None = None,
-    visit_discretion=None, addon_hold=None,
+    visit_discretion=None, addon_hold=None, recenter_request: threading.Event | None = None,
 ) -> None:
     """Hands-free alternative to console_input_loop: watches the ReSpeaker's
     onboard VAD and starts recording automatically once it detects speech,
@@ -389,7 +392,8 @@ def vad_input_loop(
             logger.error("VAD-Recording failed.")
             continue
 
-        _transcribe_and_enqueue(stt, turn_queue, temp_in, "VAD", turn_in_progress)
+        _transcribe_and_enqueue(stt, turn_queue, temp_in, "VAD", turn_in_progress,
+                                recenter_request)
 
 
 def handle_turn(
@@ -485,6 +489,8 @@ def main() -> None:
         "volume": 1.0,
         "servo_min_angle": config.SERVO_MIN_ANGLE,
         "servo_max_angle": config.SERVO_MAX_ANGLE,
+        "aim_bias": 0.0,
+        "head_pose": None,
     })
     active_voice = next(
         (v for v in app_settings["voices"] if v["id"] == app_settings["active_voice_id"]),
@@ -579,6 +585,8 @@ def main() -> None:
         radar=radar,
         turntable=turntable,
         servo_calibration_path=config.SERVO_CALIBRATION_PATH,
+        aim_bias=app_settings["aim_bias"],
+        head_pose=app_settings["head_pose"],
         llm=llm,
         tts=tts,
         stt=stt,
@@ -627,11 +635,45 @@ def main() -> None:
             _mic_stream.start()
             logger.info("[Mic] Kept open with a %.1f s pre-roll while listening is allowed.", config.MIC_PREROLL_S)
 
+        radar_bearings = None
+        if config.USE_RADAR_AIM:
+            from adapters.radar_alignment import RadarBearings
+
+            # Read through a lambda, not by value: the assistant's place on
+            # the radar map is dragged in the web app while this runs, and
+            # should apply from the next utterance rather than the next start.
+            radar_bearings = RadarBearings(bus, lambda: chat_bridge.head_pose)
+            if chat_bridge.head_pose:
+                pose = chat_bridge.head_pose
+                logger.info("[Aim] radar aiming on: assistant at %+.2f/%+.2f m in the radar's frame, "
+                            "facing %+.0f deg%s. The sound leads while the two agree to %.0f deg "
+                            "(radar %.0f%%), the radar takes over past %.0f deg.",
+                            pose["x_mm"] / 1000.0, pose["y_mm"] / 1000.0, pose["facing_degrees"],
+                            ", left/right swapped" if pose.get("mirrored", True) else "",
+                            config.RADAR_AIM_AGREE_DEGREES, config.RADAR_AIM_AGREE_WEIGHT * 100.0,
+                            config.RADAR_AIM_GATE_DEGREES)
+            else:
+                logger.info("[Aim] the assistant has not been placed on the radar map yet - aiming on "
+                            "the microphone array alone. Drag it onto the radar view in the web app.")
+
+        recenter_request = threading.Event()
+        gaze = None
+        if config.USE_IDLE_GAZE and radar_bearings is not None:
+            from domain.aim import IdleGaze
+
+            gaze = IdleGaze(window=config.IDLE_GAZE_WINDOW,
+                            deadband_degrees=config.IDLE_GAZE_DEADBAND_DEGREES)
+
         start_doa_tracking(
             doa, turntable, face, lock=doa_lock,
             assistant_speaking=assistant_speaking, calibration_mode=calibration_mode,
             servo_recentering=servo_recentering, turn_in_progress=turn_in_progress,
             paused=AnyOf(visit_discretion, addons.hold("holds_tracking")),
+            radar_targets=radar_bearings, radar_agree_weight=config.RADAR_AIM_AGREE_WEIGHT,
+            radar_agree_degrees=config.RADAR_AIM_AGREE_DEGREES,
+            radar_gate_degrees=config.RADAR_AIM_GATE_DEGREES, radar_near_mm=config.RADAR_AIM_NEAR_MM,
+            aim_bias=lambda: getattr(chat_bridge, "aim_bias", 0.0), idle_gaze=gaze,
+            recenter_request=recenter_request,
         )
         threading.Thread(
             target=_restart_on_error(vad_input_loop, "[VAD] input loop"),
@@ -641,6 +683,7 @@ def main() -> None:
                 "servo_recentering": servo_recentering, "turn_in_progress": turn_in_progress,
                 "visit_discretion": visit_discretion, "trailing_silence_s": config.VAD_TRAILING_SILENCE_S,
                 "addon_hold": addons.hold("holds_listening"),
+                "recenter_request": recenter_request,
             },
             daemon=True,
         ).start()
