@@ -27,8 +27,8 @@ class LedEyesAdapter:
     # eyes "strain" further in that direction on top of the head's own
     # maxed-out contribution, instead of jumping straight to a fixed pinned
     # position regardless of overshoot size.
-    _BASE_OFFSET_FRACTION = 0.6
-    _MAX_OFFSET_FRACTION = 0.95
+    _BASE_OFFSET_FRACTION = 0.85
+    _MAX_OFFSET_FRACTION = 1.0
     _COMPENSATION_RANGE_DEGREES = 45.0
 
     def __init__(
@@ -88,6 +88,21 @@ class LedEyesAdapter:
         self._cy = self.height // 2
         self._left_cx = self.x_offset + int(self.width * 0.375)
         self._right_cx = self.x_offset + int(self.width * 0.625)
+        # How far a pupil may slide sideways. Bounded by the gap between the
+        # two eyes and by the edges of the panel, NOT by the pupil's own
+        # radius: nothing draws an eyeball around it, so there is no socket
+        # for it to stay inside, and the old (_eye_r - _dot_r) bound left it
+        # 4 px of travel on a 96 px panel - at 60% of that, a glance moved a
+        # 9 px wide dot by two pixels and was invisible from a desk away.
+        # One pupil width of travel reads clearly from across a desk, and
+        # both pupils slide together, so the gap between them never closes
+        # and only the edges of the panel bound it.
+        self._eye_travel = max(
+            2,
+            min(2 * self._dot_r,
+                self._left_cx - self._dot_r,
+                self.x_offset + self.width - 1 - self._right_cx - self._dot_r),
+        )
 
     def set_eyes_closed(self, closed: bool, duration_s: float = 0.4) -> None:
         """Closes or reopens the eyes, for the redirect signal.
@@ -173,7 +188,7 @@ class LedEyesAdapter:
         )
 
         rad = math.radians(clamped_angle - 90.0)
-        px = int((self._eye_r - self._dot_r) * offset_fraction * math.sin(rad))
+        px = round(self._eye_travel * offset_fraction * math.sin(rad))
 
         for cx in (self._left_cx, self._right_cx):
             if self._happy:
