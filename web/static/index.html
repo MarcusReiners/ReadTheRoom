@@ -663,6 +663,10 @@
   .radar-handle.door { stroke: var(--door); }
   .zone-mode-row .servo-save-btn { align-self: flex-start; }
   .target-dot { fill: var(--radar-dot); transition: cx 0.25s linear, cy 0.25s linear; }
+  .head-body { fill: var(--accent); fill-opacity: 0.85; stroke: var(--bg); stroke-width: 1.5; cursor: grab; }
+  .head-nose { stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; pointer-events: none; }
+  .head-facing { fill: var(--bg); stroke: var(--accent); stroke-width: 2; cursor: grab; }
+  .head-unplaced .head-body, .head-unplaced .head-nose, .head-unplaced .head-facing { opacity: 0.4; }
   .target-dot.out-of-zone { fill: var(--muted); opacity: 0.55; }
 </style>
 </head>
@@ -746,6 +750,7 @@
             <svg id="radarSvg" viewBox="0 0 340 300">
               <g id="radarBackground"></g>
               <g id="zoneGroup"></g>
+              <g id="headGroup"></g>
               <g id="targetsGroup"></g>
             </svg>
           </div>
@@ -764,6 +769,16 @@
               <label class="field-label" for="doorZoneBtn">Door zone</label>
               <button id="doorZoneBtn" class="servo-save-btn" type="button">Add door zone</button>
               <p id="doorZoneHint" class="zone-mode-hint"></p>
+            </div>
+            <div class="zone-mode-row">
+              <label class="field-label">Assistant</label>
+              <p id="headPoseStatus" class="zone-mode-hint"></p>
+              <label class="zone-mode-hint" for="headMirroredBox">
+                <input id="headMirroredBox" type="checkbox"> Left and right swapped
+              </label>
+              <p class="zone-mode-hint">Drag the assistant onto the map where it really stands, then
+                drag the dot on its nose to point the way it faces at rest. The head then knows which
+                of the people the radar sees is where, and turns towards whoever is talking.</p>
             </div>
           </div>
         </div>
@@ -792,6 +807,27 @@
               <button id="servoRangeSaveBtn" class="servo-save-btn" type="button">Apply</button>
             </div>
             <p id="servoRangeHint" class="zone-mode-hint">Widen carefully — the cabling is the limit.</p>
+          </div>
+        </div>
+
+        <div class="servo-section">
+          <h2>Aim</h2>
+          <div class="servo-wrap">
+            <div class="servo-readout">
+              <div id="aimHeading" class="servo-offset">– degrees</div>
+              <div class="servo-buttons">
+                <button type="button" data-aim="-10">−10°</button>
+                <button type="button" data-aim="-2">−2°</button>
+                <button type="button" data-aim="2">+2°</button>
+                <button type="button" data-aim="10">+10°</button>
+              </div>
+              <button id="aimKeepBtn" class="servo-save-btn" type="button">Keep as correction</button>
+              <button id="aimResetBtn" class="servo-save-btn" type="button">Reset correction</button>
+              <div id="aimStatus" class="radar-status">No correction.</div>
+            </div>
+            <p class="zone-mode-hint">Moves the head now, from wherever it is pointing. Keep the
+              correction only if it lands off the talker the same way every time — it is then added
+              to every direction the microphones report.</p>
           </div>
         </div>
 
@@ -1165,6 +1201,8 @@
         setReasoningEffortField(data.reasoning_effort);
         setSttLanguageField(data.stt_language);
         setServoRangeFields(data.servo_range);
+        renderAim({ bias: data.aim_bias });
+        setHeadPose(data.head_pose);
         renderVoiceList(data.voices, data.active_voice_id);
         setVolumeField(data.volume);
         renderConversationList();
@@ -1240,6 +1278,12 @@
         break;
       case "servo_range":
         setServoRangeFields(data);
+        break;
+      case "aim":
+        renderAim(data);
+        break;
+      case "head_pose":
+        setHeadPose(data.pose);
         break;
       case "radar_targets":
         renderTargets(data.targets || []);
@@ -1343,6 +1387,8 @@
 
   const svgNS = "http://www.w3.org/2000/svg";
   const radarSvg = document.getElementById("radarSvg");
+  const headPoseStatusEl = document.getElementById("headPoseStatus");
+  const headMirroredBox = document.getElementById("headMirroredBox");
   const backgroundG = document.getElementById("radarBackground");
   const zoneG = document.getElementById("zoneGroup");
   const targetsG = document.getElementById("targetsGroup");
@@ -1444,6 +1490,114 @@
     for (const [id, dot] of dotElements) {
       if (!seen.has(id)) { dot.remove(); dotElements.delete(id); smoothedPositions.delete(id); }
     }
+  }
+
+  // ---- the assistant itself, placed on the radar map ----
+  // The radar reports people in its own coordinates. Turning one of those
+  // into "40 degrees to the left of the head" needs to know where the head
+  // stands and which way it looks, and that is something only a person can
+  // say - so it is dragged here rather than guessed. The nose handle sets
+  // the direction the head points when it sits at home.
+  const headG = document.getElementById("headGroup");
+  const NOSE_MM = 700;
+  let headPose = null;
+  let headDrag = null;
+
+  const headBody = el("circle", { r: 9, class: "head-body" });
+  const headNose = el("line", { class: "head-nose" });
+  const headFacing = el("circle", { r: 6, class: "head-facing" });
+  headG.appendChild(headNose);
+  headG.appendChild(headBody);
+  headG.appendChild(headFacing);
+
+  function nosePointMm(pose) {
+    const rad = (pose.facing_degrees * Math.PI) / 180;
+    return { x_mm: pose.x_mm + NOSE_MM * Math.sin(rad), y_mm: pose.y_mm + NOSE_MM * Math.cos(rad) };
+  }
+
+  function renderHead() {
+    if (!headPose) { headG.style.display = "none"; return; }
+    headG.style.display = "";
+    headG.classList.toggle("head-unplaced", !headPose.placed);
+    const c = mmToPoint(headPose.x_mm, headPose.y_mm);
+    const n = nosePointMm(headPose);
+    const np = mmToPoint(n.x_mm, n.y_mm);
+    headBody.setAttribute("cx", c.x);
+    headBody.setAttribute("cy", c.y);
+    headNose.setAttribute("x1", c.x);
+    headNose.setAttribute("y1", c.y);
+    headNose.setAttribute("x2", np.x);
+    headNose.setAttribute("y2", np.y);
+    headFacing.setAttribute("cx", np.x);
+    headFacing.setAttribute("cy", np.y);
+    if (headPoseStatusEl) {
+      headPoseStatusEl.textContent = headPose.placed
+        ? `Assistant at ${(headPose.x_mm / 1000).toFixed(2)} / ${(headPose.y_mm / 1000).toFixed(2)} m, facing ${headPose.facing_degrees.toFixed(0)}°${headPose.mirrored ? ", left/right swapped" : ""}.`
+        : "Not placed yet — drag the assistant onto the map, then its nose.";
+    }
+  }
+
+  headBody.addEventListener("pointerdown", (evt) => {
+    evt.preventDefault();
+    evt.target.setPointerCapture(evt.pointerId);
+    const p = svgPointFromEvent(evt);
+    headDrag = { what: "body", pointerId: evt.pointerId, moved: false,
+                 start: pointToMm(p.x, p.y), from: { ...headPose } };
+  });
+  headFacing.addEventListener("pointerdown", (evt) => {
+    evt.preventDefault();
+    evt.target.setPointerCapture(evt.pointerId);
+    headDrag = { what: "facing", pointerId: evt.pointerId, moved: false };
+  });
+
+  radarSvg.addEventListener("pointermove", (evt) => {
+    if (!headDrag || evt.pointerId !== headDrag.pointerId || !headPose) return;
+    const p = svgPointFromEvent(evt);
+    const mm = pointToMm(p.x, p.y);
+    if (headDrag.what === "body") {
+      headPose.x_mm = Math.round(headDrag.from.x_mm + (mm.x_mm - headDrag.start.x_mm));
+      headPose.y_mm = Math.round(headDrag.from.y_mm + (mm.y_mm - headDrag.start.y_mm));
+    } else {
+      const dx = mm.x_mm - headPose.x_mm;
+      const dy = mm.y_mm - headPose.y_mm;
+      if (Math.hypot(dx, dy) < 50) return;
+      headPose.facing_degrees = Math.round((Math.atan2(dx, dy) * 180) / Math.PI);
+    }
+    headPose.placed = true;
+    headDrag.moved = true;
+    renderHead();
+  });
+  radarSvg.addEventListener("pointerup", () => {
+    const done = headDrag && headDrag.moved;
+    headDrag = null;
+    if (done) saveHeadPose();
+  });
+  radarSvg.addEventListener("pointercancel", () => { headDrag = null; });
+
+  if (headMirroredBox) {
+    headMirroredBox.addEventListener("change", () => {
+      if (!headPose) return;
+      headPose.mirrored = headMirroredBox.checked;
+      headPose.placed = true;
+      renderHead();
+      saveHeadPose();
+    });
+  }
+
+  function saveHeadPose() {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !headPose) return;
+    ws.send(JSON.stringify({ type: "set_head_pose", pose: {
+      x_mm: headPose.x_mm, y_mm: headPose.y_mm, facing_degrees: headPose.facing_degrees,
+      mirrored: headPose.mirrored } }));
+  }
+
+  function setHeadPose(pose) {
+    headPose = pose && typeof pose.x_mm === "number"
+      ? { x_mm: pose.x_mm, y_mm: pose.y_mm, facing_degrees: pose.facing_degrees || 0,
+          mirrored: pose.mirrored !== false, placed: Boolean(pose.placed) }
+      : { x_mm: 0, y_mm: 1500, facing_degrees: 180, mirrored: true, placed: false };
+    if (headMirroredBox) headMirroredBox.checked = headPose.mirrored;
+    renderHead();
   }
 
   // ---- zone rectangles (draggable/resizable): the room zone and the door zone ----
@@ -1732,6 +1886,47 @@
   // ---------------------------------------------------------------- servo home
   const servoOffsetEl = document.getElementById("servoOffset");
   const servoStatusEl = document.getElementById("servoStatus");
+  const aimHeadingEl = document.getElementById("aimHeading");
+  const aimStatusEl = document.getElementById("aimStatus");
+  const aimKeepBtn = document.getElementById("aimKeepBtn");
+  const aimResetBtn = document.getElementById("aimResetBtn");
+  let aimPending = 0;
+
+  function renderAim(aim) {
+    if (!aimHeadingEl) return;
+    if (typeof aim.heading === "number") {
+      const home = typeof aim.home === "number" ? aim.home : 90;
+      const off = aim.heading - home;
+      aimHeadingEl.textContent = `${off > 0 ? "+" : ""}${off.toFixed(0)}° from centre`;
+    }
+    if (typeof aim.pending === "number") aimPending = aim.pending;
+    const bias = typeof aim.bias === "number" ? aim.bias : 0;
+    const parts = [];
+    parts.push(bias ? `Correction ${bias > 0 ? "+" : ""}${bias.toFixed(1)}° on every direction.`
+                    : "No correction.");
+    if (aimPending) parts.push(`Moved ${aimPending > 0 ? "+" : ""}${aimPending.toFixed(0)}°, not kept yet.`);
+    aimStatusEl.textContent = parts.join(" ");
+    aimKeepBtn.disabled = !aimPending;
+    aimResetBtn.disabled = !bias && !aimPending;
+  }
+
+  document.querySelectorAll("[data-aim]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: "nudge_aim", degrees: parseFloat(btn.dataset.aim) }));
+    });
+  });
+
+  aimKeepBtn.addEventListener("click", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "keep_aim_correction" }));
+  });
+
+  aimResetBtn.addEventListener("click", () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "clear_aim_correction" }));
+  });
+
   const servoSaveBtn = document.getElementById("servoSaveBtn");
 
   function renderServoOffset(offsetDegrees) {
@@ -1751,7 +1946,7 @@
     renderServoOffset(result.data.home_offset_degrees);
   }
 
-  document.querySelectorAll(".servo-buttons button").forEach((btn) => {
+  document.querySelectorAll(".servo-buttons button[data-nudge]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const delta = parseFloat(btn.dataset.nudge);
       servoStatusEl.classList.remove("error");

@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 # here, so this module stays a storage concern only.
 _SCALAR_KEYS = (
     "system_prompt", "llm_model", "reasoning_effort", "stt_language_code",
-    "volume", "servo_min_angle", "servo_max_angle", "door_zone",
+    "volume", "servo_min_angle", "servo_max_angle", "door_zone", "aim_bias",
+    "head_pose",
 )
 
 
@@ -90,3 +91,19 @@ def save_app_settings(path: str, settings: dict) -> None:
     stale value for anything it got wrong."""
     Path(path).write_text(json.dumps(settings, indent=2))
     logger.info("[Settings] Saved (%s).", path)
+
+
+def update_app_setting(path: str, key: str, value) -> None:
+    """Changes one key and leaves the rest of the file alone - for scripts,
+    which have no business reconstructing every setting the web app owns just
+    to write a single one. save_app_settings() is still what the app itself
+    uses, since there the live adapters are the source of truth."""
+    try:
+        data = json.loads(Path(path).read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except (FileNotFoundError, ValueError, OSError):
+        data = {}
+    data[key] = value
+    Path(path).write_text(json.dumps(data, indent=2))
+    logger.info("[Settings] %s updated (%s).", key, path)

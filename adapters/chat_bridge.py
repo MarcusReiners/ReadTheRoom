@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from adapters.app_settings import save_app_settings
 from adapters.conversation_store import ConversationStore
 from adapters.hardware.servo_calibration import save_home_offset
+from adapters.radar_alignment import clean_pose
 from domain.conversation import ConversationState
 from domain.events import (
     AssistantDeltaReceived,
@@ -59,6 +60,8 @@ class ChatBridgeAdapter:
         radar,
         turntable,
         servo_calibration_path: str,
+        aim_bias: float = 0.0,
+        head_pose: dict | None = None,
         llm=None,
         tts=None,
         stt=None,
@@ -128,6 +131,17 @@ class ChatBridgeAdapter:
         self._calibration_raw_angle = self.turntable.clamp_raw_angle(
             self.turntable.raw_angle_for_offset(self.turntable.home_offset_degrees)
         )
+        # The operator's own correction to every bearing the head is given,
+        # in DOA degrees. "nudge" moves the head now and accumulates here;
+        # only "keep" folds it into aim_bias, which start_doa_tracking() adds
+        # to each estimate from then on. Separating the two means a nudge to
+        # look at something once does not quietly become a permanent bias.
+        self.aim_bias = float(aim_bias or 0.0)
+        self._aim_nudge = 0.0
+        # Where the assistant stands in the radar's coordinates, dragged onto
+        # the radar view. Without it a radar target cannot be turned into a
+        # bearing at all, so head aiming falls back to the microphone array.
+        self.head_pose = clean_pose(head_pose)
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._clients: set[WebSocket] = set()
@@ -304,6 +318,8 @@ class ChatBridgeAdapter:
                 "active_voice_id": self.active_voice_id,
                 "volume": self._get_volume(),
                 "servo_range": self._get_servo_range(),
+                "aim_bias": self.aim_bias,
+                "head_pose": self.head_pose,
             })
             try:
                 while True:
@@ -412,6 +428,14 @@ class ChatBridgeAdapter:
                 self._broadcast({"type": "stt_language", "value": value})
         elif msg_type == "set_servo_range":
             self._set_servo_range(data.get("min"), data.get("max"))
+        elif msg_type == "nudge_aim":
+            self._nudge_aim(data.get("degrees"))
+        elif msg_type == "keep_aim_correction":
+            self._keep_aim_correction()
+        elif msg_type == "clear_aim_correction":
+            self._clear_aim_correction()
+        elif msg_type == "set_head_pose":
+            self._set_head_pose(data.get("pose"))
         elif msg_type == "add_voice":
             name = (data.get("name") or "").strip()
             voice_id = (data.get("voice_id") or "").strip()
@@ -510,6 +534,64 @@ class ChatBridgeAdapter:
         self._save_settings()
         self._broadcast({"type": "servo_range", **self._get_servo_range()})
 
+    def _set_head_pose(self, pose) -> None:
+        """Where the assistant itself stands, as dragged onto the radar view."""
+        cleaned = clean_pose(pose)
+        if cleaned is None:
+            return
+        self.head_pose = cleaned
+        self._save_settings()
+        logger.info("[Aim] assistant placed at %.0f/%.0f mm in the radar's frame, facing %.0f deg.",
+                    cleaned["x_mm"], cleaned["y_mm"], cleaned["facing_degrees"])
+        self._broadcast({"type": "head_pose", "pose": cleaned})
+
+    def _nudge_aim(self, degrees) -> None:
+        """Turns the head a few degrees right now, from wherever it is.
+
+        Live, not a calibration mode: the tracker works relative to where the
+        head currently points, so a nudge simply becomes the new starting
+        point and nothing fights it. It does not touch aim_bias - see
+        _keep_aim_correction for that."""
+        try:
+            delta = float(degrees)
+        except (TypeError, ValueError):
+            return
+        delta = max(-45.0, min(45.0, delta))
+        before = getattr(self.turntable, "current_heading_degrees", None)
+        self.turntable.set_angle_immediate((before or 90.0) + delta)
+        after = getattr(self.turntable, "current_heading_degrees", None)
+        if before is not None and after is not None:
+            self._aim_nudge += after - before
+        self._broadcast_aim()
+
+    def _keep_aim_correction(self) -> None:
+        """Makes the nudging so far a standing correction on every bearing.
+
+        For the case the measurements keep showing: the head lands a few
+        degrees off the talker in the same direction every time, which is a
+        constant the operator can see and the software cannot."""
+        self.aim_bias = round(max(-45.0, min(45.0, self.aim_bias + self._aim_nudge)), 1)
+        self._aim_nudge = 0.0
+        self._save_settings()
+        logger.info("[Aim] correction kept: %+.1f deg on every bearing from now on.", self.aim_bias)
+        self._broadcast_aim()
+
+    def _clear_aim_correction(self) -> None:
+        self.aim_bias = 0.0
+        self._aim_nudge = 0.0
+        self._save_settings()
+        logger.info("[Aim] correction cleared.")
+        self._broadcast_aim()
+
+    def _broadcast_aim(self) -> None:
+        self._broadcast({
+            "type": "aim",
+            "bias": self.aim_bias,
+            "pending": round(self._aim_nudge, 1),
+            "heading": getattr(self.turntable, "current_heading_degrees", None),
+            "home": getattr(self.turntable, "home_angle", None),
+        })
+
     def _select_voice(self, voice_id: str) -> None:
         entry = next((v for v in self.voices if v["id"] == voice_id), None)
         if entry is None:
@@ -557,6 +639,8 @@ class ChatBridgeAdapter:
             "voices": self.voices,
             "active_voice_id": self.active_voice_id,
             "door_zone": door_getter() if door_getter else None,
+            "aim_bias": self.aim_bias,
+            "head_pose": self.head_pose,
         })
 
     def _broadcast_voices(self) -> None:

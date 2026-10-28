@@ -195,6 +195,34 @@ CONVERSATIONS_DB_PATH = _env("CONVERSATIONS_DB_PATH", "conversations.db")
 # settings tab are persisted - survives restarts, same idea as
 # SERVO_CALIBRATION_PATH.
 APP_SETTINGS_PATH = _env("APP_SETTINGS_PATH", "app_settings.json")
+# Where the assistant stands in the radar's coordinates is dragged onto the
+# radar view in the web app and kept in APP_SETTINGS_PATH next to the door
+# zone, so there is no separate file for it.
+# Head aiming from the radar and the microphone array together (see
+# domain/aim.py). Off unless an alignment has been measured, since without
+# one a radar target cannot be turned into a bearing at all.
+USE_RADAR_AIM = _env_bool("USE_RADAR_AIM", True)
+# Which instrument leads when the two agree. Below RADAR_AIM_AGREE_DEGREES
+# apart they are taken to be looking at the same person and the sound leads,
+# because it measures the mouth while the radar reports the middle of a body
+# - about 10 degrees apart for someone standing side-on at 1.2 m. The weight
+# then ramps towards the radar as they diverge, and past the gate the radar
+# takes over entirely: the array's failure mode is not noise but confidence.
+RADAR_AIM_AGREE_WEIGHT = float(_env("RADAR_AIM_AGREE_WEIGHT", "0.25"))
+RADAR_AIM_AGREE_DEGREES = float(_env("RADAR_AIM_AGREE_DEGREES", "10"))
+# How far apart the two may be and still count as the same person.
+RADAR_AIM_GATE_DEGREES = float(_env("RADAR_AIM_GATE_DEGREES", "45"))
+# Only people this close are candidates for who is talking - someone across
+# the room is visible to the radar while a motionless person at the desk is
+# not, and without this a visitor by the door would pull the head away.
+RADAR_AIM_NEAR_MM = float(_env("RADAR_AIM_NEAR_MM", "2500"))
+# While nobody is talking, the eyes follow whoever the radar can see. The
+# head stays where it is - see IdleGaze in domain/aim.py. The deadband is
+# what keeps the eyes still around a person who is standing still, and the
+# window is how many polls the ghost gate looks back over.
+USE_IDLE_GAZE = _env_bool("USE_IDLE_GAZE", True)
+IDLE_GAZE_DEADBAND_DEGREES = float(_env("IDLE_GAZE_DEADBAND_DEGREES", "4"))
+IDLE_GAZE_WINDOW = int(_env("IDLE_GAZE_WINDOW", "8"))
 
 # --- Logging (local only, never uploaded) ---------------------------------
 LOG_DIR = _env("LOG_DIR", "logs")
